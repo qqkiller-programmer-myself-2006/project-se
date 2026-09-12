@@ -1,0 +1,50 @@
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      # secret บังคับ: ไม่มีค่าเริ่มต้น compose จะ fail ทันทีถ้าไม่ตั้งใน .env
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?ต้องตั้ง DB_ROOT_PASSWORD ใน .env}
+      MYSQL_DATABASE: ${DB_NAME:-paor}
+      MYSQL_USER: ${DB_USER:-paor}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?ต้องตั้ง DB_PASSWORD ใน .env}
+    ports:
+      - "${DB_PORT:-3306}:3306"
+    volumes:
+      - dbdata:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  phpmyadmin:
+    image: phpmyadmin:5.2
+    restart: unless-stopped
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+    ports:
+      - "${PMA_PORT:-8081}:80"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # ใน container ต่อ db ผ่านชื่อ service; สร้าง DATABASE_URL จาก secret ที่บังคับ
+      DATABASE_URL: mysql://${DB_USER:-paor}:${DB_PASSWORD:?ต้องตั้ง DB_PASSWORD ใน .env}@db:3306/${DB_NAME:-paor}
+      MIGRATIONS_DIR: /app/db/migrations
+    ports:
+      - "${API_PORT:-4000}:4000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  dbdata:

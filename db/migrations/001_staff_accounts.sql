@@ -1,0 +1,34 @@
+-- 001 staff accounts vertical slice (MySQL 8)
+CREATE TABLE IF NOT EXISTS users (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  username VARCHAR(64) NOT NULL UNIQUE,
+  password_hash VARCHAR(255) NOT NULL,
+  roles JSON NOT NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id CHAR(64) NOT NULL PRIMARY KEY,
+  user_id CHAR(36) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at TIMESTAMP NOT NULL,
+  CONSTRAINT fk_sessions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_sessions_user (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actor_id CHAR(36) NULL,
+  actor_username VARCHAR(64) NULL,
+  action VARCHAR(48) NOT NULL,
+  target_id CHAR(36) NULL,
+  target_username VARCHAR(64) NULL,
+  detail VARCHAR(500) NULL,
+  ip VARCHAR(64) NULL,
+  success TINYINT(1) NOT NULL DEFAULT 1,
+  INDEX idx_audit_action_at (action, at),
+  INDEX idx_audit_target (target_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

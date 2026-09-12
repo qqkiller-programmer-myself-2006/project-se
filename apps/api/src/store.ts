@@ -1,0 +1,1045 @@
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { PoolConnection } from "mysql2/promise";
+import type {
+  AuditAction,
+  AuditEntry,
+  Role,
+  Session,
+  ShopTable,
+  User,
+} from "./types.js";
+import { ConflictError, NotFoundError } from "./types.js";
+import {
+  DEFAULT_SHOP_NAME,
+  defaultWeeklySchedule,
+  normalizeWeeklySchedule,
+  WEEKDAY_KEYS,
+  type ShopOverride,
+  type WeeklySchedule,
+} from "./shop/schedule.js";
+import {
+  shopNameUpdatedEvent,
+  shopOverrideClearedEvent,
+  shopOverrideSetEvent,
+  shopScheduleUpdatedEvent,
+  shopTableCreatedEvent,
+  shopTableUpdatedEvent,
+} from "./shop/audit-events.js";
+
+export interface CreateUserInput {
+  username: string;
+  passwordHash: string;
+  roles: Role[];
+}
+
+export type FirstOwnerResult =
+  | { created: true; user: User }
+  | { created: false; reason: "owner-exists" };
+
+export interface AuditInput {
+  actorId?: string | null;
+  actorUsername?: string | null;
+  action: AuditAction | string;
+  targetId?: string | null;
+  targetUsername?: string | null;
+  detail?: string | null;
+  ip?: string | null;
+  success?: boolean;
+}
+
+export interface ShopOverrideInput {
+  mode: "open" | "closed";
+  reason?: string | null;
+  expectedReopenAt?: string | null;
+  expiresAt?: string | null;
+  createdBy?: string | null;
+}
+
+export interface CreateTableInput {
+  name: string;
+  capacity: number;
+}
+
+export interface UpdateTablePatch {
+  name?: string;
+  capacity?: number;
+  isEnabled?: boolean;
+}
+
+/** ผู้กระทำสำหรับ audit ที่ผูกกับ mutation — state เปลี่ยนได้ต้องมี audit นี้เสมอ */
+export interface ShopActor {
+  actorId?: string | null;
+  actorUsername?: string | null;
+  ip?: string | null;
+}
+
+/** snapshot คงเส้นคงวาชุดเดียวสำหรับ public status (อ่านจาก transaction เดียวฝั่ง MySQL) */
+export interface ShopSnapshot {
+  shopName: string;
+  schedule: WeeklySchedule;
+  override: ShopOverride | null;
+  tables: ShopTable[];
+}
+
+/** snapshot เฉพาะ config (ไม่มี tables) — ผลลัพธ์ saveShopConfig ไม่แตะ table state */
+export interface ShopConfigSnapshot {
+  shopName: string;
+  schedule: WeeklySchedule;
+  override: ShopOverride | null;
+}
+
+export interface SaveShopConfigInput {
+  shopName?: string;
+  schedule: WeeklySchedule;
+}
+
+export interface SaveShopConfigResult extends ShopConfigSnapshot {
+  nameChanged: boolean;
+}
+
+export interface Store {
+  createUser(input: CreateUserInput): Promise<User>;
+  /**
+   * สร้าง Owner คนแรกแบบ atomic (กันแข่งกันสร้างซ้ำ)
+   * คืน created:false เมื่อมี Owner อยู่แล้ว
+   */
+  createFirstOwner(input: CreateUserInput): Promise<FirstOwnerResult>;
+  findByUsername(username: string): Promise<User | null>;
+  findById(id: string): Promise<User | null>;
+  listUsers(): Promise<User[]>;
+  updateUser(
+    id: string,
+    patch: { roles?: Role[]; isActive?: boolean },
+  ): Promise<User>;
+  setPassword(id: string, passwordHash: string): Promise<User>;
+  countOwners(): Promise<number>;
+  createSession(userId: string, passwordVersion: number): Promise<Session>;
+  findSession(id: string): Promise<Session | null>;
+  deleteSession(id: string): Promise<void>;
+  deleteSessionsForUser(userId: string): Promise<void>;
+  audit(input: AuditInput): Promise<void>;
+  listAudit(
+    prefix: "login_" | "account_" | "shop_" | "all",
+    limit: number,
+  ): Promise<AuditEntry[]>;
+  // ---- Ticket 02: สถานะร้านและโต๊ะ (อ่านเดี่ยว + mutation แบบ atomic พร้อม audit) ----
+  getShopName(): Promise<string>;
+  getSchedule(): Promise<WeeklySchedule>;
+  getOverride(): Promise<ShopOverride | null>;
+  listTables(): Promise<ShopTable[]>;
+  /** อ่าน shopName/schedule/override/tables จาก snapshot คงเส้นคงวาชุดเดียว */
+  getShopSnapshot(): Promise<ShopSnapshot>;
+  /**
+   * บันทึกชื่อร้าน (ถ้าเปลี่ยน) + ตารางทั้งสัปดาห์ + audit แบบ all-or-nothing
+   * MySQL ใช้ transaction บน connection เดียว; memory rollback ทั้ง state และลำดับ audit
+   */
+  saveShopConfig(input: SaveShopConfigInput, actor: ShopActor): Promise<SaveShopConfigResult>;
+  /** ตั้ง override + audit แบบ all-or-nothing */
+  setShopOverride(input: ShopOverrideInput, actor: ShopActor): Promise<ShopOverride>;
+  /** ล้าง override + audit แบบ all-or-nothing; คืน true เมื่อมี override ถูกเคลียร์ */
+  clearShopOverride(actor: ShopActor): Promise<boolean>;
+  /** สร้างโต๊ะ + audit แบบ all-or-nothing */
+  createShopTable(input: CreateTableInput, actor: ShopActor): Promise<ShopTable>;
+  /** แก้โต๊ะ + audit แบบ all-or-nothing */
+  updateShopTable(id: string, patch: UpdateTablePatch, actor: ShopActor): Promise<ShopTable>;
+  close?(): Promise<void>;
+}
+
+const nowIso = () => new Date().toISOString();
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * mysql2 อาจคืนคอลัมน์ JSON เป็น string หรือ object ที่ deserialize แล้ว
+ * ขึ้นกับเวอร์ชัน/ไดรเวอร์ จึงรองรับทั้งสองแบบ
+ */
+export function parseRoles(value: unknown): Role[] {
+  let raw: unknown = value;
+  if (typeof raw === "string") {
+    raw = JSON.parse(raw) as unknown;
+  }
+  if (!Array.isArray(raw)) throw new Error("รูปแบบบทบาทในฐานข้อมูลไม่ถูกต้อง");
+  const allowed = new Set(["owner", "admin", "kitchen", "drink"]);
+  const roles = raw.filter((r): r is Role => typeof r === "string" && allowed.has(r));
+  if (roles.length !== raw.length || roles.length === 0) {
+    throw new Error("รูปแบบบทบาทในฐานข้อมูลไม่ถูกต้อง");
+  }
+  // ป้องกันข้อมูลเก่าที่มีบทบาทซ้ำ: normalize ให้เหลือค่าที่ไม่ซ้ำโดยไม่เปลี่ยน contract ภายนอก
+  return [...new Set(roles)];
+}
+
+/** กันชั้น persistence รับบทบาทซ้ำจาก caller โดยตรง: ตัดค่าซ้ำแบบคงลำดับเดิม */
+export function normalizeRoles(roles: Role[]): Role[] {
+  return [...new Set(roles)];
+}
+
+export interface MemoryStoreOptions {
+  /**
+   * seam สำหรับทดสอบ atomicity: คืน true แล้ว audit() จะโยน error
+   * (ใช้พิสูจน์ว่าไม่มี partial state/audit เมื่อ audit ล้มเหลว)
+   */
+  failAudit?: (input: AuditInput) => boolean;
+}
+
+export function createMemoryStore(opts?: MemoryStoreOptions): Store {
+  const failAudit = opts?.failAudit;
+  const users = new Map<string, User>();
+  const byName = new Map<string, string>();
+  const sessions = new Map<string, Session>();
+  const audits: AuditEntry[] = [];
+  let auditSeq = 1;
+  // ---- Ticket 02 memory state (tests เท่านั้น) ----
+  let shopName = DEFAULT_SHOP_NAME;
+  let schedule: WeeklySchedule = defaultWeeklySchedule();
+  let override: ShopOverride | null = null;
+  const tables = new Map<string, ShopTable>();
+
+  function cloneSchedule(s: WeeklySchedule): WeeklySchedule {
+    return normalizeWeeklySchedule(JSON.parse(JSON.stringify(s)) as unknown);
+  }
+
+  function cloneTables(): Map<string, ShopTable> {
+    return new Map([...tables].map(([id, t]) => [id, { ...t }] as const));
+  }
+
+  interface ShopStateBackup {
+    shopName: string;
+    schedule: WeeklySchedule;
+    override: ShopOverride | null;
+    tables: Map<string, ShopTable>;
+    auditsLen: number;
+    auditSeq: number;
+  }
+
+  /** all-or-nothing ฝั่ง memory: เก็บ backup ก่อน mutate; พังตรงไหนก็ restore ทั้งหมด */
+  function backupShop(): ShopStateBackup {
+    return {
+      shopName,
+      schedule: cloneSchedule(schedule),
+      override: override ? { ...override } : null,
+      tables: cloneTables(),
+      auditsLen: audits.length,
+      auditSeq,
+    };
+  }
+
+  function restoreShop(b: ShopStateBackup): void {
+    shopName = b.shopName;
+    schedule = b.schedule;
+    override = b.override;
+    tables.clear();
+    for (const [id, t] of b.tables) tables.set(id, t);
+    audits.length = b.auditsLen;
+    auditSeq = b.auditSeq;
+  }
+
+  async function writeAudit(input: AuditInput): Promise<void> {
+    if (failAudit?.(input)) throw new Error("บันทึก audit ล้มเหลว (จำลองสำหรับทดสอบ)");
+    audits.push({
+      id: auditSeq++,
+      at: nowIso(),
+      actorId: input.actorId ?? null,
+      actorUsername: input.actorUsername ?? null,
+      action: input.action,
+      targetId: input.targetId ?? null,
+      targetUsername: input.targetUsername ?? null,
+      detail: input.detail ?? null,
+      ip: input.ip ?? null,
+      success: input.success ?? true,
+    });
+  }
+
+  async function countOwnersInner(): Promise<number> {
+    let n = 0;
+    for (const u of users.values()) if (u.roles.includes("owner")) n += 1;
+    return n;
+  }
+
+  const memoryStore: Store = {
+    async createUser(input) {
+      if (byName.has(input.username)) throw new ConflictError("ชื่อผู้ใช้นี้มีอยู่แล้ว");
+      const now = nowIso();
+      const user: User = {
+        id: randomUUID(),
+        username: input.username,
+        passwordHash: input.passwordHash,
+        roles: normalizeRoles([...input.roles]),
+        isActive: true,
+        passwordVersion: 1,
+        createdAt: now,
+        updatedAt: now,
+      };
+      users.set(user.id, user);
+      byName.set(user.username, user.id);
+      return { ...user, roles: [...user.roles] };
+    },
+    async createFirstOwner(input) {
+      // memory store รัน single-threaded: check-then-insert จึง atomic ในตัว
+      if ((await countOwnersInner()) > 0) return { created: false, reason: "owner-exists" };
+      const user = await memoryStore.createUser(input);
+      return { created: true, user };
+    },
+    async findByUsername(username) {
+      const id = byName.get(username);
+      if (!id) return null;
+      const u = users.get(id);
+      return u ? { ...u, roles: [...u.roles] } : null;
+    },
+    async findById(id) {
+      const u = users.get(id);
+      return u ? { ...u, roles: [...u.roles] } : null;
+    },
+    async listUsers() {
+      return [...users.values()]
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+        .map((u) => ({ ...u, roles: [...u.roles] }));
+    },
+    async updateUser(id, patch) {
+      const u = users.get(id);
+      if (!u) throw new NotFoundError("ไม่พบบัญชีผู้ใช้");
+      if (patch.roles) u.roles = normalizeRoles([...patch.roles]);
+      if (patch.isActive !== undefined) u.isActive = patch.isActive;
+      u.updatedAt = nowIso();
+      return { ...u, roles: [...u.roles] };
+    },
+    async setPassword(id, passwordHash) {
+      const u = users.get(id);
+      if (!u) throw new NotFoundError("ไม่พบบัญชีผู้ใช้");
+      u.passwordHash = passwordHash;
+      u.passwordVersion += 1;
+      u.updatedAt = nowIso();
+      return { ...u, roles: [...u.roles] };
+    },
+    async countOwners() {
+      return countOwnersInner();
+    },
+    async createSession(userId, passwordVersion) {
+      const now = new Date();
+      const s: Session = {
+        id: randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, ""),
+        userId,
+        passwordVersion,
+        createdAt: now.toISOString(),
+        expiresAt: new Date(now.getTime() + SESSION_TTL_MS).toISOString(),
+      };
+      sessions.set(s.id, s);
+      return { ...s };
+    },
+    async findSession(id) {
+      const s = sessions.get(id);
+      return s ? { ...s } : null;
+    },
+    async deleteSession(id) {
+      sessions.delete(id);
+    },
+    async deleteSessionsForUser(userId) {
+      for (const [sid, s] of sessions) if (s.userId === userId) sessions.delete(sid);
+    },
+    async audit(input) {
+      await writeAudit(input);
+    },
+    async listAudit(prefix, limit) {
+      const items = [...audits].reverse().filter((a) => {
+        if (prefix === "all") return true;
+        if (prefix === "login_") return a.action.startsWith("login_");
+        if (prefix === "shop_") return a.action.startsWith("shop_");
+        return !a.action.startsWith("login_");
+      });
+      return items.slice(0, limit);
+    },
+    async getShopName() {
+      return shopName;
+    },
+    async getSchedule() {
+      return cloneSchedule(schedule);
+    },
+    async getOverride() {
+      return override ? { ...override } : null;
+    },
+    async listTables() {
+      return [...tables.values()]
+        .sort((a, b) => a.name.localeCompare(b.name, "th"))
+        .map((t) => ({ ...t }));
+    },
+    async getShopSnapshot() {
+      return {
+        shopName,
+        schedule: cloneSchedule(schedule),
+        override: override ? { ...override } : null,
+        tables: [...tables.values()]
+          .sort((a, b) => a.name.localeCompare(b.name, "th"))
+          .map((t) => ({ ...t })),
+      };
+    },
+    async saveShopConfig(input, actor) {
+      // validate ก่อน mutate: ไม่ผ่าน = ไม่เปลี่ยนอะไรเลยและไม่เขียน audit
+      const normalized = cloneSchedule(input.schedule);
+      const backup = backupShop();
+      try {
+        let nameChanged = false;
+        if (input.shopName !== undefined && input.shopName !== shopName) {
+          shopName = input.shopName;
+          nameChanged = true;
+          await writeAudit(shopNameUpdatedEvent(input.shopName, actor));
+        }
+        schedule = normalized;
+        await writeAudit(shopScheduleUpdatedEvent(actor));
+        return {
+          shopName,
+          schedule: cloneSchedule(schedule),
+          override: override ? { ...override } : null,
+          nameChanged,
+        };
+      } catch (err) {
+        restoreShop(backup);
+        throw err;
+      }
+    },
+    async setShopOverride(input, actor) {
+      const backup = backupShop();
+      try {
+        override = {
+          mode: input.mode,
+          reason: input.reason ?? null,
+          expectedReopenAt: input.expectedReopenAt ?? null,
+          expiresAt: input.expiresAt ?? null,
+          createdAt: nowIso(),
+          createdBy: input.createdBy ?? null,
+        };
+        await writeAudit(shopOverrideSetEvent(input, actor));
+        return { ...override };
+      } catch (err) {
+        restoreShop(backup);
+        throw err;
+      }
+    },
+    async clearShopOverride(actor) {
+      if (override === null) return false;
+      const backup = backupShop();
+      try {
+        override = null;
+        await writeAudit(shopOverrideClearedEvent(actor));
+        return true;
+      } catch (err) {
+        restoreShop(backup);
+        throw err;
+      }
+    },
+    async createShopTable(input, actor) {
+      const backup = backupShop();
+      try {
+        const name = input.name.trim();
+        for (const t of tables.values()) {
+          if (t.name === name) throw new ConflictError("ชื่อโต๊ะนี้มีอยู่แล้ว");
+        }
+        const now = nowIso();
+        const table: ShopTable = {
+          id: randomUUID(),
+          name,
+          capacity: input.capacity,
+          isEnabled: true,
+          createdAt: now,
+          updatedAt: now,
+        };
+        tables.set(table.id, table);
+        await writeAudit(shopTableCreatedEvent(name, input.capacity, actor));
+        return { ...table };
+      } catch (err) {
+        restoreShop(backup);
+        throw err;
+      }
+    },
+    async updateShopTable(id, patch, actor) {
+      const backup = backupShop();
+      try {
+        const t = tables.get(id);
+        if (!t) throw new NotFoundError("ไม่พบโต๊ะ");
+        if (patch.name !== undefined) {
+          const name = patch.name.trim();
+          for (const other of tables.values()) {
+            if (other.id !== id && other.name === name) {
+              throw new ConflictError("ชื่อโต๊ะนี้มีอยู่แล้ว");
+            }
+          }
+          t.name = name;
+        }
+        if (patch.capacity !== undefined) t.capacity = patch.capacity;
+        if (patch.isEnabled !== undefined) t.isEnabled = patch.isEnabled;
+        t.updatedAt = nowIso();
+        await writeAudit(shopTableUpdatedEvent(t.name, t.capacity, t.isEnabled, actor));
+        return { ...t };
+      } catch (err) {
+        restoreShop(backup);
+        throw err;
+      }
+    },
+  };
+
+  return memoryStore;
+}
+
+// ---- MySQL persistence (runtime จริงใช้ MySQL เท่านั้น ไม่มี memory fallback) ----
+const MIGRATION_FILES = [
+  "001_staff_accounts.sql",
+  "002_credential_version.sql",
+  "003_shop_status_tables.sql",
+];
+
+export function findMigrationFile(name = MIGRATION_FILES[0]!): string {
+  const candidates: string[] = [];
+  if (process.env["MIGRATIONS_DIR"]) {
+    candidates.push(join(process.env["MIGRATIONS_DIR"], name));
+  }
+  const here = dirname(fileURLToPath(import.meta.url));
+  candidates.push(
+    join(here, "..", "..", "..", "db", "migrations", name), // dev: <root>/apps/api/src
+    join(here, "..", "..", "..", "..", "db", "migrations", name), // built: <root>/apps/api/dist/src
+    join(process.cwd(), "db", "migrations", name), // cwd = project root หรือ /app ใน Docker
+    join(process.cwd(), "..", "..", "db", "migrations", name), // cwd = apps/api
+  );
+  for (const c of candidates) {
+    try {
+      if (existsSync(c)) return c;
+    } catch {
+      // ลอง candidate ถัดไป
+    }
+  }
+  throw new Error(`หา migration ${name} ไม่พบ (ค้นแล้ว: ${candidates.join(" | ")})`);
+}
+
+function isDuplicateColumnError(err: unknown): boolean {
+  return (
+    !!err && typeof err === "object" && "code" in err && (err as { code: unknown }).code === "ER_DUP_FIELDNAME"
+  );
+}
+
+export async function createMysqlStore(databaseUrl: string): Promise<Store> {
+  const { default: mysql } = await import("mysql2/promise");
+  const pool = mysql.createPool({
+    uri: databaseUrl,
+    waitForConnections: true,
+    connectionLimit: 10,
+    timezone: "Z",
+  });
+
+  const conn = await pool.getConnection();
+  try {
+    for (const file of MIGRATION_FILES) {
+      const migration = readFileSync(findMigrationFile(file), "utf8");
+      const statements = migration
+        .split(";")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      for (const sql of statements) {
+        try {
+          await conn.query(sql);
+        } catch (err) {
+          // ALTER ADD COLUMN รันซ้ำได้: มีคอลัมน์แล้ว (1060) ให้ข้าม
+          if (!sql.toUpperCase().startsWith("ALTER TABLE") || !isDuplicateColumnError(err)) throw err;
+        }
+      }
+    }
+  } finally {
+    conn.release();
+  }
+
+  function parseStoredIntervals(value: unknown, weekday: number): { open: string; close: string }[] {
+    let raw: unknown = value;
+    if (typeof raw === "string") {
+      try {
+        raw = JSON.parse(raw) as unknown;
+      } catch {
+        throw new Error(`รูปแบบเวลาของวันที่ ${weekday} ในฐานข้อมูลไม่ถูกต้อง`);
+      }
+    }
+    if (!Array.isArray(raw)) throw new Error(`รูปแบบเวลาของวันที่ ${weekday} ในฐานข้อมูลไม่ถูกต้อง`);
+    return raw as { open: string; close: string }[];
+  }
+
+  const rowToTable = (r: Record<string, unknown>): ShopTable => {
+    const capacity = Number(r["capacity"]);
+    if (!Number.isInteger(capacity)) throw new Error("ความจุโต๊ะในฐานข้อมูลไม่ถูกต้อง");
+    return {
+      id: String(r["id"]),
+      name: String(r["name"]),
+      capacity,
+      isEnabled: Number(r["is_enabled"]) === 1,
+      createdAt: new Date(r["created_at"] as string).toISOString(),
+      updatedAt: new Date(r["updated_at"] as string).toISOString(),
+    };
+  };
+
+  // input เป็น UTC ISO (ลงท้าย Z) ส่วนคอลัมน์ DATETIME ไม่มี offset และ pool ตั้ง
+  // timezone Z (ตีความ DATETIME เป็น UTC) จึงต้องใช้ UTC getters เท่านั้น —
+  // ใช้ local getters จะเลื่อนตาม timezone ของเครื่อง server
+  const toMysqlDatetime = (iso: string): string => {
+    const d = new Date(iso);
+    const pad = (n: number): string => String(n).padStart(2, "0");
+    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+  };
+
+  type QueryRunner = Pick<PoolConnection, "query">;
+
+  /**
+   * รัน unit บน connection เดียวด้วย transaction: commit เมื่อสำเร็จ,
+   * rollback เมื่อพัง แล้ว release connection เสมอ
+   */
+  async function withShopTx<T>(fn: (conn: PoolConnection) => Promise<T>): Promise<T> {
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      try {
+        const out = await fn(conn);
+        await conn.commit();
+        return out;
+      } catch (err) {
+        try {
+          await conn.rollback();
+        } catch {
+          // เก็บ error ต้นฉบับไว้
+        }
+        throw err;
+      }
+    } finally {
+      conn.release();
+    }
+  }
+
+  async function insertAuditRow(q: QueryRunner, input: AuditInput): Promise<void> {
+    await q.query(
+      "INSERT INTO audit_logs (actor_id, actor_username, action, target_id, target_username, detail, ip, success) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [
+        input.actorId ?? null,
+        input.actorUsername ?? null,
+        input.action,
+        input.targetId ?? null,
+        input.targetUsername ?? null,
+        input.detail ?? null,
+        input.ip ?? null,
+        (input.success ?? true) ? 1 : 0,
+      ],
+    );
+  }
+
+  function mapScheduleRows(rows: Record<string, unknown>[]): WeeklySchedule {
+    const raw: Record<string, unknown> = {};
+    for (const r of rows) {
+      const wd = Number(r["weekday"]);
+      raw[String(wd)] = {
+        closed: Number(r["closed"]) === 1,
+        intervals: parseStoredIntervals(r["intervals"], wd),
+      };
+    }
+    for (const key of WEEKDAY_KEYS) {
+      if (!raw[key]) raw[key] = { closed: false, intervals: [{ open: "09:00", close: "21:00" }] };
+    }
+    return normalizeWeeklySchedule(raw);
+  }
+
+  function mapOverrideRow(r: Record<string, unknown>): ShopOverride {
+    const mode = String(r["mode"]);
+    if (mode !== "open" && mode !== "closed") throw new Error("โหมด override ในฐานข้อมูลไม่ถูกต้อง");
+    const dt = (v: unknown): string | null => {
+      if (v === null || v === undefined) return null;
+      const d = new Date(v as string);
+      if (Number.isNaN(d.getTime())) return null;
+      return d.toISOString();
+    };
+    return {
+      mode,
+      reason: r["reason"] ? String(r["reason"]) : null,
+      expectedReopenAt: dt(r["expected_reopen_at"]),
+      expiresAt: dt(r["expires_at"]),
+      createdAt: new Date(r["created_at"] as string).toISOString(),
+      createdBy: r["created_by"] ? String(r["created_by"]) : null,
+    };
+  }
+
+  async function readShopSnapshotFrom(q: QueryRunner): Promise<ShopSnapshot> {
+    const config = await readConfigSnapshotFrom(q);
+    const [tableRows] = (await q.query("SELECT * FROM shop_tables ORDER BY name ASC")) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    return { ...config, tables: tableRows.map(rowToTable) };
+  }
+
+  /** อ่านเฉพาะ config (ไม่แตะ shop_tables) — ใช้คืนผล saveShopConfig */
+  async function readConfigSnapshotFrom(q: QueryRunner): Promise<ShopConfigSnapshot> {
+    const [nameRows] = (await q.query("SELECT shop_name FROM shop_settings WHERE id = 1 LIMIT 1")) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    const [schedRows] = (await q.query(
+      "SELECT weekday, closed, intervals FROM shop_schedule ORDER BY weekday ASC",
+    )) as [Record<string, unknown>[], unknown];
+    const [ovRows] = (await q.query("SELECT * FROM shop_override WHERE id = 1 LIMIT 1")) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    return {
+      shopName: nameRows.length === 0 ? DEFAULT_SHOP_NAME : String(nameRows[0]!["shop_name"]),
+      schedule: mapScheduleRows(schedRows),
+      override: ovRows.length === 0 ? null : mapOverrideRow(ovRows[0]!),
+    };
+  }
+
+  const rowToUser = (r: Record<string, unknown>): User => ({
+    id: String(r["id"]),
+    username: String(r["username"]),
+    passwordHash: String(r["password_hash"]),
+    roles: parseRoles(r["roles"]),
+    isActive: Number(r["is_active"]) === 1,
+    passwordVersion: Number(r["password_version"] ?? 1),
+    createdAt: new Date(r["created_at"] as string).toISOString(),
+    updatedAt: new Date(r["updated_at"] as string).toISOString(),
+  });
+
+  const mysqlStore: Store = {
+    async createUser(input) {
+      const id = randomUUID();
+      try {
+        await pool.query(
+          "INSERT INTO users (id, username, password_hash, roles, is_active) VALUES (?, ?, ?, CAST(? AS JSON), 1)",
+          [id, input.username, input.passwordHash, JSON.stringify(normalizeRoles(input.roles))],
+        );
+      } catch (err: unknown) {
+        if (
+          err &&
+          typeof err === "object" &&
+          "code" in err &&
+          (err as { code: string }).code === "ER_DUP_ENTRY"
+        ) {
+          throw new ConflictError("ชื่อผู้ใช้นี้มีอยู่แล้ว");
+        }
+        throw err;
+      }
+      const created = await mysqlStore.findById(id);
+      if (!created) throw new Error("สร้างบัญชีไม่สำเร็จ");
+      return created;
+    },
+    async createFirstOwner(input) {
+      // กันแข่งกันสร้าง Owner คนแรกข้าม process ด้วย named lock ระดับ MySQL
+      const conn = await pool.getConnection();
+      try {
+        const [lockRows] = await conn.query("SELECT GET_LOCK('staff_first_owner', 10) AS l");
+        const locked = Number((lockRows as Record<string, unknown>[])[0]!["l"]);
+        if (locked !== 1) throw new Error("ขอ lock สำหรับ bootstrap Owner ไม่สำเร็จ");
+        const [countRows] = await conn.query(
+          "SELECT COUNT(*) AS n FROM users WHERE JSON_CONTAINS(roles, '\"owner\"')",
+        );
+        if (Number((countRows as Record<string, unknown>[])[0]!["n"]) > 0) {
+          return { created: false, reason: "owner-exists" };
+        }
+        const id = randomUUID();
+        try {
+          await conn.query(
+            "INSERT INTO users (id, username, password_hash, roles, is_active) VALUES (?, ?, ?, CAST(? AS JSON), 1)",
+            [id, input.username, input.passwordHash, JSON.stringify(normalizeRoles(input.roles))],
+          );
+        } catch (err: unknown) {
+          if (
+            err &&
+            typeof err === "object" &&
+            "code" in err &&
+            (err as { code: string }).code === "ER_DUP_ENTRY"
+          ) {
+            throw new ConflictError("ชื่อผู้ใช้นี้มีอยู่แล้ว");
+          }
+          throw err;
+        }
+        const created = await mysqlStore.findById(id);
+        if (!created) throw new Error("สร้างบัญชีไม่สำเร็จ");
+        return { created: true, user: created };
+      } finally {
+        try {
+          await conn.query("SELECT RELEASE_LOCK('staff_first_owner')");
+        } finally {
+          conn.release();
+        }
+      }
+    },
+    async findByUsername(username) {
+      const [rows] = await pool.query("SELECT * FROM users WHERE username = ? LIMIT 1", [
+        username,
+      ]);
+      const list = rows as Record<string, unknown>[];
+      return list.length === 0 ? null : rowToUser(list[0]!);
+    },
+    async findById(id) {
+      const [rows] = await pool.query("SELECT * FROM users WHERE id = ? LIMIT 1", [id]);
+      const list = rows as Record<string, unknown>[];
+      return list.length === 0 ? null : rowToUser(list[0]!);
+    },
+    async listUsers() {
+      const [rows] = await pool.query("SELECT * FROM users ORDER BY created_at ASC");
+      return (rows as Record<string, unknown>[]).map(rowToUser);
+    },
+    async updateUser(id, patch) {
+      const current = await mysqlStore.findById(id);
+      if (!current) throw new NotFoundError("ไม่พบบัญชีผู้ใช้");
+      const roles = patch.roles ? normalizeRoles(patch.roles) : current.roles;
+      const isActive = patch.isActive ?? current.isActive;
+      await pool.query("UPDATE users SET roles = CAST(? AS JSON), is_active = ? WHERE id = ?", [
+        JSON.stringify(roles),
+        isActive ? 1 : 0,
+        id,
+      ]);
+      const updated = await mysqlStore.findById(id);
+      if (!updated) throw new NotFoundError("ไม่พบบัญชีผู้ใช้");
+      return updated;
+    },
+    async setPassword(id, passwordHash) {
+      await pool.query(
+        "UPDATE users SET password_hash = ?, password_version = password_version + 1 WHERE id = ?",
+        [passwordHash, id],
+      );
+      const updated = await mysqlStore.findById(id);
+      if (!updated) throw new NotFoundError("ไม่พบบัญชีผู้ใช้");
+      return updated;
+    },
+    async countOwners() {
+      const [rows] = await pool.query(
+        "SELECT COUNT(*) AS n FROM users WHERE JSON_CONTAINS(roles, '\"owner\"')",
+      );
+      return Number((rows as Record<string, unknown>[])[0]!["n"]);
+    },
+    async createSession(userId, passwordVersion) {
+      const id =
+        randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, "");
+      const expires = new Date(Date.now() + SESSION_TTL_MS);
+      await pool.query(
+        "INSERT INTO sessions (id, user_id, password_version, expires_at) VALUES (?, ?, ?, ?)",
+        [id, userId, passwordVersion, expires],
+      );
+      const found = await mysqlStore.findSession(id);
+      if (!found) throw new Error("สร้างเซสชันไม่สำเร็จ");
+      return found;
+    },
+    async findSession(id) {
+      const [rows] = await pool.query("SELECT * FROM sessions WHERE id = ? LIMIT 1", [id]);
+      const list = rows as Record<string, unknown>[];
+      if (list.length === 0) return null;
+      const r = list[0]!;
+      return {
+        id: String(r["id"]),
+        userId: String(r["user_id"]),
+        passwordVersion: Number(r["password_version"] ?? 1),
+        createdAt: new Date(r["created_at"] as string).toISOString(),
+        expiresAt: new Date(r["expires_at"] as string).toISOString(),
+      };
+    },
+    async deleteSession(id) {
+      await pool.query("DELETE FROM sessions WHERE id = ?", [id]);
+    },
+    async deleteSessionsForUser(userId) {
+      await pool.query("DELETE FROM sessions WHERE user_id = ?", [userId]);
+    },
+    async audit(input) {
+      await insertAuditRow(pool, input);
+    },
+    async listAudit(prefix, limit) {
+      let sql = "SELECT * FROM audit_logs";
+      const params: unknown[] = [];
+      if (prefix === "login_") {
+        sql += " WHERE action LIKE 'login\\_%'";
+      } else if (prefix === "shop_") {
+        sql += " WHERE action LIKE 'shop\\_%'";
+      } else if (prefix === "account_") {
+        sql += " WHERE action NOT LIKE 'login\\_%'";
+      }
+      sql += " ORDER BY id DESC LIMIT ?";
+      params.push(limit);
+      const [rows] = await pool.query(sql, params);
+      return (rows as Record<string, unknown>[]).map((r) => ({
+        id: Number(r["id"]),
+        at: new Date(r["at"] as string).toISOString(),
+        actorId: r["actor_id"] ? String(r["actor_id"]) : null,
+        actorUsername: r["actor_username"] ? String(r["actor_username"]) : null,
+        action: String(r["action"]),
+        targetId: r["target_id"] ? String(r["target_id"]) : null,
+        targetUsername: r["target_username"] ? String(r["target_username"]) : null,
+        detail: r["detail"] ? String(r["detail"]) : null,
+        ip: r["ip"] ? String(r["ip"]) : null,
+        success: Number(r["success"]) === 1,
+      }));
+    },
+    async getShopName() {
+      const [rows] = await pool.query("SELECT shop_name FROM shop_settings WHERE id = 1 LIMIT 1");
+      const list = rows as Record<string, unknown>[];
+      if (list.length === 0) return DEFAULT_SHOP_NAME;
+      return String(list[0]!["shop_name"]);
+    },
+    async getSchedule() {
+      const [rows] = await pool.query("SELECT weekday, closed, intervals FROM shop_schedule ORDER BY weekday ASC");
+      return mapScheduleRows(rows as Record<string, unknown>[]);
+    },
+    async getOverride() {
+      const [rows] = await pool.query("SELECT * FROM shop_override WHERE id = 1 LIMIT 1");
+      const list = rows as Record<string, unknown>[];
+      if (list.length === 0) return null;
+      return mapOverrideRow(list[0]!);
+    },
+    async listTables() {
+      const [rows] = await pool.query("SELECT * FROM shop_tables ORDER BY name ASC");
+      return (rows as Record<string, unknown>[]).map(rowToTable);
+    },
+    async getShopSnapshot() {
+      // snapshot คงเส้นคงวาจาก transaction เดียว (read-only) บน connection เดียว
+      const conn = await pool.getConnection();
+      try {
+        await conn.beginTransaction();
+        try {
+          const snap = await readShopSnapshotFrom(conn);
+          await conn.commit();
+          return snap;
+        } catch (err) {
+          try {
+            await conn.rollback();
+          } catch {
+            // เก็บ error ต้นฉบับไว้
+          }
+          throw err;
+        }
+      } finally {
+        conn.release();
+      }
+    },
+    async saveShopConfig(input, actor) {
+      // validate ก่อนเปิด transaction: ไม่ผ่าน = ไม่แตะ DB เลย
+      const normalized = normalizeWeeklySchedule(JSON.parse(JSON.stringify(input.schedule)) as unknown);
+      return withShopTx(async (conn) => {
+        const [nameRows] = (await conn.query("SELECT shop_name FROM shop_settings WHERE id = 1 LIMIT 1 FOR UPDATE")) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const current = nameRows.length === 0 ? DEFAULT_SHOP_NAME : String(nameRows[0]!["shop_name"]);
+        let nameChanged = false;
+        if (input.shopName !== undefined && input.shopName !== current) {
+          await conn.query(
+            "INSERT INTO shop_settings (id, shop_name) VALUES (1, ?) ON DUPLICATE KEY UPDATE shop_name = VALUES(shop_name)",
+            [input.shopName],
+          );
+          nameChanged = true;
+          await insertAuditRow(conn, shopNameUpdatedEvent(input.shopName, actor));
+        }
+        for (const key of WEEKDAY_KEYS) {
+          const day = normalized[key]!;
+          await conn.query(
+            "INSERT INTO shop_schedule (weekday, closed, intervals) VALUES (?, ?, CAST(? AS JSON)) ON DUPLICATE KEY UPDATE closed = VALUES(closed), intervals = VALUES(intervals)",
+            [Number(key), day.closed ? 1 : 0, JSON.stringify(day.intervals)],
+          );
+        }
+        await insertAuditRow(conn, shopScheduleUpdatedEvent(actor));
+        return { ...(await readConfigSnapshotFrom(conn)), nameChanged };
+      });
+    },
+    async setShopOverride(input, actor) {
+      return withShopTx(async (conn) => {
+        await conn.query(
+          "INSERT INTO shop_override (id, mode, reason, expected_reopen_at, expires_at, created_by) VALUES (1, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE mode = VALUES(mode), reason = VALUES(reason), expected_reopen_at = VALUES(expected_reopen_at), expires_at = VALUES(expires_at), created_by = VALUES(created_by)",
+          [
+            input.mode,
+            input.reason ?? null,
+            input.expectedReopenAt ? toMysqlDatetime(input.expectedReopenAt) : null,
+            input.expiresAt ? toMysqlDatetime(input.expiresAt) : null,
+            input.createdBy ?? null,
+          ],
+        );
+        await insertAuditRow(conn, shopOverrideSetEvent(input, actor));
+        const saved = await readShopSnapshotFrom(conn);
+        if (!saved.override) throw new Error("บันทึกคำสั่งชั่วคราวไม่สำเร็จ");
+        return saved.override;
+      });
+    },
+    async clearShopOverride(actor) {
+      return withShopTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT id FROM shop_override WHERE id = 1 LIMIT 1 FOR UPDATE")) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) return false;
+        await conn.query("DELETE FROM shop_override WHERE id = 1");
+        await insertAuditRow(conn, shopOverrideClearedEvent(actor));
+        return true;
+      });
+    },
+    async createShopTable(input, actor) {
+      return withShopTx(async (conn) => {
+        const id = randomUUID();
+        try {
+          await conn.query("INSERT INTO shop_tables (id, name, capacity, is_enabled) VALUES (?, ?, ?, 1)", [
+            id,
+            input.name.trim(),
+            input.capacity,
+          ]);
+        } catch (err: unknown) {
+          if (err && typeof err === "object" && "code" in err && (err as { code: string }).code === "ER_DUP_ENTRY") {
+            throw new ConflictError("ชื่อโต๊ะนี้มีอยู่แล้ว");
+          }
+          throw err;
+        }
+        await insertAuditRow(conn, shopTableCreatedEvent(input.name.trim(), input.capacity, actor));
+        const [rows] = (await conn.query("SELECT * FROM shop_tables WHERE id = ? LIMIT 1", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new Error("สร้างโต๊ะไม่สำเร็จ");
+        return rowToTable(rows[0]!);
+      });
+    },
+    async updateShopTable(id, patch, actor) {
+      return withShopTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM shop_tables WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบโต๊ะ");
+        const current = rowToTable(rows[0]!);
+        const name = patch.name !== undefined ? patch.name.trim() : current.name;
+        const capacity = patch.capacity ?? current.capacity;
+        const isEnabled = patch.isEnabled ?? current.isEnabled;
+        try {
+          await conn.query("UPDATE shop_tables SET name = ?, capacity = ?, is_enabled = ? WHERE id = ?", [
+            name,
+            capacity,
+            isEnabled ? 1 : 0,
+            id,
+          ]);
+        } catch (err: unknown) {
+          if (err && typeof err === "object" && "code" in err && (err as { code: string }).code === "ER_DUP_ENTRY") {
+            throw new ConflictError("ชื่อโต๊ะนี้มีอยู่แล้ว");
+          }
+          throw err;
+        }
+        await insertAuditRow(conn, shopTableUpdatedEvent(name, capacity, isEnabled, actor));
+        const [rows2] = (await conn.query("SELECT * FROM shop_tables WHERE id = ? LIMIT 1", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        return rowToTable(rows2[0]!);
+      });
+    },
+    async close() {
+      await pool.end();
+    },
+  };
+
+  return mysqlStore;
+}
+
+/**
+ * Runtime (index/bootstrap) ใช้ MySQL จริงเท่านั้น — ไม่มี memory fallback
+ * memory store ฉีดได้เฉพาะใน unit tests ผ่าน createMemoryStore โดยตรง
+ */
+export function createStoreFromEnv(): Promise<Store> {
+  const url = process.env["DATABASE_URL"];
+  if (!url) {
+    throw new Error(
+      "ต้องตั้งค่า DATABASE_URL ที่ชี้ MySQL จริง (เช่น mysql://user:pass@host:3306/paor)",
+    );
+  }
+  return createMysqlStore(url);
+}
