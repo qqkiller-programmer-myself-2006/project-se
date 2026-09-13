@@ -91,6 +91,33 @@ export interface ShopTable {
   updatedAt: string;
 }
 
+// ---------- Ticket 03: บัญชีลูกค้า + LINE (แยกจากบัญชีพนักงานโดยสิ้นเชิง) ----------
+
+export interface PublicCustomer {
+  id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  isActive: boolean;
+  isDeleted: boolean;
+  createdAt: string;
+}
+
+export interface AdminCustomerItem extends PublicCustomer {
+  lineLinked: boolean;
+}
+
+export interface LineStatus {
+  linked: boolean;
+  displayName?: string | null;
+  linkedAt?: string;
+}
+
+export interface AdminCustomerDetail {
+  customer: PublicCustomer;
+  line: LineStatus;
+}
+
 /** ประวัติร้านใช้ AuditItem ชุดเดียวกับประวัติบัญชี (shape เดียวกัน ไม่ duplicate type) */
 
 const BASE = import.meta.env["VITE_API_URL"] ?? "";
@@ -197,4 +224,40 @@ export const api = {
   updateTable: (id: string, patch: { name?: string; capacity?: number; isEnabled?: boolean }) =>
     req<{ table: ShopTable }>(`/api/tables/${id}`, { method: "PATCH", body: JSON.stringify(patch) }, true),
   shopAudit: () => req<{ items: AuditItem[] }>("/api/audit/shop?limit=100"),
+  // Ticket 03: ลูกค้า (session แยกจากพนักงาน ใช้คุกกี้ csid ฝั่ง server)
+  customerRegister: (name: string, phone: string, password: string, email?: string) =>
+    req<{ customer: PublicCustomer }>(
+      "/api/customers/register",
+      { method: "POST", body: JSON.stringify(email ? { name, phone, password, email } : { name, phone, password }) },
+      true,
+    ),
+  customerLogin: (phone: string, password: string) =>
+    req<{ customer: PublicCustomer }>(
+      "/api/customers/login",
+      { method: "POST", body: JSON.stringify({ phone, password }) },
+      true,
+    ),
+  customerLogout: () => req<{ ok: boolean }>("/api/customers/logout", { method: "POST" }, true),
+  customerMe: () => req<{ customer: PublicCustomer }>("/api/customers/me"),
+  updateCustomerProfile: (patch: { name?: string; email?: string | null }) =>
+    req<{ customer: PublicCustomer }>("/api/customers/me", { method: "PATCH", body: JSON.stringify(patch) }, true),
+  changeCustomerPassword: (currentPassword: string, newPassword: string) =>
+    req<{ ok: boolean; message: string }>(
+      "/api/customers/change-password",
+      { method: "POST", body: JSON.stringify({ currentPassword, newPassword }) },
+      true,
+    ),
+  deleteCustomerMe: () => req<{ ok: boolean; message: string }>("/api/customers/me", { method: "DELETE" }, true),
+  lineStart: (redirect = "/profile") =>
+    req<{ authorizeUrl: string }>("/api/customers/line/start", { method: "POST", body: JSON.stringify({ redirect }) }, true),
+  lineStatus: () => req<LineStatus>("/api/customers/line/status"),
+  lineUnlink: () => req<{ ok: boolean; message: string }>("/api/customers/line/unlink", { method: "POST" }, true),
+  adminCustomers: (q = "", limit = 20) =>
+    req<{ customers: AdminCustomerItem[] }>(`/api/admin/customers?q=${encodeURIComponent(q)}&limit=${limit}`),
+  adminCustomerDetail: (id: string) => req<AdminCustomerDetail>(`/api/admin/customers/${id}`),
+  adminCustomerDeactivate: (id: string) =>
+    req<{ customer: PublicCustomer }>(`/api/admin/customers/${id}/deactivate`, { method: "POST" }, true),
+  adminCustomerActivate: (id: string) =>
+    req<{ customer: PublicCustomer }>(`/api/admin/customers/${id}/activate`, { method: "POST" }, true),
+  customerAudit: () => req<{ items: AuditItem[] }>("/api/audit/customers?limit=100"),
 };

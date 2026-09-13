@@ -9,6 +9,10 @@ import AuditPage from "./pages/Audit";
 import StatusPage from "./pages/Status";
 import ShopPage from "./pages/Shop";
 import TablesPage from "./pages/Tables";
+import CustomerRegisterPage from "./pages/CustomerRegister";
+import CustomerLoginPage from "./pages/CustomerLogin";
+import CustomerProfilePage from "./pages/CustomerProfile";
+import AdminCustomersPage from "./pages/AdminCustomers";
 
 const NAV_BASE =
   "inline-flex min-h-[44px] items-center rounded-xl border px-4 py-2 text-sm font-semibold transition-colors";
@@ -57,11 +61,15 @@ export default function App() {
         <Spinner label="กำลังโหลดระบบหลังร้าน…" />
       </div>
     );
-  // หน้าสาธารณะ /status ดูได้โดยไม่ต้องเข้าสู่ระบบ (Ticket 02)
+  // หน้าสาธารณะ /status + หน้าลูกค้า ดูได้โดยไม่ต้อง login พนักงาน (Ticket 02/03)
+  // session ลูกค้าแยกจาก staff (คุกกี้ csid vs sid) — หน้าลูกค้าโหลด session ของตัวเอง ไม่พึ่ง shell นี้
   if (!me)
     return (
       <Routes>
         <Route path="/status" element={<StatusPage />} />
+        <Route path="/register" element={<CustomerRegisterPage />} />
+        <Route path="/customer/login" element={<CustomerLoginPage />} />
+        <Route path="/profile" element={<CustomerProfilePage />} />
         <Route path="*" element={<LoginPage onLoggedIn={refresh} />} />
       </Routes>
     );
@@ -70,7 +78,7 @@ export default function App() {
   const isManager = isOwner || me.roles.includes("admin");
   const homePath = isOwner ? "/staff" : isManager ? "/shop" : "/password";
   // การจัดการพนักงานเป็นของ Owner คนเดียว (ตรงกับ server authorization)
-  // การจัดการร้าน/โต๊ะเป็นของ Owner และ Admin (kitchen/drink ไม่มีเมนูและถูกปฏิเสธที่ server)
+  // การจัดการร้าน/โต๊ะ/สมาชิกเป็นของ Owner และ Admin (kitchen/drink ไม่มีเมนูและถูกปฏิเสธที่ server)
 
   return (
     <div className="min-h-screen bg-brand-50 text-ink-900">
@@ -116,6 +124,11 @@ export default function App() {
                 โต๊ะ
               </NavLink>
             )}
+            {isManager && (
+              <NavLink to="/admin/customers" className={({ isActive }) => navClass(isActive)}>
+                สมาชิก
+              </NavLink>
+            )}
             {isOwner && (
               <NavLink to="/staff" className={({ isActive }) => navClass(isActive)}>
                 พนักงาน
@@ -146,6 +159,7 @@ export default function App() {
           <Route path="/status" element={<StatusPage />} />
           {isManager && <Route path="/shop" element={<ShopPage />} />}
           {isManager && <Route path="/tables" element={<TablesPage />} />}
+          {isManager && <Route path="/admin/customers" element={<AdminCustomersPage />} />}
           {isOwner && <Route path="/staff" element={<StaffPage me={me} />} />}
           <Route
             path="/password"

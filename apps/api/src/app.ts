@@ -12,7 +12,9 @@ import type { Store } from "./store.js";
 import { toPublicUser, type PublicUser, type Role } from "./types.js";
 import { ConflictError, NotFoundError } from "./types.js";
 import { createShopRouter } from "./routes/shop.js";
+import { createCustomerRouter } from "./routes/customers.js";
 import type { OccupancyProvider } from "./shop/occupancy.js";
+import type { LineProvider } from "./line/adapter.js";
 
 export interface AppOptions {
   store: Store;
@@ -28,6 +30,17 @@ export interface AppOptions {
   now?: () => Date;
   /** snapshot จำนวนโต๊ะที่ใช้ + ผู้ใช้บริการ (default: zero — ยังไม่มี module รอบการใช้โต๊ะ) */
   occupancy?: OccupancyProvider;
+  /** LINE provider สำหรับ Ticket 03 (default: disabled → fail-fast 503; tests ฉีด fake) */
+  line?: LineProvider;
+  /** callback URL ที่ลงทะเบียนกับ LINE (default: อ่าน LINE_REDIRECT_URI) */
+  lineRedirectUri?: string;
+  /**
+   * P2: base URL ของ customer web UI สำหรับ redirect หลัง LINE callback
+   * (default: อ่าน CUSTOMER_UI_URL; ไม่ตั้ง = same-origin fallback)
+   */
+  customerUiBaseUrl?: string;
+  /** จำนวนครั้งสูงสุดของ register+login ลูกค้าต่อ 15 นาทีต่อ IP (default 30) */
+  customerRateMax?: number;
 }
 
 declare global {
@@ -576,6 +589,21 @@ export function createApp(opts: AppOptions): express.Express {
       occupancy: opts.occupancy,
       middleware: { requireAuth, requireCsrf, requireShopManager },
       clientIp,
+    }),
+  );
+
+  // Ticket 03 routes อยู่ใน routes/customers.ts (เบอร์ไทย/PKCE/claims อยู่ domain/adapters)
+  app.use(
+    createCustomerRouter({
+      store,
+      middleware: { requireAuth, requireCsrf, requireShopManager },
+      clientIp,
+      line: opts.line,
+      lineRedirectUri: opts.lineRedirectUri,
+      customerUiBaseUrl: opts.customerUiBaseUrl,
+      clock,
+      cookieSecure: opts.cookieSecure,
+      customerRateMax: opts.customerRateMax,
     }),
   );
 
