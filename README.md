@@ -212,27 +212,63 @@ npm run bootstrap -w apps/api
   หน้าเว็บเปิด authorize URL ในแท็บใหม่แล้วกด “ตรวจสอบสถานะ” (ยังไม่มี auto-redirect กลับเข้าเว็บ
   นอกจาก callback redirect 302 กลับมาเมื่อ LINE ส่ง browser มาที่ callback โดยตรง)
 
+กฎสำคัญ (Ticket 06 — การจองโต๊ะและรอบการใช้โต๊ะ):
+
+- การจองเป็นของบัญชีลูกค้าเท่านั้น (Guest จองไม่ได้ — 401) ลูกค้าเห็น/ยกเลิกได้เฉพาะของตนเอง
+  (คนอื่น 403) จองล่วงหน้า 60 นาที–3 วัน ยกเลิกก่อนนัด ≥60 นาที (ขอบเขตพอดีผ่าน)
+- หน้าต่างถือครองโต๊ะ `RESERVATION_SLOT_MINUTES = 120 นาที` (`apps/api/src/reservations/validation.ts`):
+  โต๊ะเดียวกันทับซ้อนกันเมื่อ |t1-t2| < 120 นาที — pure function เดียวกันทั้ง Memory/MySQL
+- เลือกโต๊ะเองหรือให้ระบบแนะนำ (โต๊ะพร้อมใช้งานที่เล็กที่สุดซึ่งจุพอและว่างในช่วงนั้น);
+  โต๊ะงดใช้งาน/จุไม่พอ/ทับซ้อนถูกปฏิเสธ 409 พร้อมข้อความไทย
+- กันจองชนแบบ concurrent: Memory serialize ผ่านคิวใน store, MySQL ใช้ named lock
+  `paor_reservation_write` + transaction เดียว (SELECT ตาราง/แถวแบบ FOR UPDATE แล้วค่อย insert)
+  ชนกันสำเร็จได้รายการเดียวและโต๊ะไม่ติดค้าง; idempotency key (optional UUID) + รหัส `RSV-YYYYMMDD-XXXX`
+  (unique + retry) — key เดิม + payload เดิมคืนของเดิมโดยไม่เขียน audit ซ้ำ
+- หลังร้าน (Owner/Admin — kitchen/drink 403, ไม่ login 401): ค้นหา/ดู/เปลี่ยนสถานะ
+  (`pending → confirmed/cancelled`, `confirmed → cancelled/no_show` พร้อมเหตุผลบังคับ)
+  + audit `reservation_*` (actor/reason/before/after); `seated → completed` เปลี่ยนผ่านปิดรอบเท่านั้น
+- เช็กอิน (Owner/Admin) ด้วยรหัสจอง/เบอร์โทร/QR fake (`PAOR-RSV:<CODE>` — มีเฉพาะ fake/local
+  ห้ามใช้ provider จริง) ตรวจจำนวนจริง 1–50 เปิดรอบได้ครั้งเดียวต่อการจองและหนึ่งรอบต่อหนึ่งโต๊ะ;
+  โต๊ะไม่รองรับจำนวนจริงและไม่มีโต๊ะอื่น → 409 รอจัดโต๊ะโดยไม่เปลี่ยนสถานะ
+- คำสั่งซื้อ dine_in ผูก `roundId` (รอบต้องเปิดอยู่ โต๊ะต้องตรงรอบ) ผ่าน `POST /api/orders`
+  (เพิ่ม `tableId`/`roundId` optional — migration 007 เพิ่มคอลัมน์แบบ rerunnable);
+  รอบปิดรับคำสั่งซื้อใหม่ไม่ได้ (409); ปิดรอบได้เมื่อไม่มีออเดอร์ `pending_payment` ผูกอยู่
+  (ปิดแล้วการจองต้นทาง → `completed`)
+- public ไม่รั่ว PII: `/api/shop/status` (ผ่าน `OccupancyProvider` ที่นับจากรอบเปิดจริง —
+  runtime ต่อ `createStoreOccupancyProvider(store)` ใน `index.ts`) และ
+  `GET /api/shop/table-rounds` (sanitize เหลือ tableId/tableName/partySize/openedAt)
+- mutation การจอง/เช็กอิน/รอบทุกตัวเป็น atomic พร้อม audit ผ่าน Store (factories กลาง
+  `apps/api/src/reservations/audit-events.ts`); นาฬิกาฉีดผ่าน `AppOptions.now`
+  (router ส่งให้ store ทุก mutation เวลา); routes อยู่ใน `apps/api/src/routes/reservations.ts`
+- ไม่รวมตาม scope (งาน ticket ถัดไป): LINE reminder, QR provider จริง, payment/deposit,
+  external notification, Docker/MySQL runtime จริง, full waitlist, Prisma/experiments
+
 ## ตรวจ/ทดสอบ
 
 ```powershell
 npm run typecheck -w apps/api
 npm run typecheck -w apps/web
-npm run test -w apps/api   # Ticket 01: 29 API + 4 env + Ticket 02: 12 shop-status + 4 shop-store + 5 shop-schedule + Ticket 03: 19 customers + 15 customer-line + 10 line-provider (memory/fault seam ฉีดเฉพาะในเทสต์)
-npm run test -w apps/web   # เดิม 56 + ใหม่ 23 (phone 2/customer-auth 6/customer-profile 8/admin-customers 4/customer-shell 3)
+npm run test -w apps/api   # Ticket 01: 29 API + 4 env + Ticket 02: 12 shop-status + 4 shop-store + 5 shop-schedule + Ticket 03: 19 customers + 15 customer-line + 10 line-provider + Ticket 06: 11 reservations (memory/fault seam ฉีดเฉพาะในเทสต์)
+npm run test -w apps/web   # เดิม 106 + ใหม่ 20 (reservations 7/checkin 7/admin-reservations 6)
 npm run build -w apps/api
 npm run build -w apps/web
 ```
 
 `tests/mysql.int.test.ts` (Ticket 01, 6 ข้อ), `tests/shop-mysql.int.test.ts`
 (Ticket 02, 3 ข้อ: CRUD + snapshot/audit, transaction rollback เมื่อ audit เขียนไม่ได้,
-override datetime round-trip) และ `tests/customer-mysql.int.test.ts`
+override datetime round-trip), `tests/customer-mysql.int.test.ts`
 (Ticket 03, 4 ข้อ: CRUD/profile/password, unique/tx consume/link conflict,
-LINE start→callback→unlink ผ่าน HTTP, migration 004 รันซ้ำ) ใช้ **MySQL จริงผ่าน `TEST_DATABASE_URL`
+LINE start→callback→unlink ผ่าน HTTP, migration 004 รันซ้ำ),
+`tests/orders-mysql.int.test.ts` (Ticket 05, 2 ข้อ),
+`tests/menu-mysql.int.test.ts` (Ticket 04, 2 ข้อ) และ
+`tests/reservations-mysql.int.test.ts`
+(Ticket 06, 2 ข้อ: จอง→เช็กอิน→ผูกออเดอร์→ปิดรอบบน MySQL จริง,
+transaction rollback เมื่อ audit เขียนไม่ได้, migration 007 รันซ้ำ) ใช้ **MySQL จริงผ่าน `TEST_DATABASE_URL`
 แยกจาก production เท่านั้น**:
 
-- ไม่มี `TEST_DATABASE_URL` → **skip ชัดเจน (13 skipped)** ไม่นับว่าผ่าน
+- ไม่มี `TEST_DATABASE_URL` → **skip ชัดเจน (23 skipped)** ไม่นับว่าผ่าน
 - มี URL แล้วแต่เชื่อมต่อ/migrate ไม่ได้ → **FAIL** (ห้าม catch แล้วผ่าน)
-- ทำความสะอาด users/sessions/audit + customers/customer_sessions/line_links/line_tx ที่สร้างทั้งหมดหลังจบ (`afterAll`)
+- ทำความสะอาด users/sessions/audit + customers/customer_sessions/line_links/line_tx + menu + orders/order_items + reservations/table_rounds ที่สร้างทั้งหมดหลังจบ (`afterAll`)
 
 ## ข้อจำกัดที่ทราบ (สภาพแวดล้อมนี้)
 

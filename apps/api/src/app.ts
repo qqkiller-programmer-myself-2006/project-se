@@ -15,6 +15,7 @@ import { createShopRouter } from "./routes/shop.js";
 import { createCustomerRouter } from "./routes/customers.js";
 import { createMenuRouter } from "./routes/menu.js";
 import { createOrderRouter } from "./routes/orders.js";
+import { createReservationRouter } from "./routes/reservations.js";
 import type { OccupancyProvider } from "./shop/occupancy.js";
 import type { LineProvider } from "./line/adapter.js";
 
@@ -609,6 +610,16 @@ export function createApp(opts: AppOptions): express.Express {
       store,
       middleware: { requireAuth, requireCsrf, requireShopManager },
       clientIp,
+    }),
+  );
+
+  // Ticket 06 routes อยู่ใน routes/reservations.ts (กฎธุรกิจอยู่ reservations/validation.ts + store)
+  app.use(
+    createReservationRouter({
+      store,
+      middleware: { requireAuth, requireCsrf, requireShopManager },
+      clientIp,
+      clock,
     }),
   );
 

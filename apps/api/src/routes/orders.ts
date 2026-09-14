@@ -50,6 +50,9 @@ const orderBodySchema = z.object({
   guestName: z.unknown().optional(),
   guestPhone: z.unknown().optional(),
   idempotencyKey: z.unknown(),
+  /** Ticket 06: ผูกคำสั่งซื้อที่โต๊ะกับรอบที่เปิดอยู่ (เฉพาะ dine_in) */
+  tableId: z.unknown().optional(),
+  roundId: z.unknown().optional(),
 });
 
 const statusPatchSchema = z.object({
@@ -147,6 +150,8 @@ export function createOrderRouter(deps: OrderRouterDeps): express.Router {
         scheduledAt?: string | null;
         idempotencyKey: string;
         items: { menuId: string; quantity: number; note?: string | null }[];
+        tableId?: string | null;
+        roundId?: string | null;
       };
       try {
         const serviceType = normalizeServiceType(b.serviceType);
@@ -154,6 +159,9 @@ export function createOrderRouter(deps: OrderRouterDeps): express.Router {
         const scheduledAt = normalizeScheduledAt(serviceType, b.scheduledAt ?? null, now);
         const idempotencyKey = normalizeIdempotencyKey(b.idempotencyKey);
         const customer = await resolveCustomer(req);
+        // Ticket 06: linkage โต๊ะ/รอบส่งต่อให้ store ตรวจ (รอบต้องเปิด โต๊ะต้องตรงรอบ)
+        const tableId = typeof b.tableId === "string" && b.tableId.trim() ? b.tableId.trim() : null;
+        const roundId = typeof b.roundId === "string" && b.roundId.trim() ? b.roundId.trim() : null;
         if (customer) {
           input = {
             customerId: customer.id,
@@ -161,6 +169,8 @@ export function createOrderRouter(deps: OrderRouterDeps): express.Router {
             scheduledAt,
             idempotencyKey,
             items: lines.map((l) => ({ menuId: l.menuId, quantity: l.quantity, note: l.note })),
+            tableId,
+            roundId,
           };
         } else {
           // Guest: ต้องมีชื่อ+เบอร์ (normalize เบอร์ด้วยกฎ Ticket 03 เดียวกับสมัครสมาชิก)
@@ -174,6 +184,8 @@ export function createOrderRouter(deps: OrderRouterDeps): express.Router {
             scheduledAt,
             idempotencyKey,
             items: lines.map((l) => ({ menuId: l.menuId, quantity: l.quantity, note: l.note })),
+            tableId,
+            roundId,
           };
         }
       } catch (err) {

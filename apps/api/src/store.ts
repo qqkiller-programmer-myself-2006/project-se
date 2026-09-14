@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,12 +16,18 @@ import type {
   OrderItem,
   OrderServiceType,
   OrderStatus,
+  Reservation,
+  ReservationDetail,
+  ReservationStatus,
   Role,
   Session,
   ShopTable,
+  TableRound,
+  TableRoundDetail,
+  TableRoundStatus,
   User,
 } from "./types.js";
-import { ConflictError, NotFoundError } from "./types.js";
+import { ConflictError, NotFoundError, RESERVATION_STATUSES } from "./types.js";
 import {
   DEFAULT_SHOP_NAME,
   defaultWeeklySchedule,
@@ -83,6 +89,29 @@ import {
   type NormalizedOrderLine,
 } from "./orders/validation.js";
 import { orderCreatedEvent, orderStatusChangedEvent } from "./orders/audit-events.js";
+import {
+  assertCancellable,
+  assertReservationStatusTransition,
+  generateReservationCode,
+  isReservationOverlapping,
+  normalizePartySize,
+  normalizeReservationIdempotencyKey,
+  normalizeReservationNote,
+  normalizeReservationReason,
+  normalizeReservationStatus,
+  normalizeReservedAt,
+  normalizeTableId,
+  recommendTable,
+  reservationPayloadHash,
+  RESERVATION_SLOT_MINUTES,
+} from "./reservations/validation.js";import {
+  reservationCancelledEvent,
+  reservationCheckedInEvent,
+  reservationCreatedEvent,
+  reservationStatusChangedEvent,
+  tableRoundClosedEvent,
+  tableRoundOpenedEvent,
+} from "./reservations/audit-events.js";
 import { normalizeThaiPhone } from "./customer/phone.js";
 import { isMenuSellable } from "./types.js";
 
@@ -213,7 +242,7 @@ export interface Store {
   deleteSessionsForUser(userId: string): Promise<void>;
   audit(input: AuditInput): Promise<void>;
   listAudit(
-    prefix: "login_" | "account_" | "shop_" | "customer_" | "menu_" | "order_" | "all",
+    prefix: "login_" | "account_" | "shop_" | "customer_" | "menu_" | "order_" | "reservation_" | "round_" | "all",
     limit: number,
   ): Promise<AuditEntry[]>;
   // ---- Ticket 02: สถานะร้านและโต๊ะ (อ่านเดี่ยว + mutation แบบ atomic พร้อม audit) ----
@@ -372,6 +401,59 @@ export interface Store {
    * pending_payment → completed/cancelled พร้อมเหตุผล + audit ก่อน/หลัง แบบ all-or-nothing
    */
   updateOrderStatus(id: string, patch: { status: OrderStatus; reason: string }, actor: ShopActor): Promise<OrderDetail>;
+  // ---- Ticket 06: การจองโต๊ะและรอบการใช้โต๊ะ ----
+  /**
+   * สร้างการจอง (ลูกค้าที่ login แล้ว):
+   * - ตรวจเวลานัด (ล่วงหน้า 60 นาที – 3 วัน), โต๊ะพร้อมใช้งาน + ความจุพอ,
+   *   ไม่ทับซ้อนกับการจอง active (pending/confirmed) บนโต๊ะเดียวกัน
+   *   ในหน้าต่าง 120 นาที (isReservationOverlapping เดียวกันทั้ง Memory/MySQL)
+   * - idempotency (optional): key เดิม + payload เดิม → คืนของเดิม (ไม่เขียน audit ซ้ำ);
+   *   key เดิม + payload ต่างกัน → ConflictError
+   * - กันแข่งกันจองชน (concurrent): Memory ใช้คิว serialize ต่อโต๊ะ,
+   *   MySQL ล็อกแถว shop_tables ของโต๊ะ (SELECT ... FOR UPDATE) ใน transaction เดียว
+   */
+  createReservation(input: CreateReservationInput, actor: ShopActor, now?: Date): Promise<{ reservation: ReservationDetail; deduplicated: boolean }>;
+  getReservation(id: string): Promise<ReservationDetail | null>;
+  getReservationByCode(code: string): Promise<ReservationDetail | null>;
+  /** การจองของสมาชิกคนเดียว (เรียงเวลานัดใกล้สุดก่อน) */
+  listCustomerReservations(customerId: string, limit?: number): Promise<ReservationDetail[]>;
+  /** ค้นหาหลังร้าน: รหัสจอง (LIKE) + กรองสถานะ */
+  listReservations(filter: ListReservationsFilter): Promise<ReservationDetail[]>;
+  /** ผู้สมัครเช็กอินด้วยเบอร์: การจอง active (pending/confirmed) ของเบอร์นั้น (เรียงเวลานัดใกล้สุดก่อน) */
+  listReservationsByPhone(phone: string, limit?: number): Promise<ReservationDetail[]>;
+  /** แนะนำโต๊ะว่างที่เล็กที่สุดซึ่งรองรับจำนวนคนในช่วงเวลานัด */
+  recommendReservationTable(partySize: number, reservedAt: string): Promise<ShopTable | null>;
+  /**
+   * ลูกค้ายกเลิกการจองของตนเอง (pending/confirmed เท่านั้น + ก่อนนัด ≥60 นาที)
+   * + audit แบบ all-or-nothing
+   */
+  cancelReservation(id: string, patch: { reason: string }, actor: ShopActor, now?: Date): Promise<ReservationDetail>;
+  /**
+   * หลังร้านเปลี่ยนสถานะ (Owner/Admin — route ตรวจสิทธิ์):
+   * pending → confirmed/cancelled, confirmed → cancelled/no_show พร้อมเหตุผล
+   * + audit ก่อน/หลัง แบบ all-or-nothing (seated → completed ผ่านปิดรอบเท่านั้น)
+   */
+  updateReservationStatus(id: string, patch: { status: ReservationStatus; reason: string }, actor: ShopActor): Promise<ReservationDetail>;
+  /**
+   * เช็กอิน (Owner/Admin — route ตรวจสิทธิ์):
+   * - ค้นหาด้วยรหัสจองหรือเบอร์โทร ตรวจจำนวนคนจริง (1–50)
+   * - เปิดรอบการใช้โต๊ะได้เพียงครั้งเดียวต่อการจอง และหนึ่งรอบต่อหนึ่งโต๊ะ
+   *   (โต๊ะต้องพร้อมใช้งาน + ไม่มีรอบ open ค้าง + ความจุพอจำนวนจริง)
+   * - โต๊ะตามจองจุไม่พอ → ใช้ tableId ที่ระบุมาแทนได้ (ต้องว่างเช่นกัน);
+   *   หาโต๊ะเหมาะไม่ได้เลย → ConflictError ข้อความรอจัดโต๊ะ (ไม่เปลี่ยนสถานะ)
+   * - สำเร็จ: การจอง → seated + เปิด round + audit ทั้งหมดแบบ all-or-nothing
+   */
+  checkinReservation(input: CheckinInput, actor: ShopActor, now?: Date): Promise<{ reservation: ReservationDetail; round: TableRoundDetail }>;
+  /** รอบการใช้โต๊ะ (หลังร้าน): กรองสถานะ + จำกัดจำนวน เรียงเปิดล่าสุดก่อน */
+  listTableRounds(filter: ListTableRoundsFilter): Promise<TableRoundDetail[]>;
+  getTableRound(id: string): Promise<TableRoundDetail | null>;
+  /**
+   * ปิดรอบ (Owner/Admin — route ตรวจสิทธิ์):
+   * - รอบต้อง open อยู่; ปิดได้เมื่อไม่มีคำสั่งซื้อ pending_payment ผูกอยู่
+   * - สำเร็จ: round → closed + การจองต้นทาง (ถ้ามี) → completed + audit แบบ all-or-nothing
+   * - รอบที่ปิดแล้วรับคำสั่งซื้อใหม่ไม่ได้ (ตรวจที่ createOrder)
+   */
+  closeTableRound(id: string, actor: ShopActor, now?: Date): Promise<TableRoundDetail>;
   close?(): Promise<void>;
 }
 
@@ -408,12 +490,55 @@ export interface CreateOrderInput {
   /** UUID ต่อการกดยืนยันหนึ่งครั้ง — กันยืนยันซ้ำ */
   idempotencyKey: string;
   items: CreateOrderLineInput[];
+  /** ผูกกับโต๊ะ (เฉพาะ dine_in ที่เช็กอินแล้ว — ต้องตรงกับโต๊ะของรอบ) */
+  tableId?: string | null;
+  /** ผูกกับรอบการใช้โต๊ะที่เปิดอยู่ (เฉพาะ dine_in — รอบปิดรับคำสั่งซื้อใหม่ไม่ได้) */
+  roundId?: string | null;
 }
 
 export interface ListOrdersFilter {
   q?: string;
   status?: OrderStatus;
   limit: number;
+}
+
+// ---------- Ticket 06: การจองโต๊ะและรอบการใช้โต๊ะ ----------
+
+export interface CreateReservationInput {
+  customerId: string;
+  tableId?: string | null;
+  /** ว่าง = ให้ระบบแนะนำโต๊ะว่างที่เล็กที่สุดซึ่งรองรับจำนวนคน */
+  partySize: number;
+  /** ISO string (เวลานัด) */
+  reservedAt: string;
+  note?: string | null;
+  /** UUID ต่อการกดจองหนึ่งครั้ง (optional — กันจองซ้ำ) */
+  idempotencyKey?: string | null;
+}
+
+export interface ListReservationsFilter {
+  q?: string;
+  status?: ReservationStatus;
+  limit: number;
+}
+
+export interface ListTableRoundsFilter {
+  status?: TableRoundStatus;
+  tableId?: string;
+  limit: number;
+}
+
+export interface CheckinInput {
+  /** รหัสจอง (หรือ qr payload ที่ถอดแล้ว — route ถอดก่อนส่ง) */
+  code?: string | null;
+  /** เบอร์โทรลูกค้า (normalize แล้วด้วยกฎ Ticket 03 — route normalize ก่อนส่ง) */
+  phone?: string | null;
+  /** รหัสการจองตรง ๆ (ทางเลือกเมื่อระบุ id มาเลย) */
+  reservationId?: string | null;
+  /** จำนวนผู้ใช้บริการจริงตอนเช็กอิน (บังคับ) */
+  partySize: number;
+  /** เปลี่ยนโต๊ะจากที่จอง (optional — ต้องว่างและจุพอเช่นกัน) */
+  tableId?: string | null;
 }
 
 const nowIso = () => new Date().toISOString();
@@ -470,6 +595,17 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
   const orderItems = new Map<string, OrderItem[]>();
   const ordersByNumber = new Map<string, string>();
   const ordersByIdemKey = new Map<string, string>();
+  // ---- Ticket 06 memory state: การจอง + รอบการใช้โต๊ะ ----
+  const reservations = new Map<string, Reservation>();
+  const reservationsByCode = new Map<string, string>();
+  const reservationsByIdemKey = new Map<string, string>();
+  const tableRounds = new Map<string, TableRound>();
+  const roundsByReservation = new Map<string, string>();
+  /**
+   * คิว serialize สำหรับ mutation การจอง/เช็กอินฝั่ง memory (กัน concurrent
+   * ชนกันแบบ Promise.all: ตรวจแล้วแทรกต้องเกิดทีละรายการ)
+   */
+  let reservationQueue: Promise<unknown> = Promise.resolve();
   // ---- Ticket 03 memory state: บัญชีลูกค้า + เซสชัน + LINE (แยกจาก staff โดยสิ้นเชิง) ----
   const customers = new Map<string, Customer>();
   const customersByPhone = new Map<string, string>();
@@ -572,6 +708,82 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
     return { ...o, items: (orderItems.get(id) ?? []).map((i) => ({ ...i })) };
   }
 
+  // ---- Ticket 06 memory helpers: การจอง + รอบการใช้โต๊ะ ----
+
+  interface ReservationStateBackup extends ShopStateBackup {
+    reservations: Map<string, Reservation>;
+    byCode: Map<string, string>;
+    byIdemKey: Map<string, string>;
+    rounds: Map<string, TableRound>;
+    roundsByRes: Map<string, string>;
+    orders: Map<string, Order>;
+  }
+
+  /** backup รวม shop audit + การจอง/รอบ + orders (ปิดรอบแตะ orders ด้วย) */
+  function backupReservations(): ReservationStateBackup {
+    return {
+      ...backupShop(),
+      reservations: new Map([...reservations].map(([id, r]) => [id, { ...r }] as const)),
+      byCode: new Map(reservationsByCode),
+      byIdemKey: new Map(reservationsByIdemKey),
+      rounds: new Map([...tableRounds].map(([id, r]) => [id, { ...r }] as const)),
+      roundsByRes: new Map(roundsByReservation),
+      orders: new Map([...orders].map(([id, o]) => [id, { ...o }] as const)),
+    };
+  }
+
+  function restoreReservations(b: ReservationStateBackup): void {
+    restoreShop({ shopName: b.shopName, schedule: b.schedule, override: b.override, tables: b.tables, auditsLen: b.auditsLen, auditSeq: b.auditSeq });
+    reservations.clear();
+    for (const [id, r] of b.reservations) reservations.set(id, r);
+    reservationsByCode.clear();
+    for (const [k, v] of b.byCode) reservationsByCode.set(k, v);
+    reservationsByIdemKey.clear();
+    for (const [k, v] of b.byIdemKey) reservationsByIdemKey.set(k, v);
+    tableRounds.clear();
+    for (const [id, r] of b.rounds) tableRounds.set(id, r);
+    roundsByReservation.clear();
+    for (const [k, v] of b.roundsByRes) roundsByReservation.set(k, v);
+    orders.clear();
+    for (const [id, o] of b.orders) orders.set(id, o);
+  }
+
+  /** รัน mutation การจองทีละรายการ (serialize กัน concurrent ชนใน memory) */
+  function runReservationExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const run = reservationQueue.then(fn, fn);
+    // เก็บหางคิวต่อแม้ fn พัง (catch กลืนเฉพาะในหางคิว ไม่กลืนผลลัพธ์ให้ caller)
+    reservationQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  const ACTIVE_RESERVATION: Reservation["status"][] = ["pending", "confirmed"];
+
+  function tableNameOf(id: string): string {
+    return tables.get(id)?.name ?? "-";
+  }
+
+  function toReservationDetail(r: Reservation): ReservationDetail {
+    return { ...r, tableName: tableNameOf(r.tableId) };
+  }
+
+  function toRoundDetail(r: TableRound): TableRoundDetail {
+    return { ...r, tableName: tableNameOf(r.tableId) };
+  }
+
+  /** โต๊ะที่ถูกบล็อกในช่วงเวลานัด = มีการจอง active ทับซ้อน (หน้าต่าง 120 นาที) */
+  function blockedTablesAt(reservedAt: string, ignoreId?: string): Set<string> {
+    const blocked = new Set<string>();
+    for (const r of reservations.values()) {
+      if (r.id === ignoreId) continue;
+      if (!ACTIVE_RESERVATION.includes(r.status)) continue;
+      if (isReservationOverlapping(r.reservedAt, reservedAt)) blocked.add(r.tableId);
+    }
+    return blocked;
+  }
+
   // ---- Ticket 05 helpers (ใช้ร่วมกันใน memory seams ด้านล่าง) ----
   async function buildOrderSnapshot(
     lines: NormalizedOrderLine[],
@@ -607,6 +819,8 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
     scheduledAt: string | null;
     idempotencyKey: string;
     lines: NormalizedOrderLine[];
+    tableId: string | null;
+    roundId: string | null;
     hash: string;
   }> {
     const serviceType = normalizeServiceType(input.serviceType);
@@ -615,6 +829,8 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
       input.items.map((i) => ({ menuId: i.menuId, quantity: i.quantity, note: i.note ?? null })),
     );
     const scheduledAt = normalizeScheduledAt(serviceType, input.scheduledAt ?? null, now);
+    const tableId = normalizeOrderLinkage(input.tableId ?? null);
+    const roundId = normalizeOrderLinkage(input.roundId ?? null);
     let customerId: string | null = null;
     let guestName: string | null = null;
     let guestPhone: string | null = null;
@@ -639,8 +855,58 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
       scheduledAt,
       idempotencyKey,
       lines,
-      hash: orderPayloadHash({ customerId, guestName, guestPhone, serviceType, scheduledAt, items: lines }),
+      tableId,
+      roundId,
+      hash: orderHashWithLinkage({ customerId, guestName, guestPhone, serviceType, scheduledAt, items: lines }, tableId, roundId),
     };
+  }
+
+  /** idempotency hash ของคำสั่งซื้อรวม linkage โต๊ะ/รอบ (Ticket 06 ต่อยอดจาก orderPayloadHash) */
+  function orderHashWithLinkage(
+    payload: { customerId: string | null; guestName: string | null; guestPhone: string | null; serviceType: OrderServiceType; scheduledAt: string | null; items: NormalizedOrderLine[] },
+    tableId: string | null,
+    roundId: string | null,
+  ): string {
+    const base = orderPayloadHash(payload);
+    return createHash("sha256").update(`${base}|${tableId ?? ""}|${roundId ?? ""}`).digest("hex");
+  }
+
+  /** id โต๊ะ/รอบที่แนบมากับคำสั่งซื้อ: ว่างได้, มีค่าต้องเป็น string ไม่ว่าง */
+  function normalizeOrderLinkage(value: unknown): string | null {
+    if (value === undefined || value === null || value === "") return null;
+    if (typeof value !== "string" || value.trim().length === 0) {
+      throw new ConflictError("ข้อมูลโต๊ะ/รอบการใช้โต๊ะไม่ถูกต้อง");
+    }
+    return value.trim();
+  }
+
+  /**
+   * ตรวจ linkage โต๊ะ/รอบก่อนสร้างคำสั่งซื้อ (ใช้ร่วมกันใน memory seam):
+   * - ระบุ roundId ได้เฉพาะ dine_in; รอบต้องมีอยู่และเปิดอยู่; tableId (ถ้าระบุ)
+   *   ต้องตรงกับโต๊ะของรอบ; ไม่ระบุ tableId ให้ใช้โต๊ะของรอบ
+   * - ระบุ tableId อย่างเดียวโดยไม่มี roundId → 409 (ต้องเช็กอินเปิดรอบก่อน)
+   */
+  function resolveOrderRoundLinkage(
+    serviceType: OrderServiceType,
+    tableId: string | null,
+    roundId: string | null,
+  ): { tableId: string | null; roundId: string | null } {
+    if (roundId === null && tableId === null) return { tableId: null, roundId: null };
+    if (roundId === null) {
+      throw new ConflictError("กรุณาเช็กอินเพื่อเปิดรอบการใช้โต๊ะก่อนสั่งที่โต๊ะ");
+    }
+    if (serviceType !== "dine_in") {
+      throw new ConflictError("ผูกคำสั่งซื้อกับรอบโต๊ะได้เฉพาะแบบรับประทานที่ร้าน");
+    }
+    const round = tableRounds.get(roundId);
+    if (!round) throw new NotFoundError("ไม่พบรอบการใช้โต๊ะ");
+    if (round.status !== "open") {
+      throw new ConflictError("รอบการใช้โต๊ะนี้ปิดแล้ว ไม่รับคำสั่งซื้อใหม่");
+    }
+    if (tableId !== null && tableId !== round.tableId) {
+      throw new ConflictError("โต๊ะไม่ตรงกับรอบการใช้โต๊ะที่เปิดอยู่");
+    }
+    return { tableId: round.tableId, roundId: round.id };
   }
 
   async function writeAudit(input: AuditInput): Promise<void> {
@@ -796,6 +1062,8 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
         if (prefix === "customer_") return a.action.startsWith("customer_");
         if (prefix === "menu_") return a.action.startsWith("menu_");
         if (prefix === "order_") return a.action.startsWith("order_");
+        if (prefix === "reservation_") return a.action.startsWith("reservation_");
+        if (prefix === "round_") return a.action.startsWith("table_round_");
         return !a.action.startsWith("login_");
       });
       return items.slice(0, limit);
@@ -1444,19 +1712,26 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
       const backup = backupOrders();
       try {
         const n = await normalizeCreateOrderInput(input, now);
+        // ผูกโต๊ะ/รอบ (Ticket 06): รอบต้องเปิดอยู่ โต๊ะต้องตรงรอบ
+        const linkage = resolveOrderRoundLinkage(n.serviceType, n.tableId, n.roundId);
+        const hash = orderHashWithLinkage(
+          { customerId: n.customerId, guestName: n.guestName, guestPhone: n.guestPhone, serviceType: n.serviceType, scheduledAt: n.scheduledAt, items: n.lines },
+          linkage.tableId,
+          linkage.roundId,
+        );
         // idempotency: key เดิม → คืนของเดิม (payload เดิม) หรือ 409 (payload ต่างกัน)
         const existingId = ordersByIdemKey.get(n.idempotencyKey);
         if (existingId) {
           const existing = toDetail(existingId)!;
-          const existingHash = orderPayloadHash({
+          const existingHash = orderHashWithLinkage({
             customerId: existing.customerId,
             guestName: existing.guestName,
             guestPhone: existing.guestPhone,
             serviceType: existing.serviceType,
             scheduledAt: existing.scheduledAt,
             items: existing.items.map((i) => ({ menuId: i.menuId, quantity: i.quantity, note: i.note })),
-          });
-          if (existingHash !== n.hash) {
+          }, existing.tableId, existing.roundId);
+          if (existingHash !== hash) {
             throw new ConflictError("คำขอนี้ถูกใช้ยืนยันไปแล้ว กรุณาสร้างตะกร้าใหม่");
           }
           return { order: existing, deduplicated: true };
@@ -1484,6 +1759,8 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
           subtotal,
           total: subtotal,
           scheduledAt: n.scheduledAt,
+          tableId: linkage.tableId,
+          roundId: linkage.roundId,
           idempotencyKey: n.idempotencyKey,
           createdAt: at,
           updatedAt: at,
@@ -1565,6 +1842,333 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
         throw err;
       }
     },
+    // ---- Ticket 06 memory: การจอง + รอบการใช้โต๊ะ (all-or-nothing + serialize กันชน) ----
+    async createReservation(input, actor, now = new Date()) {
+      return runReservationExclusive(async () => {
+        const backup = backupReservations();
+        try {
+          const customer = customers.get(input.customerId);
+          if (!customer || customer.isDeleted || !customer.isActive) {
+            throw new ConflictError("บัญชีลูกค้าใช้งานไม่ได้ กรุณาเข้าสู่ระบบใหม่");
+          }
+          const partySize = normalizePartySize(input.partySize);
+          const reservedAt = normalizeReservedAt(input.reservedAt, now);
+          const note = normalizeReservationNote(input.note ?? null);
+          const idempotencyKey = normalizeReservationIdempotencyKey(input.idempotencyKey ?? null);
+          const hash = reservationPayloadHash({ customerId: customer.id, tableId: input.tableId?.trim() ?? "", partySize, reservedAt, note });
+          // idempotency: key เดิม → คืนของเดิม / ขัดแย้ง
+          if (idempotencyKey) {
+            const existingId = reservationsByIdemKey.get(idempotencyKey);
+            if (existingId) {
+              const ex = reservations.get(existingId)!;
+              const exHash = reservationPayloadHash({ customerId: ex.customerId, tableId: ex.tableId, partySize: ex.partySize, reservedAt: ex.reservedAt, note: ex.note });
+              if (exHash !== hash) throw new ConflictError("คำขอนี้ถูกใช้จองไปแล้ว กรุณาสร้างการจองใหม่");
+              return { reservation: toReservationDetail(ex), deduplicated: true };
+            }
+          }
+          // เลือกโต๊ะ: ระบุเองหรือแนะนำอัตโนมัติ
+          const blocked = blockedTablesAt(reservedAt);
+          let table: ShopTable | null = null;
+          if (input.tableId?.trim()) {
+            const t = tables.get(input.tableId.trim());
+            if (!t) throw new NotFoundError("ไม่พบโต๊ะที่เลือก");
+            if (!t.isEnabled) throw new ConflictError(`โต๊ะ ${t.name} งดใช้งานชั่วคราว กรุณาเลือกโต๊ะอื่น`);
+            if (t.capacity < partySize) {
+              throw new ConflictError(`โต๊ะ ${t.name} รองรับได้ ${t.capacity} คน ไม่พอสำหรับ ${partySize} คน`);
+            }
+            if (blocked.has(t.id)) {
+              throw new ConflictError(`โต๊ะ ${t.name} ไม่ว่างในช่วงเวลานี้แล้ว กรุณาเลือกเวลาหรือโต๊ะอื่น`);
+            }
+            table = { ...t };
+          } else {
+            table = recommendTable([...tables.values()], partySize, blocked);
+            if (!table) throw new ConflictError("ไม่มีโต๊ะว่างที่รองรับจำนวนคนในช่วงเวลานี้ กรุณาเปลี่ยนเวลาหรือจำนวนคน");
+          }
+          let code = generateReservationCode(now);
+          for (let i = 0; i < 5 && reservationsByCode.has(code); i += 1) {
+            code = generateReservationCode(now);
+          }
+          if (reservationsByCode.has(code)) {
+            throw new ConflictError("สร้างรหัสการจองไม่สำเร็จ กรุณาลองใหม่อีกครั้ง");
+          }
+          const at = now.toISOString();
+          const r: Reservation = {
+            id: randomUUID(),
+            code,
+            customerId: customer.id,
+            tableId: table.id,
+            partySize,
+            reservedAt,
+            status: "pending",
+            note,
+            idempotencyKey,
+            createdAt: at,
+            updatedAt: at,
+          };
+          reservations.set(r.id, { ...r });
+          reservationsByCode.set(code, r.id);
+          if (idempotencyKey) reservationsByIdemKey.set(idempotencyKey, r.id);
+          const detail = toReservationDetail(r);
+          await writeAudit(reservationCreatedEvent(detail, actor));
+          return { reservation: detail, deduplicated: false };
+        } catch (err) {
+          restoreReservations(backup);
+          throw err;
+        }
+      });
+    },
+    async getReservation(id) {
+      const r = reservations.get(id);
+      return r ? toReservationDetail(r) : null;
+    },
+    async getReservationByCode(code) {
+      const id = reservationsByCode.get(code.trim().toUpperCase());
+      if (!id) return null;
+      const r = reservations.get(id);
+      return r ? toReservationDetail(r) : null;
+    },
+    async listCustomerReservations(customerId, limit = 50) {
+      const n = Math.min(Math.max(limit, 1), 200);
+      return [...reservations.values()]
+        .filter((r) => r.customerId === customerId)
+        .sort((a, b) => a.reservedAt.localeCompare(b.reservedAt))
+        .slice(0, n)
+        .map(toReservationDetail);
+    },
+    async listReservations(filter) {
+      const needle = (filter.q ?? "").trim().toUpperCase();
+      const limit = Math.min(Math.max(filter.limit || 50, 1), 200);
+      return [...reservations.values()]
+        .filter((r) => (filter.status ? r.status === filter.status : true))
+        .filter((r) => {
+          if (!needle) return true;
+          if (r.code.toUpperCase().includes(needle)) return true;
+          const c = customers.get(r.customerId);
+          if (c && !c.isDeleted) {
+            if (c.name.toUpperCase().includes(needle)) return true;
+            if ((c.phone ?? "").includes(needle)) return true;
+          }
+          return tableNameOf(r.tableId).toUpperCase().includes(needle);
+        })
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, limit)
+        .map(toReservationDetail);
+    },
+    async listReservationsByPhone(phone, limit = 20) {
+      const n = Math.min(Math.max(limit, 1), 100);
+      const ids = new Set<string>();
+      for (const c of customers.values()) {
+        if (!c.isDeleted && c.phone === phone) ids.add(c.id);
+      }
+      return [...reservations.values()]
+        .filter((r) => ids.has(r.customerId) && ACTIVE_RESERVATION.includes(r.status))
+        .sort((a, b) => a.reservedAt.localeCompare(b.reservedAt))
+        .slice(0, n)
+        .map(toReservationDetail);
+    },
+    async recommendReservationTable(partySize, reservedAt) {
+      const n = normalizePartySize(partySize);
+      const d = new Date(reservedAt);
+      if (Number.isNaN(d.getTime())) throw new Error("รูปแบบวันเวลานัดไม่ถูกต้อง");
+      const iso = d.toISOString();
+      const blocked = blockedTablesAt(iso);
+      const found = recommendTable([...tables.values()], n, blocked);
+      return found ? { ...found } : null;
+    },
+    async cancelReservation(id, patch, actor, now = new Date()) {
+      return runReservationExclusive(async () => {
+        const backup = backupReservations();
+        try {
+          const r = reservations.get(id);
+          if (!r) throw new NotFoundError("ไม่พบการจอง");
+          const reason = normalizeReservationReason(patch.reason);
+          assertReservationStatusTransition(r.status, "cancelled", "customer");
+          assertCancellable(r.reservedAt, now);
+          const before = r.status;
+          r.status = "cancelled";
+          r.updatedAt = now.toISOString();
+          const detail = toReservationDetail(r);
+          await writeAudit(reservationCancelledEvent(detail, before, reason, actor));
+          return detail;
+        } catch (err) {
+          restoreReservations(backup);
+          throw err;
+        }
+      });
+    },
+    async updateReservationStatus(id, patch, actor) {
+      return runReservationExclusive(async () => {
+        const backup = backupReservations();
+        try {
+          const r = reservations.get(id);
+          if (!r) throw new NotFoundError("ไม่พบการจอง");
+          const reason = normalizeReservationReason(patch.reason);
+          const to = normalizeReservationStatus(patch.status);
+          if (to === "seated" || to === "completed" || to === "pending") {
+            throw new ConflictError(`เปลี่ยนสถานะการจองเป็น ${to} ผ่านช่องทางนี้ไม่ได้`);
+          }
+          assertReservationStatusTransition(r.status, to, "manager");
+          const before = r.status;
+          r.status = to;
+          r.updatedAt = new Date().toISOString();
+          const detail = toReservationDetail(r);
+          if (to === "cancelled") {
+            await writeAudit(reservationCancelledEvent(detail, before, reason, actor));
+          } else {
+            await writeAudit(reservationStatusChangedEvent(before, detail, reason, actor));
+          }
+          return detail;
+        } catch (err) {
+          restoreReservations(backup);
+          throw err;
+        }
+      });
+    },
+    async checkinReservation(input, actor, now = new Date()) {
+      return runReservationExclusive(async () => {
+        const backup = backupReservations();
+        try {
+          // ค้นหาการจอง: id ตรง > code ตรง > phone (ต้องเหลือ active เดียว)
+          let r: Reservation | null = null;
+          if (input.reservationId?.trim()) {
+            r = reservations.get(input.reservationId.trim()) ?? null;
+          } else if (input.code?.trim()) {
+            const id = reservationsByCode.get(input.code.trim().toUpperCase());
+            r = id ? (reservations.get(id) ?? null) : null;
+          } else if (input.phone?.trim()) {
+            const ids = new Set<string>();
+            for (const c of customers.values()) {
+              if (!c.isDeleted && c.phone === input.phone.trim()) ids.add(c.id);
+            }
+            const candidates = [...reservations.values()]
+              .filter((x) => ids.has(x.customerId) && ACTIVE_RESERVATION.includes(x.status))
+              .sort((a, b) => a.reservedAt.localeCompare(b.reservedAt));
+            if (candidates.length === 0) throw new NotFoundError("ไม่พบการจองที่พร้อมเช็กอินสำหรับเบอร์นี้");
+            if (candidates.length > 1) {
+              throw new ConflictError("พบหลายการจองสำหรับเบอร์นี้ กรุณาระบุรหัสการจอง");
+            }
+            r = candidates[0]!;
+          } else {
+            throw new Error("กรุณาระบุรหัสการจองหรือเบอร์โทร");
+          }
+          if (!r) throw new NotFoundError("ไม่พบการจอง");
+          if (r.status !== "pending" && r.status !== "confirmed") {
+            throw new ConflictError("การจองนี้เช็กอินไม่ได้แล้ว (ยกเลิก/เช็กอิน/จบงานไปแล้ว)");
+          }
+          if (roundsByReservation.has(r.id)) {
+            throw new ConflictError("การจองนี้เปิดรอบการใช้โต๊ะไปแล้ว");
+          }
+          const actual = normalizePartySize(input.partySize);
+          // เลือกโต๊ะ: ตามที่ระบุใหม่ หรือตามจอง (ต้องจุจำนวนจริงพอ)
+          let tableId = r.tableId;
+          if (input.tableId?.trim()) {
+            tableId = input.tableId.trim();
+          }
+          let table = tables.get(tableId) ?? null;
+          if (!table) throw new NotFoundError("ไม่พบโต๊ะที่เลือก");
+          if (!table.isEnabled) throw new ConflictError(`โต๊ะ ${table.name} งดใช้งานชั่วคราว`);
+          if (table.capacity < actual) {
+            // โต๊ะตามจองจุไม่พอ — ลองหาโต๊ะอื่นที่ว่างและจุพอ (รอจัดโต๊ะ)
+            const blocked = blockedTablesAt(r.reservedAt, r.id);
+            const alt = input.tableId?.trim()
+              ? null
+              : recommendTable([...tables.values()].filter((t) => t.id !== table!.id), actual, blocked);
+            if (alt && ![...tableRounds.values()].some((x) => x.tableId === alt.id && x.status === "open")) {
+              table = alt;
+              tableId = alt.id;
+            } else {
+              throw new ConflictError(
+                `โต๊ะ ${table.name} รองรับได้ ${table.capacity} คน ไม่พอสำหรับ ${actual} คน และยังไม่มีโต๊ะอื่นที่เหมาะสม — อยู่ในรายการรอจัดโต๊ะ กรุณารอสักครู่`,
+              );
+            }
+          }
+          // โต๊ะต้องไม่มีรอบเปิดค้าง
+          for (const x of tableRounds.values()) {
+            if (x.tableId === tableId && x.status === "open") {
+              throw new ConflictError(`โต๊ะ ${table.name} มีลูกค้าใช้อยู่ กรุณารอสักครู่ (รอจัดโต๊ะ)`);
+            }
+          }
+          const at = now.toISOString();
+          const round: TableRound = {
+            id: randomUUID(),
+            reservationId: r.id,
+            tableId,
+            partySize: actual,
+            status: "open",
+            openedBy: actor.actorUsername ?? actor.actorId ?? null,
+            closedBy: null,
+            openedAt: at,
+            closedAt: null,
+          };
+          tableRounds.set(round.id, { ...round });
+          roundsByReservation.set(r.id, round.id);
+          r.status = "seated";
+          if (tableId !== r.tableId) r.tableId = tableId;
+          r.updatedAt = at;
+          const rDetail = toReservationDetail(r);
+          const roundDetail = toRoundDetail(round);
+          const customer = customers.get(r.customerId);
+          await writeAudit(tableRoundOpenedEvent(roundDetail, actor));
+          await writeAudit(
+            reservationCheckedInEvent(rDetail, roundDetail, actual, actor, customer?.phone ?? null),
+          );
+          return { reservation: rDetail, round: roundDetail };
+        } catch (err) {
+          restoreReservations(backup);
+          throw err;
+        }
+      });
+    },
+    async listTableRounds(filter) {
+      const limit = Math.min(Math.max(filter.limit || 50, 1), 200);
+      return [...tableRounds.values()]
+        .filter((r) => (filter.status ? r.status === filter.status : true))
+        .filter((r) => (filter.tableId ? r.tableId === filter.tableId : true))
+        .sort((a, b) => b.openedAt.localeCompare(a.openedAt))
+        .slice(0, limit)
+        .map(toRoundDetail);
+    },
+    async getTableRound(id) {
+      const r = tableRounds.get(id);
+      return r ? toRoundDetail(r) : null;
+    },
+    async closeTableRound(id, actor, now = new Date()) {
+      return runReservationExclusive(async () => {
+        const backup = backupReservations();
+        try {
+          const round = tableRounds.get(id);
+          if (!round) throw new NotFoundError("ไม่พบรอบการใช้โต๊ะ");
+          if (round.status !== "open") throw new ConflictError("รอบการใช้โต๊ะนี้ปิดไปแล้ว");
+          const pending = [...orders.values()].filter(
+            (o) => o.roundId === id && o.status === "pending_payment",
+          );
+          if (pending.length > 0) {
+            throw new ConflictError(
+              `ยังมีคำสั่งซื้อรอชำระ ${pending.length} รายการในรอบนี้ กรุณาปิดงานคำสั่งซื้อก่อนปิดรอบโต๊ะ`,
+            );
+          }
+          round.status = "closed";
+          round.closedBy = actor.actorUsername ?? actor.actorId ?? null;
+          round.closedAt = now.toISOString();
+          let reservation: ReservationDetail | null = null;
+          if (round.reservationId) {
+            const r = reservations.get(round.reservationId);
+            if (r && r.status === "seated") {
+              r.status = "completed";
+              r.updatedAt = round.closedAt;
+              reservation = toReservationDetail(r);
+            }
+          }
+          const detail = toRoundDetail(round);
+          await writeAudit(tableRoundClosedEvent(detail, actor));
+          void reservation;
+          return detail;
+        } catch (err) {
+          restoreReservations(backup);
+          throw err;
+        }
+      });
+    },
   };
 
   return memoryStore;
@@ -1578,6 +2182,7 @@ const MIGRATION_FILES = [
   "004_customer_accounts.sql",
   "005_menu_catalog.sql",
   "006_orders.sql",
+  "007_reservations.sql",
 ];
 
 export function findMigrationFile(name = MIGRATION_FILES[0]!): string {
@@ -1639,6 +2244,8 @@ function rowToOrder(r: Record<string, unknown>): Order {
     total,
     scheduledAt:
       r["scheduled_at"] == null ? null : new Date(r["scheduled_at"] as string).toISOString(),
+    tableId: r["table_id"] == null ? null : String(r["table_id"]),
+    roundId: r["round_id"] == null ? null : String(r["round_id"]),
     idempotencyKey: String(r["idempotency_key"]),
     createdAt: new Date(r["created_at"] as string).toISOString(),
     updatedAt: new Date(r["updated_at"] as string).toISOString(),
@@ -1682,6 +2289,8 @@ function normalizeOrderShape(
   idempotencyKey: string;
   lines: NormalizedOrderLine[];
   scheduledAt: string | null;
+  tableId: string | null;
+  roundId: string | null;
 } {
   const serviceType = normalizeServiceType(input.serviceType);
   return {
@@ -1691,7 +2300,28 @@ function normalizeOrderShape(
       input.items.map((i) => ({ menuId: i.menuId, quantity: i.quantity, note: i.note ?? null })),
     ),
     scheduledAt: normalizeScheduledAt(serviceType, input.scheduledAt ?? null, now),
+    tableId: normalizeMysqlLinkage(input.tableId),
+    roundId: normalizeMysqlLinkage(input.roundId),
   };
+}
+
+/** id โต๊ะ/รอบที่แนบมากับคำสั่งซื้อฝั่ง MySQL: ว่างได้, มีค่าต้องเป็น string ไม่ว่าง */
+function normalizeMysqlLinkage(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new ConflictError("ข้อมูลโต๊ะ/รอบการใช้โต๊ะไม่ถูกต้อง");
+  }
+  return value.trim();
+}
+
+/** idempotency hash รวม linkage (สคีมาเดียวกับ memory seam) */
+function orderHashWithLinkageMysql(
+  payload: { customerId: string | null; guestName: string | null; guestPhone: string | null; serviceType: OrderServiceType; scheduledAt: string | null; items: NormalizedOrderLine[] },
+  tableId: string | null,
+  roundId: string | null,
+): string {
+  const base = orderPayloadHash(payload);
+  return createHash("sha256").update(`${base}|${tableId ?? ""}|${roundId ?? ""}`).digest("hex");
 }
 
 /** จำแนก unique key ที่ชนจากข้อความ MySQL (uq_orders_idempotency / uq_orders_number) */
@@ -1699,6 +2329,58 @@ function dupOrderKeyName(err: unknown): string {
   const msg = err && typeof err === "object" && "message" in err && typeof err.message === "string" ? err.message : "";
   if (msg.includes("uq_orders_idempotency")) return "idempotency";
   if (msg.includes("uq_orders_number")) return "number";
+  return "";
+}
+
+// ---------- Ticket 06: mappers ระดับ module (ใช้ทั้ง seams ใน createMysqlStore) ----------
+
+const RESERVATION_ACTIVE_STATUSES = ["pending", "confirmed"];
+
+function rowToReservation(r: Record<string, unknown>): Reservation {
+  const status = String(r["status"]);
+  if (!RESERVATION_STATUSES.includes(status as ReservationStatus)) {
+    throw new Error("สถานะการจองในฐานข้อมูลไม่ถูกต้อง");
+  }
+  const partySize = Number(r["party_size"]);
+  if (!Number.isInteger(partySize)) throw new Error("จำนวนผู้ใช้บริการในฐานข้อมูลไม่ถูกต้อง");
+  return {
+    id: String(r["id"]),
+    code: String(r["code"]),
+    customerId: String(r["customer_id"]),
+    tableId: String(r["table_id"]),
+    partySize,
+    reservedAt: new Date(r["reserved_at"] as string).toISOString(),
+    status: status as ReservationStatus,
+    note: r["note"] == null ? null : String(r["note"]),
+    idempotencyKey: r["idempotency_key"] == null ? null : String(r["idempotency_key"]),
+    createdAt: new Date(r["created_at"] as string).toISOString(),
+    updatedAt: new Date(r["updated_at"] as string).toISOString(),
+  };
+}
+
+function rowToTableRound(r: Record<string, unknown>): TableRound {
+  const status = String(r["status"]);
+  if (status !== "open" && status !== "closed") throw new Error("สถานะรอบโต๊ะในฐานข้อมูลไม่ถูกต้อง");
+  const partySize = Number(r["party_size"]);
+  if (!Number.isInteger(partySize)) throw new Error("จำนวนผู้ใช้บริการในฐานข้อมูลไม่ถูกต้อง");
+  return {
+    id: String(r["id"]),
+    reservationId: r["reservation_id"] == null ? null : String(r["reservation_id"]),
+    tableId: String(r["table_id"]),
+    partySize,
+    status,
+    openedBy: r["opened_by"] == null ? null : String(r["opened_by"]),
+    closedBy: r["closed_by"] == null ? null : String(r["closed_by"]),
+    openedAt: new Date(r["opened_at"] as string).toISOString(),
+    closedAt: r["closed_at"] == null ? null : new Date(r["closed_at"] as string).toISOString(),
+  };
+}
+
+/** จำแนก unique key การจองที่ชน (รหัสจอง / idempotency) */
+function dupReservationKeyName(err: unknown): string {
+  const msg = err && typeof err === "object" && "message" in err && typeof err.message === "string" ? err.message : "";
+  if (msg.includes("uq_reservations_idempotency")) return "idempotency";
+  if (msg.includes("uq_reservations_code")) return "code";
   return "";
 }
 
@@ -1895,6 +2577,64 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
     } finally {
       conn.release();
     }
+  }
+
+  /**
+   * transaction สำหรับเขียนการจอง/เช็กอิน/รอบ (Ticket 06):
+   * กัน concurrent ชนกันข้าม process ด้วย named lock ระดับ MySQL
+   * (`paor_reservation_write`) ครอบ transaction เดียว — สำเร็จ commit ทั้ง
+   * state+audit, พัง rollback ทั้งหมด แล้ว release lock/connection เสมอ
+   */
+  async function withReservationTx<T>(fn: (conn: PoolConnection) => Promise<T>): Promise<T> {
+    const conn = await pool.getConnection();
+    try {
+      const [lockRows] = await conn.query("SELECT GET_LOCK('paor_reservation_write', 10) AS l");
+      const locked = Number((lockRows as Record<string, unknown>[])[0]!["l"]);
+      if (locked !== 1) throw new Error("ขอ lock สำหรับเขียนการจองไม่สำเร็จ");
+      try {
+        await conn.beginTransaction();
+        try {
+          const out = await fn(conn);
+          await conn.commit();
+          return out;
+        } catch (err) {
+          try {
+            await conn.rollback();
+          } catch {
+            // เก็บ error ต้นฉบับไว้
+          }
+          throw err;
+        }
+      } finally {
+        try {
+          await conn.query("SELECT RELEASE_LOCK('paor_reservation_write')");
+        } catch {
+          // เก็บ error ต้นฉบับไว้
+        }
+      }
+    } finally {
+      conn.release();
+    }
+  }
+
+  async function readReservationDetail(q: QueryRunner, id: string): Promise<ReservationDetail | null> {
+    const [rows] = (await q.query(
+      "SELECT r.*, t.name AS table_name FROM reservations r LEFT JOIN shop_tables t ON t.id = r.table_id WHERE r.id = ? LIMIT 1",
+      [id],
+    )) as [Record<string, unknown>[], unknown];
+    if (rows.length === 0) return null;
+    const r = rowToReservation(rows[0]!);
+    return { ...r, tableName: rows[0]!["table_name"] ? String(rows[0]!["table_name"]) : "-" };
+  }
+
+  async function readRoundDetail(q: QueryRunner, id: string): Promise<TableRoundDetail | null> {
+    const [rows] = (await q.query(
+      "SELECT r.*, t.name AS table_name FROM table_rounds r LEFT JOIN shop_tables t ON t.id = r.table_id WHERE r.id = ? LIMIT 1",
+      [id],
+    )) as [Record<string, unknown>[], unknown];
+    if (rows.length === 0) return null;
+    const r = rowToTableRound(rows[0]!);
+    return { ...r, tableName: rows[0]!["table_name"] ? String(rows[0]!["table_name"]) : "-" };
   }
 
   async function insertAuditRow(q: QueryRunner, input: AuditInput): Promise<void> {
@@ -2165,6 +2905,10 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
         sql += " WHERE action LIKE 'menu\\_%'";
       } else if (prefix === "order_") {
         sql += " WHERE action LIKE 'order\\_%'";
+      } else if (prefix === "reservation_") {
+        sql += " WHERE action LIKE 'reservation\\_%'";
+      } else if (prefix === "round_") {
+        sql += " WHERE action LIKE 'table\\_round\\_%'";
       } else if (prefix === "account_") {
         sql += " WHERE action NOT LIKE 'login\\_%'";
       }
@@ -2874,20 +3618,56 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
           guestPhone = normalizeThaiPhone(input.guestPhone ?? "");
           assertNormalizedPhone(guestPhone);
         }
-        const hash = orderPayloadHash({
+        // ผูกโต๊ะ/รอบ (Ticket 06): รอบต้องเปิดอยู่ โต๊ะต้องตรงรอบ (ตรวจใน tx เดียวกัน)
+        let linkTableId: string | null = null;
+        let linkRoundId: string | null = null;
+        if (shape.roundId !== null || shape.tableId !== null) {
+          if (shape.roundId === null) {
+            throw new ConflictError("กรุณาเช็กอินเพื่อเปิดรอบการใช้โต๊ะก่อนสั่งที่โต๊ะ");
+          }
+          if (shape.serviceType !== "dine_in") {
+            throw new ConflictError("ผูกคำสั่งซื้อกับรอบโต๊ะได้เฉพาะแบบรับประทานที่ร้าน");
+          }
+          const [roundRows] = (await conn.query("SELECT * FROM table_rounds WHERE id = ? LIMIT 1", [shape.roundId])) as [
+            Record<string, unknown>[],
+            unknown,
+          ];
+          if (roundRows.length === 0) throw new NotFoundError("ไม่พบรอบการใช้โต๊ะ");
+          const roundRow = roundRows[0]!;
+          if (String(roundRow["status"]) !== "open") {
+            throw new ConflictError("รอบการใช้โต๊ะนี้ปิดแล้ว ไม่รับคำสั่งซื้อใหม่");
+          }
+          const roundTableId = String(roundRow["table_id"]);
+          if (shape.tableId !== null && shape.tableId !== roundTableId) {
+            throw new ConflictError("โต๊ะไม่ตรงกับรอบการใช้โต๊ะที่เปิดอยู่");
+          }
+          linkTableId = roundTableId;
+          linkRoundId = String(roundRow["id"]);
+        }
+        const hash = orderHashWithLinkageMysql({
           customerId,
           guestName,
           guestPhone,
           serviceType: shape.serviceType,
           scheduledAt: shape.scheduledAt,
           items: shape.lines,
-        });
+        }, linkTableId, linkRoundId);
         // idempotency fast-path: key เดิม → คืนของเดิม (payload เดิม) หรือ 409 (payload ต่างกัน)
         const [idemRows] = (await conn.query("SELECT id, payload_hash FROM orders WHERE idempotency_key = ? LIMIT 1", [
           shape.idempotencyKey,
         ])) as [Record<string, unknown>[], unknown];
         if (idemRows.length > 0) {
-          if (String(idemRows[0]!["payload_hash"]) !== hash) {
+          const storedHash = String(idemRows[0]!["payload_hash"]);
+          // ยอมรับ hash สคีมาเดิม (ก่อน Ticket 06 ไม่มี linkage) ด้วย กัน replay ของ key เก่าเพี้ยนเป็น 409
+          const legacyHash = orderPayloadHash({
+            customerId,
+            guestName,
+            guestPhone,
+            serviceType: shape.serviceType,
+            scheduledAt: shape.scheduledAt,
+            items: shape.lines,
+          });
+          if (storedHash !== hash && storedHash !== legacyHash) {
             throw new ConflictError("คำขอนี้ถูกใช้ยืนยันไปแล้ว กรุณาสร้างตะกร้าใหม่");
           }
           const detail = await readOrderDetailTx(conn, String(idemRows[0]!["id"]));
@@ -2917,7 +3697,7 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
           const id = randomUUID();
           try {
             await conn.query(
-              "INSERT INTO orders (id, order_number, customer_id, guest_name, guest_phone, channel, service_type, status, subtotal, total, scheduled_at, idempotency_key, payload_hash) VALUES (?, ?, ?, ?, ?, 'web', ?, 'pending_payment', ?, ?, ?, ?, ?)",
+              "INSERT INTO orders (id, order_number, customer_id, guest_name, guest_phone, channel, service_type, status, subtotal, total, scheduled_at, table_id, round_id, idempotency_key, payload_hash) VALUES (?, ?, ?, ?, ?, 'web', ?, 'pending_payment', ?, ?, ?, ?, ?, ?, ?)",
               [
                 id,
                 orderNumber,
@@ -2928,6 +3708,8 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
                 subtotal,
                 subtotal,
                 shape.scheduledAt ? toMysqlDatetime(shape.scheduledAt) : null,
+                linkTableId,
+                linkRoundId,
                 shape.idempotencyKey,
                 hash,
               ],
@@ -3046,6 +3828,413 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
         const after = await readOrderDetailTx(conn, id);
         if (!after) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
         await insertAuditRow(conn, orderStatusChangedEvent(before, after, reason, actor));
+        return after;
+      });
+    },
+    // ---- Ticket 06 MySQL: การจอง + รอบการใช้โต๊ะ (transaction เดียวกับ audit เสมอ) ----
+    async createReservation(input: CreateReservationInput, actor: ShopActor, now: Date = new Date()) {
+      return withReservationTx(async (conn) => {
+        const customer = await findCustomerRow(conn, input.customerId);
+        if (!customer || customer.isDeleted || !customer.isActive) {
+          throw new ConflictError("บัญชีลูกค้าใช้งานไม่ได้ กรุณาเข้าสู่ระบบใหม่");
+        }
+        const partySize = normalizePartySize(input.partySize);
+        const reservedAt = normalizeReservedAt(input.reservedAt, now);
+        const note = normalizeReservationNote(input.note ?? null);
+        const idempotencyKey = normalizeReservationIdempotencyKey(input.idempotencyKey ?? null);
+        const requestedTable = input.tableId?.trim() ? input.tableId.trim() : null;
+        const hash = reservationPayloadHash({ customerId: customer.id, tableId: requestedTable ?? "", partySize, reservedAt, note });
+        if (idempotencyKey) {
+          const [idemRows] = (await conn.query("SELECT id, payload_hash FROM reservations WHERE idempotency_key = ? LIMIT 1", [idempotencyKey])) as [
+            Record<string, unknown>[],
+            unknown,
+          ];
+          if (idemRows.length > 0) {
+            if (String(idemRows[0]!["payload_hash"]) !== hash) {
+              throw new ConflictError("คำขอนี้ถูกใช้จองไปแล้ว กรุณาสร้างการจองใหม่");
+            }
+            const detail = await readReservationDetail(conn, String(idemRows[0]!["id"]));
+            if (!detail) throw new Error("อ่านการจองเดิมไม่สำเร็จ");
+            return { reservation: detail, deduplicated: true };
+          }
+        }
+        const [tableRows] = (await conn.query("SELECT * FROM shop_tables ORDER BY name ASC")) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const tablesList = tableRows.map(rowToTable);
+        const [activeRows] = (await conn.query(
+          "SELECT id, table_id, reserved_at FROM reservations WHERE status IN ('pending','confirmed')",
+        )) as [Record<string, unknown>[], unknown];
+        const blocked = new Set<string>();
+        for (const r of activeRows as Record<string, unknown>[]) {
+          const at = new Date(r["reserved_at"] as string).toISOString();
+          if (isReservationOverlapping(at, reservedAt)) blocked.add(String(r["table_id"]));
+        }
+        let tableId: string;
+        if (requestedTable) {
+          const t = tablesList.find((x) => x.id === requestedTable);
+          if (!t) throw new NotFoundError("ไม่พบโต๊ะที่เลือก");
+          if (!t.isEnabled) throw new ConflictError(`โต๊ะ ${t.name} งดใช้งานชั่วคราว กรุณาเลือกโต๊ะอื่น`);
+          if (t.capacity < partySize) {
+            throw new ConflictError(`โต๊ะ ${t.name} รองรับได้ ${t.capacity} คน ไม่พอสำหรับ ${partySize} คน`);
+          }
+          if (blocked.has(t.id)) {
+            throw new ConflictError(`โต๊ะ ${t.name} ไม่ว่างในช่วงเวลานี้แล้ว กรุณาเลือกเวลาหรือโต๊ะอื่น`);
+          }
+          tableId = t.id;
+        } else {
+          const found = recommendTable(tablesList, partySize, blocked);
+          if (!found) throw new ConflictError("ไม่มีโต๊ะว่างที่รองรับจำนวนคนในช่วงเวลานี้ กรุณาเปลี่ยนเวลาหรือจำนวนคน");
+          tableId = found.id;
+        }
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          const code = generateReservationCode(now);
+          const id = randomUUID();
+          try {
+            await conn.query(
+              "INSERT INTO reservations (id, code, customer_id, table_id, party_size, reserved_at, status, note, idempotency_key, payload_hash) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
+              [id, code, customer.id, tableId, partySize, toMysqlDatetime(reservedAt), note, idempotencyKey, hash],
+            );
+          } catch (err: unknown) {
+            if (err && typeof err === "object" && "code" in err && (err as { code: string }).code === "ER_DUP_ENTRY") {
+              const which = dupReservationKeyName(err);
+              if (which === "code") continue;
+              const [reread] = (await conn.query("SELECT id, payload_hash FROM reservations WHERE idempotency_key = ? LIMIT 1", [idempotencyKey])) as [
+                Record<string, unknown>[],
+                unknown,
+              ];
+              if (reread.length === 0) continue;
+              if (String(reread[0]!["payload_hash"]) !== hash) {
+                throw new ConflictError("คำขอนี้ถูกใช้จองไปแล้ว กรุณาสร้างการจองใหม่");
+              }
+              const detail = await readReservationDetail(conn, String(reread[0]!["id"]));
+              if (!detail) throw new Error("อ่านการจองเดิมไม่สำเร็จ");
+              return { reservation: detail, deduplicated: true };
+            }
+            throw err;
+          }
+          const detail = await readReservationDetail(conn, id);
+          if (!detail) throw new Error("สร้างการจองไม่สำเร็จ");
+          await insertAuditRow(conn, reservationCreatedEvent(detail, actor));
+          return { reservation: detail, deduplicated: false };
+        }
+        throw new ConflictError("สร้างรหัสการจองไม่สำเร็จ กรุณาลองใหม่อีกครั้ง");
+      });
+    },
+    async getReservation(id: string) {
+      const [rows] = (await pool.query(
+        "SELECT r.*, t.name AS table_name FROM reservations r LEFT JOIN shop_tables t ON t.id = r.table_id WHERE r.id = ? LIMIT 1",
+        [id],
+      )) as [Record<string, unknown>[], unknown];
+      if (rows.length === 0) return null;
+      const r = rowToReservation(rows[0]!);
+      return { ...r, tableName: rows[0]!["table_name"] ? String(rows[0]!["table_name"]) : "-" };
+    },
+    async getReservationByCode(code: string) {
+      const [rows] = (await pool.query(
+        "SELECT r.*, t.name AS table_name FROM reservations r LEFT JOIN shop_tables t ON t.id = r.table_id WHERE r.code = ? LIMIT 1",
+        [code.trim().toUpperCase()],
+      )) as [Record<string, unknown>[], unknown];
+      if (rows.length === 0) return null;
+      const r = rowToReservation(rows[0]!);
+      return { ...r, tableName: rows[0]!["table_name"] ? String(rows[0]!["table_name"]) : "-" };
+    },
+    async listCustomerReservations(customerId: string, limit = 50) {
+      const n = Math.min(Math.max(limit, 1), 200);
+      const [rows] = (await pool.query(
+        "SELECT r.*, t.name AS table_name FROM reservations r LEFT JOIN shop_tables t ON t.id = r.table_id WHERE r.customer_id = ? ORDER BY r.reserved_at ASC LIMIT ?",
+        [customerId, n],
+      )) as [Record<string, unknown>[], unknown];
+      return (rows as Record<string, unknown>[]).map((row) => {
+        const r = rowToReservation(row);
+        return { ...r, tableName: row["table_name"] ? String(row["table_name"]) : "-" };
+      });
+    },
+    async listReservations(filter: ListReservationsFilter) {
+      const n = Math.min(Math.max(filter.limit || 50, 1), 200);
+      const needle = (filter.q ?? "").trim();
+      const params: unknown[] = [];
+      let sql =
+        "SELECT r.*, t.name AS table_name FROM reservations r LEFT JOIN shop_tables t ON t.id = r.table_id LEFT JOIN customers c ON c.id = r.customer_id";
+      const where: string[] = [];
+      if (filter.status) {
+        where.push("r.status = ?");
+        params.push(filter.status);
+      }
+      if (needle) {
+        const like = `%${escapeLike(needle)}%`;
+        where.push("(r.code LIKE ? ESCAPE '\\\\' OR c.name LIKE ? ESCAPE '\\\\' OR c.phone LIKE ? ESCAPE '\\\\' OR t.name LIKE ? ESCAPE '\\\\')");
+        params.push(like, like, like, like);
+      }
+      if (where.length > 0) sql += ` WHERE ${where.join(" AND ")}`;
+      sql += " ORDER BY r.created_at DESC LIMIT ?";
+      params.push(n);
+      const [rows] = (await pool.query(sql, params)) as [Record<string, unknown>[], unknown];
+      return (rows as Record<string, unknown>[]).map((row) => {
+        const r = rowToReservation(row);
+        return { ...r, tableName: row["table_name"] ? String(row["table_name"]) : "-" };
+      });
+    },
+    async listReservationsByPhone(phone: string, limit = 20) {
+      const n = Math.min(Math.max(limit, 1), 100);
+      const [rows] = (await pool.query(
+        "SELECT r.*, t.name AS table_name FROM reservations r LEFT JOIN shop_tables t ON t.id = r.table_id JOIN customers c ON c.id = r.customer_id WHERE c.phone = ? AND r.status IN ('pending','confirmed') ORDER BY r.reserved_at ASC LIMIT ?",
+        [phone, n],
+      )) as [Record<string, unknown>[], unknown];
+      return (rows as Record<string, unknown>[]).map((row) => {
+        const r = rowToReservation(row);
+        return { ...r, tableName: row["table_name"] ? String(row["table_name"]) : "-" };
+      });
+    },
+    async recommendReservationTable(partySize: number, reservedAt: string) {
+      const n = normalizePartySize(partySize);
+      const d = new Date(reservedAt);
+      if (Number.isNaN(d.getTime())) throw new Error("รูปแบบวันเวลานัดไม่ถูกต้อง");
+      const iso = d.toISOString();
+      const [tableRows] = (await pool.query("SELECT * FROM shop_tables ORDER BY name ASC")) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      const tablesList = tableRows.map(rowToTable);
+      const [activeRows] = (await pool.query(
+        "SELECT table_id, reserved_at FROM reservations WHERE status IN ('pending','confirmed')",
+      )) as [Record<string, unknown>[], unknown];
+      const blocked = new Set<string>();
+      for (const r of activeRows as Record<string, unknown>[]) {
+        const at = new Date(r["reserved_at"] as string).toISOString();
+        if (isReservationOverlapping(at, iso)) blocked.add(String(r["table_id"]));
+      }
+      const found = recommendTable(tablesList, n, blocked);
+      return found ? { ...found } : null;
+    },
+    async cancelReservation(id: string, patch: { reason: string }, actor: ShopActor, now: Date = new Date()) {
+      return withReservationTx(async (conn) => {
+        const [rows] = (await conn.query(
+          "SELECT r.*, t.name AS table_name FROM reservations r LEFT JOIN shop_tables t ON t.id = r.table_id WHERE r.id = ? LIMIT 1 FOR UPDATE",
+          [id],
+        )) as [Record<string, unknown>[], unknown];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบการจอง");
+        const current = rowToReservation(rows[0]!);
+        const reason = normalizeReservationReason(patch.reason);
+        assertReservationStatusTransition(current.status, "cancelled", "customer");
+        assertCancellable(current.reservedAt, now);
+        const before = current.status;
+        await conn.query("UPDATE reservations SET status = 'cancelled' WHERE id = ?", [id]);
+        const after = await readReservationDetail(conn, id);
+        if (!after) throw new NotFoundError("ไม่พบการจอง");
+        await insertAuditRow(conn, reservationCancelledEvent(after, before, reason, actor));
+        return after;
+      });
+    },
+    async updateReservationStatus(id: string, patch: { status: ReservationStatus; reason: string }, actor: ShopActor) {
+      return withReservationTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM reservations WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบการจอง");
+        const current = rowToReservation(rows[0]!);
+        const reason = normalizeReservationReason(patch.reason);
+        const to = normalizeReservationStatus(patch.status);
+        if (to === "seated" || to === "completed" || to === "pending") {
+          throw new ConflictError(`เปลี่ยนสถานะการจองเป็น ${to} ผ่านช่องทางนี้ไม่ได้`);
+        }
+        assertReservationStatusTransition(current.status, to, "manager");
+        const before = current.status;
+        await conn.query("UPDATE reservations SET status = ? WHERE id = ?", [to, id]);
+        const after = await readReservationDetail(conn, id);
+        if (!after) throw new NotFoundError("ไม่พบการจอง");
+        await insertAuditRow(
+          conn,
+          to === "cancelled"
+            ? reservationCancelledEvent(after, before, reason, actor)
+            : reservationStatusChangedEvent(before, after, reason, actor),
+        );
+        return after;
+      });
+    },
+    async checkinReservation(input: CheckinInput, actor: ShopActor, now: Date = new Date()) {
+      return withReservationTx(async (conn) => {
+        let resId: string | null = null;
+        if (input.reservationId?.trim()) {
+          resId = input.reservationId.trim();
+        } else if (input.code?.trim()) {
+          const [codeRows] = (await conn.query("SELECT id FROM reservations WHERE code = ? LIMIT 1", [
+            input.code.trim().toUpperCase(),
+          ])) as [Record<string, unknown>[], unknown];
+          if (codeRows.length === 0) throw new NotFoundError("ไม่พบการจอง");
+          resId = String(codeRows[0]!["id"]);
+        } else if (input.phone?.trim()) {
+          const [phoneRows] = (await conn.query(
+            "SELECT r.id FROM reservations r JOIN customers c ON c.id = r.customer_id WHERE c.phone = ? AND r.status IN ('pending','confirmed') ORDER BY r.reserved_at ASC LIMIT 2",
+            [input.phone.trim()],
+          )) as [Record<string, unknown>[], unknown];
+          if (phoneRows.length === 0) throw new NotFoundError("ไม่พบการจองที่พร้อมเช็กอินสำหรับเบอร์นี้");
+          if (phoneRows.length > 1) {
+            throw new ConflictError("พบหลายการจองสำหรับเบอร์นี้ กรุณาระบุรหัสการจอง");
+          }
+          resId = String(phoneRows[0]!["id"]);
+        } else {
+          throw new Error("กรุณาระบุรหัสการจองหรือเบอร์โทร");
+        }
+        const [rows] = (await conn.query(
+          "SELECT r.*, t.name AS table_name FROM reservations r LEFT JOIN shop_tables t ON t.id = r.table_id WHERE r.id = ? LIMIT 1 FOR UPDATE",
+          [resId],
+        )) as [Record<string, unknown>[], unknown];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบการจอง");
+        const current = rowToReservation(rows[0]!);
+        if (current.status !== "pending" && current.status !== "confirmed") {
+          throw new ConflictError("การจองนี้เช็กอินไม่ได้แล้ว (ยกเลิก/เช็กอิน/จบงานไปแล้ว)");
+        }
+        const [dupRound] = (await conn.query("SELECT id FROM table_rounds WHERE reservation_id = ? LIMIT 1", [current.id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (dupRound.length > 0) throw new ConflictError("การจองนี้เปิดรอบการใช้โต๊ะไปแล้ว");
+        const actual = normalizePartySize(input.partySize);
+        let tableId = current.tableId;
+        if (input.tableId?.trim()) tableId = input.tableId.trim();
+        const [tableRows] = (await conn.query("SELECT * FROM shop_tables WHERE id = ? LIMIT 1", [tableId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (tableRows.length === 0) throw new NotFoundError("ไม่พบโต๊ะที่เลือก");
+        let table = rowToTable(tableRows[0]!);
+        if (!table.isEnabled) throw new ConflictError(`โต๊ะ ${table.name} งดใช้งานชั่วคราว`);
+        if (table.capacity < actual && !input.tableId?.trim()) {
+          // ลองหาโต๊ะอื่นที่ว่างและจุพอ
+          const [allTables] = (await conn.query("SELECT * FROM shop_tables ORDER BY name ASC")) as [
+            Record<string, unknown>[],
+            unknown,
+          ];
+          const [activeRows] = (await conn.query(
+            "SELECT table_id, reserved_at FROM reservations WHERE status IN ('pending','confirmed') AND id <> ?",
+            [current.id],
+          )) as [Record<string, unknown>[], unknown];
+          const blocked = new Set<string>();
+          for (const r of activeRows as Record<string, unknown>[]) {
+            const at = new Date(r["reserved_at"] as string).toISOString();
+            if (isReservationOverlapping(at, current.reservedAt)) blocked.add(String(r["table_id"]));
+          }
+          const alt = recommendTable(
+            allTables.map(rowToTable).filter((t) => t.id !== table!.id),
+            actual,
+            blocked,
+          );
+          if (alt) {
+            const [openAlt] = (await conn.query(
+              "SELECT id FROM table_rounds WHERE table_id = ? AND status = 'open' LIMIT 1",
+              [alt.id],
+            )) as [Record<string, unknown>[], unknown];
+            if (openAlt.length === 0) {
+              table = alt;
+              tableId = alt.id;
+            } else {
+              throw new ConflictError(
+                `โต๊ะ ${table.name} รองรับได้ ${table.capacity} คน ไม่พอสำหรับ ${actual} คน และยังไม่มีโต๊ะอื่นที่เหมาะสม — อยู่ในรายการรอจัดโต๊ะ กรุณารอสักครู่`,
+              );
+            }
+          } else {
+            throw new ConflictError(
+              `โต๊ะ ${table.name} รองรับได้ ${table.capacity} คน ไม่พอสำหรับ ${actual} คน และยังไม่มีโต๊ะอื่นที่เหมาะสม — อยู่ในรายการรอจัดโต๊ะ กรุณารอสักครู่`,
+            );
+          }
+        } else if (table.capacity < actual) {
+          throw new ConflictError(`โต๊ะ ${table.name} รองรับได้ ${table.capacity} คน ไม่พอสำหรับ ${actual} คน`);
+        }
+        const [openRows] = (await conn.query(
+          "SELECT id FROM table_rounds WHERE table_id = ? AND status = 'open' LIMIT 1 FOR UPDATE",
+          [tableId],
+        )) as [Record<string, unknown>[], unknown];
+        if (openRows.length > 0) {
+          throw new ConflictError(`โต๊ะ ${table.name} มีลูกค้าใช้อยู่ กรุณารอสักครู่ (รอจัดโต๊ะ)`);
+        }
+        const roundId = randomUUID();
+        const at = toMysqlDatetime(now.toISOString());
+        try {
+          await conn.query(
+            "INSERT INTO table_rounds (id, reservation_id, table_id, party_size, status, opened_by, opened_at) VALUES (?, ?, ?, ?, 'open', ?, ?)",
+            [roundId, current.id, tableId, actual, actor.actorUsername ?? actor.actorId ?? null, at],
+          );
+        } catch (err: unknown) {
+          if (err && typeof err === "object" && "code" in err && (err as { code: string }).code === "ER_DUP_ENTRY") {
+            throw new ConflictError("การจองนี้เปิดรอบการใช้โต๊ะไปแล้ว");
+          }
+          throw err;
+        }
+        await conn.query("UPDATE reservations SET status = 'seated', table_id = ? WHERE id = ?", [tableId, current.id]);
+        const rDetail = await readReservationDetail(conn, current.id);
+        const roundDetail = await readRoundDetail(conn, roundId);
+        if (!rDetail || !roundDetail) throw new Error("เช็กอินไม่สำเร็จ");
+        const customer = await findCustomerRow(conn, current.customerId);
+        await insertAuditRow(conn, tableRoundOpenedEvent(roundDetail, actor));
+        await insertAuditRow(conn, reservationCheckedInEvent(rDetail, roundDetail, actual, actor, customer?.phone ?? null));
+        return { reservation: rDetail, round: roundDetail };
+      });
+    },
+    async listTableRounds(filter: ListTableRoundsFilter) {
+      const n = Math.min(Math.max(filter.limit || 50, 1), 200);
+      const params: unknown[] = [];
+      let sql =
+        "SELECT r.*, t.name AS table_name FROM table_rounds r LEFT JOIN shop_tables t ON t.id = r.table_id";
+      const where: string[] = [];
+      if (filter.status) {
+        where.push("r.status = ?");
+        params.push(filter.status);
+      }
+      if (filter.tableId) {
+        where.push("r.table_id = ?");
+        params.push(filter.tableId);
+      }
+      if (where.length > 0) sql += ` WHERE ${where.join(" AND ")}`;
+      sql += " ORDER BY r.opened_at DESC LIMIT ?";
+      params.push(n);
+      const [rows] = (await pool.query(sql, params)) as [Record<string, unknown>[], unknown];
+      return (rows as Record<string, unknown>[]).map((row) => {
+        const r = rowToTableRound(row);
+        return { ...r, tableName: row["table_name"] ? String(row["table_name"]) : "-" };
+      });
+    },
+    async getTableRound(id: string) {
+      const [rows] = (await pool.query(
+        "SELECT r.*, t.name AS table_name FROM table_rounds r LEFT JOIN shop_tables t ON t.id = r.table_id WHERE r.id = ? LIMIT 1",
+        [id],
+      )) as [Record<string, unknown>[], unknown];
+      if (rows.length === 0) return null;
+      const r = rowToTableRound(rows[0]!);
+      return { ...r, tableName: rows[0]!["table_name"] ? String(rows[0]!["table_name"]) : "-" };
+    },
+    async closeTableRound(id: string, actor: ShopActor, now: Date = new Date()) {
+      return withReservationTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM table_rounds WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบรอบการใช้โต๊ะ");
+        const round = rowToTableRound(rows[0]!);
+        if (round.status !== "open") throw new ConflictError("รอบการใช้โต๊ะนี้ปิดไปแล้ว");
+        const [pendingRows] = (await conn.query(
+          "SELECT COUNT(*) AS n FROM orders WHERE round_id = ? AND status = 'pending_payment'",
+          [id],
+        )) as [Record<string, unknown>[], unknown];
+        if (Number(pendingRows[0]!["n"]) > 0) {
+          throw new ConflictError("ยังมีคำสั่งซื้อรอชำระในรอบนี้ กรุณาปิดงานคำสั่งซื้อก่อนปิดรอบโต๊ะ");
+        }
+        const at = toMysqlDatetime(now.toISOString());
+        await conn.query("UPDATE table_rounds SET status = 'closed', closed_by = ?, closed_at = ? WHERE id = ?", [
+          actor.actorUsername ?? actor.actorId ?? null,
+          at,
+          id,
+        ]);
+        if (round.reservationId) {
+          await conn.query("UPDATE reservations SET status = 'completed' WHERE id = ? AND status = 'seated'", [
+            round.reservationId,
+          ]);
+        }
+        const after = await readRoundDetail(conn, id);
+        if (!after) throw new NotFoundError("ไม่พบรอบการใช้โต๊ะ");
+        await insertAuditRow(conn, tableRoundClosedEvent(after, actor));
         return after;
       });
     },

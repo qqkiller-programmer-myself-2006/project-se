@@ -1,6 +1,7 @@
 import { createApp } from "./app.js";
 import { loadProjectEnv } from "./env.js";
 import { createStoreFromEnv } from "./store.js";
+import { createStoreOccupancyProvider } from "./reservations/occupancy.js";
 import { DisabledLineProvider } from "./line/adapter.js";
 import { RealLineProvider, realLineConfigFromEnv } from "./line/real.js";
 import { LineNotConfiguredError } from "./line/adapter.js";
@@ -37,6 +38,8 @@ const app = createApp({
   trustedProxy: parseTrustedProxy(),
   line,
   customerUiBaseUrl: (process.env["CUSTOMER_UI_URL"] ?? "").trim() || undefined,
+  // Ticket 06: public snapshot นับโต๊ะ/ผู้ใช้บริการจากรอบที่เปิดอยู่จริง (sanitize แล้ว ไม่มี PII)
+  occupancy: createStoreOccupancyProvider(store),
 });
 
 app.listen(port, () => {

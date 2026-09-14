@@ -228,6 +228,9 @@ export interface OrderDetail {
   subtotal: number;
   total: number;
   scheduledAt: string | null;
+  /** Ticket 06: ผูกกับโต๊ะ/รอบที่เปิดอยู่ (null เมื่อไม่ได้ผูก) */
+  tableId?: string | null;
+  roundId?: string | null;
   createdAt: string;
   updatedAt: string;
   items: OrderItem[];
@@ -240,6 +243,68 @@ export interface CreateOrderRequest {
   guestName?: string;
   guestPhone?: string;
   idempotencyKey: string;
+  /** Ticket 06: ผูกคำสั่งซื้อที่โต๊ะกับรอบที่เปิดอยู่ (เฉพาะ dine_in) */
+  tableId?: string | null;
+  roundId?: string | null;
+}
+
+// ---------- Ticket 06: การจองโต๊ะและรอบการใช้โต๊ะ ----------
+
+export type ReservationStatus = "pending" | "confirmed" | "seated" | "completed" | "cancelled" | "no_show";
+export type TableRoundStatus = "open" | "closed";
+
+export const RESERVATION_STATUS_LABELS: Record<ReservationStatus, string> = {
+  pending: "รอการยืนยัน",
+  confirmed: "ยืนยันแล้ว",
+  seated: "เช็กอินแล้ว",
+  completed: "เสร็จสิ้น",
+  cancelled: "ยกเลิกแล้ว",
+  no_show: "ไม่มาตามนัด",
+};
+
+export const TABLE_ROUND_STATUS_LABELS: Record<TableRoundStatus, string> = {
+  open: "เปิดอยู่",
+  closed: "ปิดแล้ว",
+};
+
+export interface ReservationDetail {
+  id: string;
+  code: string;
+  customerId: string;
+  tableId: string;
+  tableName: string;
+  partySize: number;
+  reservedAt: string;
+  status: ReservationStatus;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+  /** payload QR สำหรับเช็กอินหน้าร้าน (fake/local — มีเฉพาะใน detail ที่เป็นเจ้าของ) */
+  qr?: string;
+}
+
+export interface TableRoundDetail {
+  id: string;
+  reservationId: string | null;
+  tableId: string;
+  tableName: string;
+  partySize: number;
+  status: TableRoundStatus;
+  openedAt: string;
+  closedAt: string | null;
+}
+
+export interface PublicTableRound {
+  tableId: string;
+  tableName: string;
+  partySize: number;
+  openedAt: string;
+}
+
+export interface RecommendedTable {
+  id: string;
+  name: string;
+  capacity: number;
 }
 
 /** ประวัติร้านใช้ AuditItem ชุดเดียวกับประวัติบัญชี (shape เดียวกัน ไม่ duplicate type) */
@@ -430,4 +495,53 @@ export const api = {
       true,
     ),
   orderAudit: () => req<{ items: AuditItem[] }>("/api/audit/orders?limit=100"),
+  // Ticket 06: การจอง (ลูกค้า) + เช็กอิน/รอบโต๊ะ + จัดการหลังร้าน (Owner/Admin)
+  reservationRecommend: (partySize: number, reservedAt: string) =>
+    req<{ table: RecommendedTable | null }>(
+      `/api/reservations/recommend?partySize=${partySize}&reservedAt=${encodeURIComponent(reservedAt)}`,
+    ),
+  reservationCreate: (body: { tableId?: string | null; partySize: number; reservedAt: string; note?: string | null; idempotencyKey: string }) =>
+    req<{ reservation: ReservationDetail; deduplicated: boolean }>(
+      "/api/reservations",
+      { method: "POST", body: JSON.stringify(body) },
+      true,
+    ),
+  myReservations: (limit = 50) => req<{ reservations: ReservationDetail[] }>(`/api/reservations/mine?limit=${limit}`),
+  myReservationGet: (id: string) => req<{ reservation: ReservationDetail }>(`/api/reservations/mine/${id}`),
+  reservationCancel: (id: string, reason?: string) =>
+    req<{ reservation: ReservationDetail }>(
+      `/api/reservations/mine/${id}/cancel`,
+      { method: "POST", body: JSON.stringify(reason ? { reason } : {}) },
+      true,
+    ),
+  checkin: (body: { code?: string; phone?: string; reservationId?: string; qr?: string; partySize: number; tableId?: string }) =>
+    req<{ reservation: ReservationDetail; round: TableRoundDetail }>(
+      "/api/checkin",
+      { method: "POST", body: JSON.stringify(body) },
+      true,
+    ),
+  roundsList: (status?: TableRoundStatus, tableId?: string, limit = 50) => {
+    const params = new URLSearchParams();
+    if (status) params.set("status", status);
+    if (tableId) params.set("tableId", tableId);
+    params.set("limit", String(limit));
+    return req<{ rounds: TableRoundDetail[] }>(`/api/rounds?${params.toString()}`);
+  },
+  roundClose: (id: string) =>
+    req<{ round: TableRoundDetail }>(`/api/rounds/${id}/close`, { method: "POST", body: JSON.stringify({}) }, true),
+  adminReservations: (q = "", status?: ReservationStatus, limit = 50) => {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (status) params.set("status", status);
+    params.set("limit", String(limit));
+    return req<{ reservations: ReservationDetail[] }>(`/api/admin/reservations?${params.toString()}`);
+  },
+  adminReservationSetStatus: (id: string, status: ReservationStatus, reason: string) =>
+    req<{ reservation: ReservationDetail }>(
+      `/api/admin/reservations/${id}/status`,
+      { method: "PATCH", body: JSON.stringify({ status, reason }) },
+      true,
+    ),
+  reservationAudit: () => req<{ items: AuditItem[] }>("/api/audit/reservations?limit=100"),
+  shopTableRounds: () => req<{ rounds: PublicTableRound[] }>("/api/shop/table-rounds"),
 };

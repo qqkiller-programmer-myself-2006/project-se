@@ -41,3 +41,29 @@
   image/external storage, browser QA จริง
 - ไม่รวมตาม scope (งาน ticket ถัดไป): payment, stock/สูตร, reservation/รอบโต๊ะ,
   งานคิวครัว/เครื่องดื่ม, LINE, Docker/MySQL runtime
+
+### Ticket 06 — การจองโต๊ะและรอบการใช้โต๊ะ
+
+- สถานะ: resolved (2026-09-14, implement โดย Muse Spark via opencode)
+- ผลตรวจ: API 159 ผ่าน/23 ข้าม (MySQL int ไม่มี TEST_DATABASE_URL), Web 126 ผ่าน
+  (เดิม 106 + ใหม่ 20: reservations/checkin/admin-reservations),
+  typecheck ผ่าน, build ผ่าน (api tsc + web vite 61 modules)
+- ไม่แตะ Prisma/experiments/package dependencies ของงานอื่น; Tickets 01–05 ไม่ regression
+- งานที่ข้าม (บันทึกตาม ticket — ไม่ทำให้ ticket ล้ม):
+  MySQL runtime จริง, LINE reminder/notification, QR provider จริง,
+  payment/deposit, full waitlist, Docker/MySQL runtime, browser QA จริง
+- ไม่รวมตาม scope (งาน ticket ถัดไป): LINE, payment/deposit, external notification,
+  full waitlist, Prisma/experiments
+
+## Roadmap หลัง Ticket 06
+
+- Ticket 07: ตัวเลือกเมนู สูตร และสต๊อก
+- Ticket 08: การชำระเงิน ใบเสร็จ และคืนเงิน
+- Ticket 09: คิวครัว/เครื่องดื่มและการส่งมอบ
+- Ticket 10: คะแนนสะสมและรางวัล
+- Ticket 11: การเงิน รายงาน Dashboard และ CSV
+- Ticket 12: LINE notifications และ reliability
+- Ticket 13: Capacity และการพยากรณ์เวลารอ
+- Ticket 14: Backup/recovery, security/observability และ release E2E
+
+ทุกรายการจะทำตามลำดับ dependency, ข้าม external services ตามนโยบาย และบันทึกผลไว้ก่อน commit

@@ -66,7 +66,13 @@ export type AuditAction =
   | "menu_archived"
   | "menu_restored"
   | "order_created"
-  | "order_status_changed";
+  | "order_status_changed"
+  | "reservation_created"
+  | "reservation_cancelled"
+  | "reservation_status_changed"
+  | "reservation_checked_in"
+  | "table_round_opened"
+  | "table_round_closed";
 
 export interface AuditEntry {
   id: number;
@@ -319,6 +325,10 @@ export interface Order {
   total: number;
   /** เวลานัดรับ (เฉพาะ preorder) */
   scheduledAt: string | null;
+  /** ผูกกับโต๊ะ/รอบการใช้โต๊ะ (เฉพาะ dine_in ที่เช็กอินแล้ว — null ได้) */
+  tableId: string | null;
+  /** รอบการใช้โต๊ะที่คำสั่งซื้อนี้สังกัด (ต้องเป็นรอบเปิดอยู่ตอนสร้าง) */
+  roundId: string | null;
   /** คีย์กันยืนยันซ้ำจาก request เดิม (client สร้าง UUID ต่อการกดยืนยันหนึ่งครั้ง) */
   idempotencyKey: string;
   createdAt: string;
@@ -328,6 +338,95 @@ export interface Order {
 /** คำสั่งซื้อพร้อมรายการย่อย — รูป DTO ที่ API ส่งออก (ไม่มีข้อมูลลับ) */
 export interface OrderDetail extends Order {
   items: OrderItem[];
+}
+
+/** ---------- Ticket 06: การจองโต๊ะและรอบการใช้โต๊ะ (ยังไม่รวม LINE/payment) ---------- */
+
+/**
+ * สถานะการจอง (baseline ตาม docs/REQUIREMENTS.md):
+ * - `pending` = สร้างแล้วรอการยืนยัน/เช็กอิน (สถานะเริ่มต้น)
+ * - `confirmed` = แอดมินยืนยันแล้ว (พร้อมเช็กอิน)
+ * - `seated` = เช็กอินแล้ว (เปิดรอบการใช้โต๊ะแล้ว)
+ * - `completed` = ปิดรอบแล้ว (จบงาน)
+ * - `cancelled` = ยกเลิก (โดยลูกค้าหรือแอดมิน)
+ * - `no_show` = แอดมินบันทึกว่าไม่มาตามนัด
+ */
+export type ReservationStatus =
+  | "pending"
+  | "confirmed"
+  | "seated"
+  | "completed"
+  | "cancelled"
+  | "no_show";
+
+export const RESERVATION_STATUSES: ReservationStatus[] = [
+  "pending",
+  "confirmed",
+  "seated",
+  "completed",
+  "cancelled",
+  "no_show",
+];
+
+/** สถานะรอบการใช้โต๊ะ: เปิดอยู่ / ปิดแล้ว */
+export type TableRoundStatus = "open" | "closed";
+
+export const TABLE_ROUND_STATUSES: TableRoundStatus[] = ["open", "closed"];
+
+/** ขีดจำกัด validation การจอง (บันทึกเป็นกฎชัดเจนสำหรับ Ticket 06) */
+export const RESERVATION_PARTY_MIN = 1;
+export const RESERVATION_PARTY_MAX = 50;
+export const RESERVATION_NOTE_MAX = 200;
+export const RESERVATION_REASON_MAX = 500;
+
+export interface Reservation {
+  id: string;
+  /** เลขอ้างอิงอ่านได้ เช่น RSV-20260914-AB12 (unique) */
+  code: string;
+  /** เจ้าของการจอง (ต้องเป็นบัญชีลูกค้า — Guest จองไม่ได้) */
+  customerId: string;
+  tableId: string;
+  partySize: number;
+  /** เวลานัดหมาย (UTC ISO) */
+  reservedAt: string;
+  status: ReservationStatus;
+  note: string | null;
+  /** คีย์กันสร้างซ้ำจาก request เดิม (optional — client สร้าง UUID ต่อการกดจองหนึ่งครั้ง) */
+  idempotencyKey: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TableRound {
+  id: string;
+  /** การจองต้นทาง (null = รอบ walk-in ไม่มีจอง) */
+  reservationId: string | null;
+  tableId: string;
+  /** จำนวนผู้ใช้บริการจริงตอนเช็กอิน */
+  partySize: number;
+  status: TableRoundStatus;
+  openedBy: string | null;
+  closedBy: string | null;
+  openedAt: string;
+  closedAt: string | null;
+}
+
+/** การจองพร้อมชื่อโต๊ะ (DTO หลังร้าน — มีข้อมูลลูกค้าเท่าที่จำเป็น) */
+export interface ReservationDetail extends Reservation {
+  tableName: string;
+}
+
+/** รอบการใช้โต๊ะพร้อมชื่อโต๊ะ (DTO หลังร้าน) */
+export interface TableRoundDetail extends TableRound {
+  tableName: string;
+}
+
+/** รอบการใช้โต๊ะแบบสาธารณะ — ไม่มีข้อมูลลูกค้า/รหัสจอง/ผู้เปิดปิด */
+export interface PublicTableRound {
+  tableId: string;
+  tableName: string;
+  partySize: number;
+  openedAt: string;
 }
 
 export function toOrderDetail(order: Order, items: OrderItem[]): OrderDetail {
