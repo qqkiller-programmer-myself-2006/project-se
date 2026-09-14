@@ -64,7 +64,9 @@ export type AuditAction =
   | "menu_updated"
   | "menu_status_changed"
   | "menu_archived"
-  | "menu_restored";
+  | "menu_restored"
+  | "order_created"
+  | "order_status_changed";
 
 export interface AuditEntry {
   id: number;
@@ -254,6 +256,82 @@ export function toPublicMenuItem(m: MenuItem): PublicMenuItem {
 /** พร้อมขายต่อลูกค้า = เปิดขายและไม่ถูก archive (ยังไม่ตรวจสต๊อกจากสูตร — งาน Ticket สต๊อก) */
 export function isMenuSellable(m: MenuItem): boolean {
   return m.status === "available" && !m.isArchived;
+}
+
+// ---------- Ticket 05: ตะกร้าและคำสั่งซื้อพื้นฐาน (ยังไม่รวมชำระเงิน/สต๊อก/คิว) ----------
+
+/** วิธีรับบริการ: รับประทานที่ร้าน / กลับบ้าน / ล่วงหน้า (มีเวลานัด) */
+export type OrderServiceType = "dine_in" | "takeaway" | "preorder";
+
+export const ORDER_SERVICE_TYPES: OrderServiceType[] = ["dine_in", "takeaway", "preorder"];
+
+/**
+ * สถานะคำสั่งซื้อพื้นฐาน (Ticket 05):
+ * - `pending_payment` = สร้างแล้วรอชำระ (สถานะเริ่มต้น ยังไม่สร้างงานคิว)
+ * - `completed` / `cancelled` = ปิดงานโดย Owner/Admin เท่านั้น
+ * สถานะคิว (`in_progress`/`ready`) และการชำระจริงเป็นงาน ticket ถัดไป
+ */
+export type OrderStatus = "pending_payment" | "completed" | "cancelled";
+
+export const ORDER_STATUSES: OrderStatus[] = ["pending_payment", "completed", "cancelled"];
+
+/** ขีดจำกัด validation คำสั่งซื้อ (บันทึกเป็นกฎชัดเจนสำหรับ Ticket 05) */
+export const ORDER_NOTE_MAX = 200;
+export const ORDER_GUEST_NAME_MAX = 120;
+export const ORDER_REASON_MAX = 500;
+export const ORDER_MAX_LINES = 20;
+export const ORDER_QTY_MIN = 1;
+export const ORDER_QTY_MAX = 20;
+
+/** รายการย่อยในคำสั่งซื้อ: snapshot ชื่อ+ราคาตอนยืนยัน (ราคาเมนูภายหลังไม่กระทบ) */
+export interface OrderItem {
+  id: string;
+  orderId: string;
+  /** อ้างอิงเมนูต้นทาง (คงไว้เพื่อ trace; ราคา/ชื่ออ่านจาก snapshot) */
+  menuId: string;
+  /** snapshot ชื่อเมนู ณ เวลายืนยัน */
+  menuName: string;
+  /** snapshot ราคาต่อหน่วย ณ เวลายืนยัน (บาท) */
+  unitPrice: number;
+  quantity: number;
+  lineTotal: number;
+  /** หมายเหตุต่อรายการ (เช่น ไม่ใส่ผัก) — ไม่เปลี่ยนราคา */
+  note: string | null;
+}
+
+/** คำสั่งซื้อ: snapshot รวมของตะกร้าที่ลูกค้ายืนยันแล้ว */
+export interface Order {
+  id: string;
+  /** เลขอ้างอิงอ่านได้ เช่น ORD-20260914-AB12 (unique) */
+  orderNumber: string;
+  /** เจ้าของเมื่อ login แล้ว (ผูกกับบัญชีลูกค้า) — Guest เป็น null */
+  customerId: string | null;
+  /** ตัวตนขั้นต่ำของ Guest (null เมื่อเป็นคำสั่งซื้อของสมาชิก) */
+  guestName: string | null;
+  /** เบอร์ Guest ที่ normalize แล้ว (null เมื่อเป็นของสมาชิก) */
+  guestPhone: string | null;
+  /** ช่องทางสร้าง — รุ่นแรกมีเฉพาะ `web` */
+  channel: "web";
+  serviceType: OrderServiceType;
+  status: OrderStatus;
+  subtotal: number;
+  /** ยอดรวมที่ตรึงตอนยืนยัน (รุ่นแรก = subtotal ยังไม่มีส่วนลด/ค่าธรรมเนียม) */
+  total: number;
+  /** เวลานัดรับ (เฉพาะ preorder) */
+  scheduledAt: string | null;
+  /** คีย์กันยืนยันซ้ำจาก request เดิม (client สร้าง UUID ต่อการกดยืนยันหนึ่งครั้ง) */
+  idempotencyKey: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** คำสั่งซื้อพร้อมรายการย่อย — รูป DTO ที่ API ส่งออก (ไม่มีข้อมูลลับ) */
+export interface OrderDetail extends Order {
+  items: OrderItem[];
+}
+
+export function toOrderDetail(order: Order, items: OrderItem[]): OrderDetail {
+  return { ...order, items: items.map((i) => ({ ...i })) };
 }
 
 export function toPublicCustomer(c: Customer): PublicCustomer {

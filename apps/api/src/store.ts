@@ -11,6 +11,11 @@ import type {
   CustomerSession,
   LineLoginTx,
   MenuItem,
+  Order,
+  OrderDetail,
+  OrderItem,
+  OrderServiceType,
+  OrderStatus,
   Role,
   Session,
   ShopTable,
@@ -61,6 +66,25 @@ import {
   type MenuInput,
 } from "./menu/validation.js";
 import type { MenuKind, MenuStatus } from "./types.js";
+import {
+  assertNormalizedPhone,
+  assertOrderStatusTransition,
+  generateOrderNumber,
+  normalizeGuestName,
+  normalizeIdempotencyKey,
+  normalizeOrderLines,
+  normalizeOrderNote,
+  normalizeQuantity,
+  normalizeScheduledAt,
+  normalizeServiceType,
+  normalizeStatusReason,
+  orderPayloadHash,
+  roundBaht,
+  type NormalizedOrderLine,
+} from "./orders/validation.js";
+import { orderCreatedEvent, orderStatusChangedEvent } from "./orders/audit-events.js";
+import { normalizeThaiPhone } from "./customer/phone.js";
+import { isMenuSellable } from "./types.js";
 
 export interface CreateUserInput {
   username: string;
@@ -189,7 +213,7 @@ export interface Store {
   deleteSessionsForUser(userId: string): Promise<void>;
   audit(input: AuditInput): Promise<void>;
   listAudit(
-    prefix: "login_" | "account_" | "shop_" | "customer_" | "menu_" | "all",
+    prefix: "login_" | "account_" | "shop_" | "customer_" | "menu_" | "order_" | "all",
     limit: number,
   ): Promise<AuditEntry[]>;
   // ---- Ticket 02: สถานะร้านและโต๊ะ (อ่านเดี่ยว + mutation แบบ atomic พร้อม audit) ----
@@ -327,6 +351,27 @@ export interface Store {
   archiveMenuItem(id: string, actor: ShopActor): Promise<MenuItem>;
   /** นำกลับจาก archive + audit menu_restored */
   restoreMenuItem(id: string, actor: ShopActor): Promise<MenuItem>;
+  // ---- Ticket 05: คำสั่งซื้อพื้นฐาน (snapshot ราคา + idempotency + audit แบบ all-or-nothing) ----
+  /**
+   * สร้างคำสั่งซื้อจากตะกร้า:
+   * - ตรวจราคา/สถานะเมนูอีกครั้ง (เฉพาะพร้อมขาย) แล้ว snapshot ชื่อ+ราคาต่อยูนิต
+   * - idempotency: key เดิม + payload เดิม → คืนคำสั่งซื้อเดิม (ไม่สร้างซ้ำ ไม่เขียน audit ซ้ำ);
+   *   key เดิม + payload ต่างกัน → ConflictError
+   * - Guest ต้องมีชื่อ+เบอร์ (normalize ด้วยกฎ Ticket 03); สมาชิกต้องมีตัวตนใช้งานได้
+   */
+  createOrder(input: CreateOrderInput, actor: ShopActor, now?: Date): Promise<{ order: OrderDetail; deduplicated: boolean }>;
+  getOrder(id: string): Promise<OrderDetail | null>;
+  getOrderByNumber(orderNumber: string): Promise<OrderDetail | null>;
+  findOrderByIdempotencyKey(key: string): Promise<OrderDetail | null>;
+  /** คำสั่งซื้อของสมาชิกคนเดียว (เรียงใหม่สุดก่อน) */
+  listCustomerOrders(customerId: string, limit?: number): Promise<OrderDetail[]>;
+  /** ค้นหาหลังร้าน: เลขคำสั่งซื้อ/ชื่อ/เบอร์ (LIKE) + กรองสถานะ */
+  listOrders(filter: ListOrdersFilter): Promise<OrderDetail[]>;
+  /**
+   * เปลี่ยนสถานะ (Owner/Admin เท่านั้น — route เป็นผู้ตรวจสิทธิ์):
+   * pending_payment → completed/cancelled พร้อมเหตุผล + audit ก่อน/หลัง แบบ all-or-nothing
+   */
+  updateOrderStatus(id: string, patch: { status: OrderStatus; reason: string }, actor: ShopActor): Promise<OrderDetail>;
   close?(): Promise<void>;
 }
 
@@ -340,6 +385,35 @@ export interface MenuPatch {
   status?: MenuStatus;
   sortOrder?: number;
   isArchived?: boolean;
+}
+
+// ---------- Ticket 05: ตะกร้าและคำสั่งซื้อพื้นฐาน ----------
+
+export interface CreateOrderLineInput {
+  menuId: string;
+  quantity: number;
+  note?: string | null;
+}
+
+export interface CreateOrderInput {
+  /** ผูกกับบัญชีลูกค้าเมื่อ login แล้ว — ระบุพร้อม guest ไม่ได้ */
+  customerId?: string | null;
+  /** ตัวตนขั้นต่ำของ Guest (ต้องมาคู่กับ guestPhone เมื่อไม่มี customerId) */
+  guestName?: string | null;
+  /** เบอร์ดิบหรือ normalize แล้วก็ได้ — store normalize ซ้ำด้วยกฎ Ticket 03 */
+  guestPhone?: string | null;
+  serviceType: OrderServiceType;
+  /** ISO string (เฉพาะ preorder) */
+  scheduledAt?: string | null;
+  /** UUID ต่อการกดยืนยันหนึ่งครั้ง — กันยืนยันซ้ำ */
+  idempotencyKey: string;
+  items: CreateOrderLineInput[];
+}
+
+export interface ListOrdersFilter {
+  q?: string;
+  status?: OrderStatus;
+  limit: number;
 }
 
 const nowIso = () => new Date().toISOString();
@@ -391,6 +465,11 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
   const tables = new Map<string, ShopTable>();
   // ---- Ticket 04 memory state: เมนู (tests + dev ที่ไม่มี MySQL) ----
   const menuItems = new Map<string, MenuItem>();
+  // ---- Ticket 05 memory state: คำสั่งซื้อ (tests เท่านั้น — runtime จริงใช้ MySQL) ----
+  const orders = new Map<string, Order>();
+  const orderItems = new Map<string, OrderItem[]>();
+  const ordersByNumber = new Map<string, string>();
+  const ordersByIdemKey = new Map<string, string>();
   // ---- Ticket 03 memory state: บัญชีลูกค้า + เซสชัน + LINE (แยกจาก staff โดยสิ้นเชิง) ----
   const customers = new Map<string, Customer>();
   const customersByPhone = new Map<string, string>();
@@ -455,6 +534,113 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
     restoreShop({ shopName: b.shopName, schedule: b.schedule, override: b.override, tables: b.tables, auditsLen: b.auditsLen, auditSeq: b.auditSeq });
     menuItems.clear();
     for (const [id, m] of b.menu) menuItems.set(id, m);
+  }
+
+  interface OrderStateBackup extends ShopStateBackup {
+    orders: Map<string, Order>;
+    items: Map<string, OrderItem[]>;
+    byNumber: Map<string, string>;
+    byIdemKey: Map<string, string>;
+  }
+
+  /** backup รวม shop audit + คำสั่งซื้อ (mutation คำสั่งซื้อต้อง rollback audit ด้วยเสมอ) */
+  function backupOrders(): OrderStateBackup {
+    return {
+      ...backupShop(),
+      orders: new Map([...orders].map(([id, o]) => [id, { ...o }] as const)),
+      items: new Map([...orderItems].map(([id, list]) => [id, list.map((i) => ({ ...i }))] as const)),
+      byNumber: new Map(ordersByNumber),
+      byIdemKey: new Map(ordersByIdemKey),
+    };
+  }
+
+  function restoreOrders(b: OrderStateBackup): void {
+    restoreShop({ shopName: b.shopName, schedule: b.schedule, override: b.override, tables: b.tables, auditsLen: b.auditsLen, auditSeq: b.auditSeq });
+    orders.clear();
+    for (const [id, o] of b.orders) orders.set(id, o);
+    orderItems.clear();
+    for (const [id, list] of b.items) orderItems.set(id, list);
+    ordersByNumber.clear();
+    for (const [k, v] of b.byNumber) ordersByNumber.set(k, v);
+    ordersByIdemKey.clear();
+    for (const [k, v] of b.byIdemKey) ordersByIdemKey.set(k, v);
+  }
+
+  function toDetail(id: string): OrderDetail | null {
+    const o = orders.get(id);
+    if (!o) return null;
+    return { ...o, items: (orderItems.get(id) ?? []).map((i) => ({ ...i })) };
+  }
+
+  // ---- Ticket 05 helpers (ใช้ร่วมกันใน memory seams ด้านล่าง) ----
+  async function buildOrderSnapshot(
+    lines: NormalizedOrderLine[],
+  ): Promise<{ name: string; price: number; menuId: string; quantity: number; note: string | null }[]> {
+    const out: { name: string; price: number; menuId: string; quantity: number; note: string | null }[] = [];
+    for (const line of lines) {
+      const menu = menuItems.get(line.menuId);
+      if (!menu || !isMenuSellable(menu)) {
+        throw new ConflictError(
+          `เมนู${menu ? ` "${menu.name}"` : ""} ไม่พร้อมขายแล้ว กรุณาปรับตะกร้าแล้วยืนยันใหม่อีกครั้ง`,
+        );
+      }
+      // quantity/note ผ่าน normalizeOrderLines จาก router แล้ว — ตรวจซ้ำแบบกันพลาด
+      out.push({
+        name: menu.name,
+        price: menu.price,
+        menuId: menu.id,
+        quantity: normalizeQuantity(line.quantity),
+        note: normalizeOrderNote(line.note),
+      });
+    }
+    return out;
+  }
+
+  async function normalizeCreateOrderInput(
+    input: CreateOrderInput,
+    now: Date,
+  ): Promise<{
+    customerId: string | null;
+    guestName: string | null;
+    guestPhone: string | null;
+    serviceType: OrderServiceType;
+    scheduledAt: string | null;
+    idempotencyKey: string;
+    lines: NormalizedOrderLine[];
+    hash: string;
+  }> {
+    const serviceType = normalizeServiceType(input.serviceType);
+    const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
+    const lines = normalizeOrderLines(
+      input.items.map((i) => ({ menuId: i.menuId, quantity: i.quantity, note: i.note ?? null })),
+    );
+    const scheduledAt = normalizeScheduledAt(serviceType, input.scheduledAt ?? null, now);
+    let customerId: string | null = null;
+    let guestName: string | null = null;
+    let guestPhone: string | null = null;
+    if (input.customerId) {
+      if (input.guestName ?? input.guestPhone) {
+        throw new ConflictError("ข้อมูลผู้สั่งไม่ถูกต้อง (ระบุทั้งสมาชิกและ Guest ไม่ได้)");
+      }
+      const c = customers.get(input.customerId);
+      if (!c || c.isDeleted || !c.isActive) throw new ConflictError("บัญชีลูกค้าใช้งานไม่ได้ กรุณาเข้าสู่ระบบใหม่");
+      customerId = c.id;
+    } else {
+      guestName = normalizeGuestName(input.guestName);
+      // รับได้ทั้งเบอร์ดิบและ normalize แล้ว — normalize ซ้ำด้วยกฎ Ticket 03 ที่นี่
+      guestPhone = normalizeThaiPhone(input.guestPhone ?? "");
+      assertNormalizedPhone(guestPhone);
+    }
+    return {
+      customerId,
+      guestName,
+      guestPhone,
+      serviceType,
+      scheduledAt,
+      idempotencyKey,
+      lines,
+      hash: orderPayloadHash({ customerId, guestName, guestPhone, serviceType, scheduledAt, items: lines }),
+    };
   }
 
   async function writeAudit(input: AuditInput): Promise<void> {
@@ -609,6 +795,7 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
         if (prefix === "shop_") return a.action.startsWith("shop_");
         if (prefix === "customer_") return a.action.startsWith("customer_");
         if (prefix === "menu_") return a.action.startsWith("menu_");
+        if (prefix === "order_") return a.action.startsWith("order_");
         return !a.action.startsWith("login_");
       });
       return items.slice(0, limit);
@@ -1252,6 +1439,132 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
         throw err;
       }
     },
+    // ---- Ticket 05 memory: คำสั่งซื้อพื้นฐาน (snapshot + idempotency + audit แบบ all-or-nothing) ----
+    async createOrder(input, actor, now = new Date()) {
+      const backup = backupOrders();
+      try {
+        const n = await normalizeCreateOrderInput(input, now);
+        // idempotency: key เดิม → คืนของเดิม (payload เดิม) หรือ 409 (payload ต่างกัน)
+        const existingId = ordersByIdemKey.get(n.idempotencyKey);
+        if (existingId) {
+          const existing = toDetail(existingId)!;
+          const existingHash = orderPayloadHash({
+            customerId: existing.customerId,
+            guestName: existing.guestName,
+            guestPhone: existing.guestPhone,
+            serviceType: existing.serviceType,
+            scheduledAt: existing.scheduledAt,
+            items: existing.items.map((i) => ({ menuId: i.menuId, quantity: i.quantity, note: i.note })),
+          });
+          if (existingHash !== n.hash) {
+            throw new ConflictError("คำขอนี้ถูกใช้ยืนยันไปแล้ว กรุณาสร้างตะกร้าใหม่");
+          }
+          return { order: existing, deduplicated: true };
+        }
+        const snapshot = await buildOrderSnapshot(n.lines);
+        const subtotal = roundBaht(snapshot.reduce((s, l) => s + l.price * l.quantity, 0));
+        // เลขคำสั่งซื้อกันชน (memory: ตรวจ map; MySQL: unique index + retry)
+        let orderNumber = generateOrderNumber(now);
+        for (let i = 0; i < 5 && ordersByNumber.has(orderNumber); i += 1) {
+          orderNumber = generateOrderNumber(now);
+        }
+        if (ordersByNumber.has(orderNumber)) {
+          throw new ConflictError("สร้างเลขคำสั่งซื้อไม่สำเร็จ กรุณาลองใหม่อีกครั้ง");
+        }
+        const at = now.toISOString();
+        const header: Order = {
+          id: randomUUID(),
+          orderNumber,
+          customerId: n.customerId,
+          guestName: n.guestName,
+          guestPhone: n.guestPhone,
+          channel: "web",
+          serviceType: n.serviceType,
+          status: "pending_payment",
+          subtotal,
+          total: subtotal,
+          scheduledAt: n.scheduledAt,
+          idempotencyKey: n.idempotencyKey,
+          createdAt: at,
+          updatedAt: at,
+        };
+        const items: OrderItem[] = snapshot.map((s) => ({
+          id: randomUUID(),
+          orderId: header.id,
+          menuId: s.menuId,
+          menuName: s.name,
+          unitPrice: s.price,
+          quantity: s.quantity,
+          lineTotal: roundBaht(s.price * s.quantity),
+          note: s.note,
+        }));
+        orders.set(header.id, { ...header });
+        orderItems.set(header.id, items);
+        ordersByNumber.set(header.orderNumber, header.id);
+        ordersByIdemKey.set(header.idempotencyKey, header.id);
+        const order = toDetail(header.id)!;
+        await writeAudit(orderCreatedEvent(order, actor));
+        return { order, deduplicated: false };
+      } catch (err) {
+        restoreOrders(backup);
+        throw err;
+      }
+    },
+    async getOrder(id) {
+      return toDetail(id);
+    },
+    async getOrderByNumber(orderNumber) {
+      const id = ordersByNumber.get(orderNumber.trim());
+      return id ? toDetail(id) : null;
+    },
+    async findOrderByIdempotencyKey(key) {
+      const id = ordersByIdemKey.get(key);
+      return id ? toDetail(id) : null;
+    },
+    async listCustomerOrders(customerId, limit = 50) {
+      return [...orders.values()]
+        .filter((o) => o.customerId === customerId)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, Math.min(Math.max(limit, 1), 200))
+        .map((o) => toDetail(o.id)!);
+    },
+    async listOrders(filter) {
+      const needle = (filter.q ?? "").trim().toLowerCase();
+      const limit = Math.min(Math.max(filter.limit || 50, 1), 200);
+      return [...orders.values()]
+        .filter((o) => (filter.status ? o.status === filter.status : true))
+        .filter((o) =>
+          needle
+            ? o.orderNumber.toLowerCase().includes(needle) ||
+              (o.guestName ?? "").toLowerCase().includes(needle) ||
+              (o.guestPhone ?? "").includes(needle)
+            : true,
+        )
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, limit)
+        .map((o) => toDetail(o.id)!);
+    },
+    async updateOrderStatus(id, patch, actor) {
+      const backup = backupOrders();
+      try {
+        const current = orders.get(id);
+        if (!current) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+        const reason = normalizeStatusReason(patch.reason);
+        const to = patch.status;
+        if (to !== "completed" && to !== "cancelled") throw new ConflictError("สถานะคำสั่งซื้อไม่ถูกต้อง");
+        assertOrderStatusTransition(current.status, to);
+        const before = { status: current.status, total: current.total };
+        current.status = to;
+        current.updatedAt = new Date().toISOString();
+        // ยอดตรึงแล้ว — เปลี่ยนเฉพาะสถานะ (กันราคาเมนูภายหลังกระทบยอดเดิม)
+        const after = toDetail(id)!;
+        await writeAudit(orderStatusChangedEvent(before, after, reason, actor));
+        return after;
+      } catch (err) {
+        restoreOrders(backup);
+        throw err;
+      }
+    },
   };
 
   return memoryStore;
@@ -1264,6 +1577,7 @@ const MIGRATION_FILES = [
   "003_shop_status_tables.sql",
   "004_customer_accounts.sql",
   "005_menu_catalog.sql",
+  "006_orders.sql",
 ];
 
 export function findMigrationFile(name = MIGRATION_FILES[0]!): string {
@@ -1292,6 +1606,100 @@ function isDuplicateColumnError(err: unknown): boolean {
   return (
     !!err && typeof err === "object" && "code" in err && (err as { code: unknown }).code === "ER_DUP_FIELDNAME"
   );
+}
+
+// ---- Ticket 05: helpers ระดับ module (ใช้ทั้ง seams ใน createMysqlStore) ----
+
+function rowToOrder(r: Record<string, unknown>): Order {
+  const serviceType = String(r["service_type"]);
+  if (serviceType !== "dine_in" && serviceType !== "takeaway" && serviceType !== "preorder") {
+    throw new Error("วิธีรับบริการในฐานข้อมูลไม่ถูกต้อง");
+  }
+  const status = String(r["status"]);
+  if (status !== "pending_payment" && status !== "completed" && status !== "cancelled") {
+    throw new Error("สถานะคำสั่งซื้อในฐานข้อมูลไม่ถูกต้อง");
+  }
+  const subtotal = Number(r["subtotal"]);
+  const total = Number(r["total"]);
+  if (!Number.isFinite(subtotal) || !Number.isFinite(total)) {
+    throw new Error("ยอดคำสั่งซื้อในฐานข้อมูลไม่ถูกต้อง");
+  }
+  const channel = String(r["channel"]);
+  if (channel !== "web") throw new Error("ช่องทางคำสั่งซื้อในฐานข้อมูลไม่ถูกต้อง");
+  return {
+    id: String(r["id"]),
+    orderNumber: String(r["order_number"]),
+    customerId: r["customer_id"] == null ? null : String(r["customer_id"]),
+    guestName: r["guest_name"] == null ? null : String(r["guest_name"]),
+    guestPhone: r["guest_phone"] == null ? null : String(r["guest_phone"]),
+    channel: "web",
+    serviceType,
+    status,
+    subtotal,
+    total,
+    scheduledAt:
+      r["scheduled_at"] == null ? null : new Date(r["scheduled_at"] as string).toISOString(),
+    idempotencyKey: String(r["idempotency_key"]),
+    createdAt: new Date(r["created_at"] as string).toISOString(),
+    updatedAt: new Date(r["updated_at"] as string).toISOString(),
+  };
+}
+
+function rowToOrderItem(r: Record<string, unknown>): OrderItem {
+  const quantity = Number(r["quantity"]);
+  if (!Number.isInteger(quantity)) throw new Error("จำนวนรายการในฐานข้อมูลไม่ถูกต้อง");
+  return {
+    id: String(r["id"]),
+    orderId: String(r["order_id"]),
+    menuId: String(r["menu_id"]),
+    menuName: String(r["menu_name"]),
+    unitPrice: Number(r["unit_price"]),
+    quantity,
+    lineTotal: Number(r["line_total"]),
+    note: r["note"] == null ? null : String(r["note"]),
+  };
+}
+
+async function readOrderDetailTx(conn: PoolConnection, orderId: string): Promise<OrderDetail | null> {
+  const [oRows] = (await conn.query("SELECT * FROM orders WHERE id = ? LIMIT 1", [orderId])) as [
+    Record<string, unknown>[],
+    unknown,
+  ];
+  if (oRows.length === 0) return null;
+  const [iRows] = (await conn.query("SELECT * FROM order_items WHERE order_id = ? ORDER BY menu_name ASC", [
+    orderId,
+  ])) as [Record<string, unknown>[], unknown];
+  const order = rowToOrder(oRows[0]!);
+  return { ...order, items: (iRows as Record<string, unknown>[]).map(rowToOrderItem) };
+}
+
+/** normalize รูปทรงคำขอ (ไม่แตะเมนู/ลูกค้า — ตรวจ snapshot ใน transaction ของ caller) */
+function normalizeOrderShape(
+  input: CreateOrderInput,
+  now: Date,
+): {
+  serviceType: OrderServiceType;
+  idempotencyKey: string;
+  lines: NormalizedOrderLine[];
+  scheduledAt: string | null;
+} {
+  const serviceType = normalizeServiceType(input.serviceType);
+  return {
+    serviceType,
+    idempotencyKey: normalizeIdempotencyKey(input.idempotencyKey),
+    lines: normalizeOrderLines(
+      input.items.map((i) => ({ menuId: i.menuId, quantity: i.quantity, note: i.note ?? null })),
+    ),
+    scheduledAt: normalizeScheduledAt(serviceType, input.scheduledAt ?? null, now),
+  };
+}
+
+/** จำแนก unique key ที่ชนจากข้อความ MySQL (uq_orders_idempotency / uq_orders_number) */
+function dupOrderKeyName(err: unknown): string {
+  const msg = err && typeof err === "object" && "message" in err && typeof err.message === "string" ? err.message : "";
+  if (msg.includes("uq_orders_idempotency")) return "idempotency";
+  if (msg.includes("uq_orders_number")) return "number";
+  return "";
 }
 
 export async function createMysqlStore(databaseUrl: string): Promise<Store> {
@@ -1579,6 +1987,28 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
     updatedAt: new Date(r["updated_at"] as string).toISOString(),
   });
 
+  /** อ่านรายการย่อยแบบ batch สำหรับ orders หลายแถว (list หลังร้าน/ของฉัน) */
+  async function readOrdersWithItems(oRows: Record<string, unknown>[]): Promise<OrderDetail[]> {
+    if (oRows.length === 0) return [];
+    const ids = oRows.map((r) => String(r["id"]));
+    const [iRows] = (await pool.query(`SELECT * FROM order_items WHERE order_id IN (${ids.map(() => "?").join(",")})`, ids)) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    const byOrder = new Map<string, OrderItem[]>();
+    for (const r of iRows as Record<string, unknown>[]) {
+      const item = rowToOrderItem(r);
+      const list = byOrder.get(item.orderId) ?? [];
+      list.push(item);
+      byOrder.set(item.orderId, list);
+    }
+    return oRows.map((r) => {
+      const order = rowToOrder(r);
+      const items = (byOrder.get(order.id) ?? []).sort((a, b) => a.menuName.localeCompare(b.menuName, "th"));
+      return { ...order, items };
+    });
+  }
+
   const mysqlStore: Store = {
     async createUser(input) {
       const id = randomUUID();
@@ -1733,6 +2163,8 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
         sql += " WHERE action LIKE 'customer\\_%'";
       } else if (prefix === "menu_") {
         sql += " WHERE action LIKE 'menu\\_%'";
+      } else if (prefix === "order_") {
+        sql += " WHERE action LIKE 'order\\_%'";
       } else if (prefix === "account_") {
         sql += " WHERE action NOT LIKE 'login\\_%'";
       }
@@ -2418,6 +2850,203 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
           throw err;
         }
         await insertAuditRow(conn, customerLineLinkStartedEvent(input.customerId, actor));
+      });
+    },
+    // ---- Ticket 05 MySQL: คำสั่งซื้อพื้นฐาน (transaction เดียวกับ audit เสมอ) ----
+    async createOrder(input: CreateOrderInput, actor: ShopActor, now: Date = new Date()) {
+      return withShopTx(async (conn) => {
+        const shape = normalizeOrderShape(input, now);
+        // เจ้าของคำสั่งซื้อ: สมาชิก (ตรวจตัวตนใช้งานได้) หรือ Guest (ชื่อ+เบอร์ normalize กฎ Ticket 03)
+        let customerId: string | null = null;
+        let guestName: string | null = null;
+        let guestPhone: string | null = null;
+        if (input.customerId) {
+          if (input.guestName ?? input.guestPhone) {
+            throw new ConflictError("ข้อมูลผู้สั่งไม่ถูกต้อง (ระบุทั้งสมาชิกและ Guest ไม่ได้)");
+          }
+          const c = await findCustomerRow(conn, input.customerId);
+          if (!c || c.isDeleted || !c.isActive) {
+            throw new ConflictError("บัญชีลูกค้าใช้งานไม่ได้ กรุณาเข้าสู่ระบบใหม่");
+          }
+          customerId = c.id;
+        } else {
+          guestName = normalizeGuestName(input.guestName);
+          guestPhone = normalizeThaiPhone(input.guestPhone ?? "");
+          assertNormalizedPhone(guestPhone);
+        }
+        const hash = orderPayloadHash({
+          customerId,
+          guestName,
+          guestPhone,
+          serviceType: shape.serviceType,
+          scheduledAt: shape.scheduledAt,
+          items: shape.lines,
+        });
+        // idempotency fast-path: key เดิม → คืนของเดิม (payload เดิม) หรือ 409 (payload ต่างกัน)
+        const [idemRows] = (await conn.query("SELECT id, payload_hash FROM orders WHERE idempotency_key = ? LIMIT 1", [
+          shape.idempotencyKey,
+        ])) as [Record<string, unknown>[], unknown];
+        if (idemRows.length > 0) {
+          if (String(idemRows[0]!["payload_hash"]) !== hash) {
+            throw new ConflictError("คำขอนี้ถูกใช้ยืนยันไปแล้ว กรุณาสร้างตะกร้าใหม่");
+          }
+          const detail = await readOrderDetailTx(conn, String(idemRows[0]!["id"]));
+          if (!detail) throw new Error("อ่านคำสั่งซื้อเดิมไม่สำเร็จ");
+          return { order: detail, deduplicated: true };
+        }
+        // snapshot ราคา/ชื่อจากเมนูปัจจุบัน — เฉพาะเมนูพร้อมขายเท่านั้น
+        const ids = [...new Set(shape.lines.map((l) => l.menuId))];
+        const [menuRows] = (await conn.query(`SELECT * FROM menu_items WHERE id IN (${ids.map(() => "?").join(",")})`, ids)) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const menuById = new Map(menuRows.map((r) => rowToMenu(r)).map((m) => [m.id, m]));
+        const snapshot = shape.lines.map((line) => {
+          const menu = menuById.get(line.menuId);
+          if (!menu || !isMenuSellable(menu)) {
+            throw new ConflictError(
+              `เมนู${menu ? ` "${menu.name}"` : ""} ไม่พร้อมขายแล้ว กรุณาปรับตะกร้าแล้วยืนยันใหม่อีกครั้ง`,
+            );
+          }
+          return { name: menu.name, price: menu.price, menuId: menu.id, quantity: line.quantity, note: line.note };
+        });
+        const subtotal = roundBaht(snapshot.reduce((s, l) => s + l.price * l.quantity, 0));
+        // กันเลขคำสั่งซื้อชน (unique index + retry) และกัน key แข่งกัน (re-read + เทียบ hash)
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          const orderNumber = generateOrderNumber(now);
+          const id = randomUUID();
+          try {
+            await conn.query(
+              "INSERT INTO orders (id, order_number, customer_id, guest_name, guest_phone, channel, service_type, status, subtotal, total, scheduled_at, idempotency_key, payload_hash) VALUES (?, ?, ?, ?, ?, 'web', ?, 'pending_payment', ?, ?, ?, ?, ?)",
+              [
+                id,
+                orderNumber,
+                customerId,
+                guestName,
+                guestPhone,
+                shape.serviceType,
+                subtotal,
+                subtotal,
+                shape.scheduledAt ? toMysqlDatetime(shape.scheduledAt) : null,
+                shape.idempotencyKey,
+                hash,
+              ],
+            );
+          } catch (err: unknown) {
+            if (err && typeof err === "object" && "code" in err && (err as { code: string }).code === "ER_DUP_ENTRY") {
+              const which = dupOrderKeyName(err);
+              if (which === "number") continue; // เลขชน — สุ่มใหม่
+              // key ชนกันข้าม request (แข่งกัน insert) — อ่านของที่ชนะแล้วเทียบ hash
+              const [reread] = (await conn.query("SELECT id, payload_hash FROM orders WHERE idempotency_key = ? LIMIT 1", [
+                shape.idempotencyKey,
+              ])) as [Record<string, unknown>[], unknown];
+              if (reread.length === 0) continue;
+              if (String(reread[0]!["payload_hash"]) !== hash) {
+                throw new ConflictError("คำขอนี้ถูกใช้ยืนยันไปแล้ว กรุณาสร้างตะกร้าใหม่");
+              }
+              const detail = await readOrderDetailTx(conn, String(reread[0]!["id"]));
+              if (!detail) throw new Error("อ่านคำสั่งซื้อเดิมไม่สำเร็จ");
+              return { order: detail, deduplicated: true };
+            }
+            throw err;
+          }
+          for (const s of snapshot) {
+            await conn.query(
+              "INSERT INTO order_items (id, order_id, menu_id, menu_name, unit_price, quantity, line_total, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+              [randomUUID(), id, s.menuId, s.name, s.price, s.quantity, roundBaht(s.price * s.quantity), s.note],
+            );
+          }
+          await insertAuditRow(conn, orderCreatedEvent((await readOrderDetailTx(conn, id))!, actor));
+          const detail = await readOrderDetailTx(conn, id);
+          if (!detail) throw new Error("สร้างคำสั่งซื้อไม่สำเร็จ");
+          return { order: detail, deduplicated: false };
+        }
+        throw new ConflictError("สร้างเลขคำสั่งซื้อไม่สำเร็จ กรุณาลองใหม่อีกครั้ง");
+      });
+    },
+
+    async getOrder(id: string) {
+      const [oRows] = (await pool.query("SELECT * FROM orders WHERE id = ? LIMIT 1", [id])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      if (oRows.length === 0) return null;
+      const [iRows] = (await pool.query("SELECT * FROM order_items WHERE order_id = ? ORDER BY menu_name ASC", [id])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      const order = rowToOrder(oRows[0]!);
+      return { ...order, items: (iRows as Record<string, unknown>[]).map(rowToOrderItem) };
+    },
+
+    async getOrderByNumber(orderNumber: string) {
+      const [oRows] = (await pool.query("SELECT * FROM orders WHERE order_number = ? LIMIT 1", [orderNumber.trim()])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      if (oRows.length === 0) return null;
+      return mysqlStore.getOrder(String(oRows[0]!["id"]));
+    },
+
+    async findOrderByIdempotencyKey(key: string) {
+      const [oRows] = (await pool.query("SELECT * FROM orders WHERE idempotency_key = ? LIMIT 1", [key])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      if (oRows.length === 0) return null;
+      return mysqlStore.getOrder(String(oRows[0]!["id"]));
+    },
+
+    async listCustomerOrders(customerId: string, limit = 50) {
+      const n = Math.min(Math.max(limit, 1), 200);
+      const [oRows] = (await pool.query("SELECT * FROM orders WHERE customer_id = ? ORDER BY created_at DESC LIMIT ?", [
+        customerId,
+        n,
+      ])) as [Record<string, unknown>[], unknown];
+      return readOrdersWithItems(oRows as Record<string, unknown>[]);
+    },
+
+    async listOrders(filter: ListOrdersFilter) {
+      const n = Math.min(Math.max(filter.limit || 50, 1), 200);
+      const needle = (filter.q ?? "").trim();
+      const params: unknown[] = [];
+      let sql = "SELECT * FROM orders";
+      const where: string[] = [];
+      if (filter.status) {
+        where.push("status = ?");
+        params.push(filter.status);
+      }
+      if (needle) {
+        const like = `%${escapeLike(needle)}%`;
+        where.push("(order_number LIKE ? ESCAPE '\\\\' OR guest_name LIKE ? ESCAPE '\\\\' OR guest_phone LIKE ? ESCAPE '\\\\')");
+        params.push(like, like, like);
+      }
+      if (where.length > 0) sql += ` WHERE ${where.join(" AND ")}`;
+      sql += " ORDER BY created_at DESC LIMIT ?";
+      params.push(n);
+      const [oRows] = (await pool.query(sql, params)) as [Record<string, unknown>[], unknown];
+      return readOrdersWithItems(oRows as Record<string, unknown>[]);
+    },
+
+    async updateOrderStatus(id: string, patch: { status: OrderStatus; reason: string }, actor: ShopActor) {
+      return withShopTx(async (conn) => {
+        const [oRows] = (await conn.query("SELECT * FROM orders WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (oRows.length === 0) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+        const current = rowToOrder(oRows[0]!);
+        const reason = normalizeStatusReason(patch.reason);
+        if (patch.status !== "completed" && patch.status !== "cancelled") {
+          throw new ConflictError("สถานะคำสั่งซื้อไม่ถูกต้อง");
+        }
+        assertOrderStatusTransition(current.status, patch.status);
+        const before = { status: current.status, total: current.total };
+        await conn.query("UPDATE orders SET status = ? WHERE id = ?", [patch.status, id]);
+        const after = await readOrderDetailTx(conn, id);
+        if (!after) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+        await insertAuditRow(conn, orderStatusChangedEvent(before, after, reason, actor));
+        return after;
       });
     },
     async close() {

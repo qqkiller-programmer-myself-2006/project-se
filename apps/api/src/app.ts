@@ -14,6 +14,7 @@ import { ConflictError, NotFoundError } from "./types.js";
 import { createShopRouter } from "./routes/shop.js";
 import { createCustomerRouter } from "./routes/customers.js";
 import { createMenuRouter } from "./routes/menu.js";
+import { createOrderRouter } from "./routes/orders.js";
 import type { OccupancyProvider } from "./shop/occupancy.js";
 import type { LineProvider } from "./line/adapter.js";
 
@@ -596,6 +597,15 @@ export function createApp(opts: AppOptions): express.Express {
   // Ticket 04 routes อยู่ใน routes/menu.ts (validation อยู่ menu/validation.ts ห้าม duplicate ที่นี่)
   app.use(
     createMenuRouter({
+      store,
+      middleware: { requireAuth, requireCsrf, requireShopManager },
+      clientIp,
+    }),
+  );
+
+  // Ticket 05 routes อยู่ใน routes/orders.ts (validation อยู่ orders/validation.ts ห้าม duplicate ที่นี่)
+  app.use(
+    createOrderRouter({
       store,
       middleware: { requireAuth, requireCsrf, requireShopManager },
       clientIp,

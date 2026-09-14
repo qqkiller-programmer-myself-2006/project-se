@@ -28,3 +28,16 @@
   Docker/MySQL runtime จริง, image storage/upload ภายนอก, browser QA จริง
 - ไม่รวมตาม scope (งาน ticket ถัดไป): orders, cart, payment, stock/สูตรวัตถุดิบ,
   image upload, external providers
+
+### Ticket 05 — ตะกร้าและคำสั่งซื้อพื้นฐาน
+
+- สถานะ: resolved (2026-09-14, implement โดย Muse Spark via opencode)
+- ผลตรวจ: API 148 ผ่าน/21 ข้าม (MySQL int ไม่มี TEST_DATABASE_URL), Web 106 ผ่าน,
+  typecheck ผ่าน, build ผ่าน (api tsc + web vite 57 modules)
+- ไม่แตะ Prisma/experiments/package dependencies ของงานอื่น; Tickets 01–04 ไม่ regression
+- งานที่ข้าม (บันทึกตาม ticket — ไม่ทำให้ ticket ล้ม):
+  MySQL runtime จริง, payment/SlipOK/PromptPay, stock/สูตรวัตถุดิบ,
+  reservation/table-round, kitchen/drink queue, LINE notification,
+  image/external storage, browser QA จริง
+- ไม่รวมตาม scope (งาน ticket ถัดไป): payment, stock/สูตร, reservation/รอบโต๊ะ,
+  งานคิวครัว/เครื่องดื่ม, LINE, Docker/MySQL runtime

@@ -15,6 +15,9 @@ import CustomerProfilePage from "./pages/CustomerProfile";
 import AdminCustomersPage from "./pages/AdminCustomers";
 import MenuPublicPage from "./pages/MenuPublic";
 import MenuAdminPage from "./pages/MenuAdmin";
+import CartPage from "./pages/Cart";
+import MyOrdersPage from "./pages/MyOrders";
+import AdminOrdersPage from "./pages/AdminOrders";
 
 const NAV_BASE =
   "inline-flex min-h-[44px] items-center rounded-xl border px-4 py-2 text-sm font-semibold transition-colors";
@@ -70,6 +73,8 @@ export default function App() {
       <Routes>
         <Route path="/status" element={<StatusPage />} />
         <Route path="/menu" element={<MenuPublicPage />} />
+        <Route path="/cart" element={<CartPage />} />
+        <Route path="/orders" element={<MyOrdersPage />} />
         <Route path="/register" element={<CustomerRegisterPage />} />
         <Route path="/customer/login" element={<CustomerLoginPage />} />
         <Route path="/profile" element={<CustomerProfilePage />} />
@@ -120,6 +125,17 @@ export default function App() {
             <NavLink to="/menu" className={({ isActive }) => navClass(isActive)}>
               เมนู
             </NavLink>
+            <NavLink to="/cart" className={({ isActive }) => navClass(isActive)}>
+              ตะกร้า
+            </NavLink>
+            <NavLink to="/orders" className={({ isActive }) => navClass(isActive)}>
+              คำสั่งซื้อ
+            </NavLink>
+            {isManager && (
+              <NavLink to="/admin/orders" className={({ isActive }) => navClass(isActive)}>
+                จัดการคำสั่งซื้อ
+              </NavLink>
+            )}
             {isManager && (
               <NavLink to="/shop" className={({ isActive }) => navClass(isActive)}>
                 ร้าน
@@ -169,6 +185,9 @@ export default function App() {
         <Routes>
           <Route path="/status" element={<StatusPage />} />
           <Route path="/menu" element={<MenuPublicPage />} />
+          <Route path="/cart" element={<CartPage />} />
+          <Route path="/orders" element={<MyOrdersPage />} />
+          {isManager && <Route path="/admin/orders" element={<AdminOrdersPage />} />}
           {isManager && <Route path="/admin/menu" element={<MenuAdminPage />} />}
           {isManager && <Route path="/shop" element={<ShopPage />} />}
           {isManager && <Route path="/tables" element={<TablesPage />} />}

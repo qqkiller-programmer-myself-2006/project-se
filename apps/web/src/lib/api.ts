@@ -186,6 +186,62 @@ export interface MenuListQuery {
   q?: string;
 }
 
+// ---------- Ticket 05: ตะกร้าและคำสั่งซื้อพื้นฐาน ----------
+
+export type OrderServiceType = "dine_in" | "takeaway" | "preorder";
+export type OrderStatus = "pending_payment" | "completed" | "cancelled";
+
+export const ORDER_SERVICE_LABELS: Record<OrderServiceType, string> = {
+  dine_in: "รับประทานที่ร้าน",
+  takeaway: "กลับบ้าน",
+  preorder: "ล่วงหน้า (นัดเวลารับ)",
+};
+
+export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
+  pending_payment: "รอชำระเงิน",
+  completed: "เสร็จสิ้น",
+  cancelled: "ยกเลิกแล้ว",
+};
+
+export interface OrderItem {
+  id: string;
+  orderId: string;
+  menuId: string;
+  /** snapshot ชื่อเมนูตอนยืนยัน (ไม่เปลี่ยนตามเมนูภายหลัง) */
+  menuName: string;
+  /** snapshot ราคาต่อหน่วยตอนยืนยัน */
+  unitPrice: number;
+  quantity: number;
+  lineTotal: number;
+  note: string | null;
+}
+
+export interface OrderDetail {
+  id: string;
+  orderNumber: string;
+  customerId: string | null;
+  guestName: string | null;
+  guestPhone: string | null;
+  channel: "web";
+  serviceType: OrderServiceType;
+  status: OrderStatus;
+  subtotal: number;
+  total: number;
+  scheduledAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  items: OrderItem[];
+}
+
+export interface CreateOrderRequest {
+  serviceType: OrderServiceType;
+  scheduledAt?: string | null;
+  items: { menuId: string; quantity: number; note?: string | null }[];
+  guestName?: string;
+  guestPhone?: string;
+  idempotencyKey: string;
+}
+
 /** ประวัติร้านใช้ AuditItem ชุดเดียวกับประวัติบัญชี (shape เดียวกัน ไม่ duplicate type) */
 
 const BASE = import.meta.env["VITE_API_URL"] ?? "";
@@ -348,4 +404,30 @@ export const api = {
   menuArchive: (id: string) => req<{ item: MenuItem }>(`/api/menu/${id}/archive`, { method: "POST" }, true),
   menuRestore: (id: string) => req<{ item: MenuItem }>(`/api/menu/${id}/restore`, { method: "POST" }, true),
   menuAudit: () => req<{ items: AuditItem[] }>("/api/audit/menu?limit=100"),
+  // Ticket 05: คำสั่งซื้อ (ยืนยันตะกร้า public; ติดตามของฉัน/Guest lookup; จัดการหลังร้าน Owner/Admin)
+  orderCreate: (body: CreateOrderRequest) =>
+    req<{ order: OrderDetail; deduplicated: boolean }>(
+      "/api/orders",
+      { method: "POST", body: JSON.stringify(body) },
+      true,
+    ),
+  myOrders: (limit = 50) => req<{ orders: OrderDetail[] }>(`/api/orders/mine?limit=${limit}`),
+  orderLookup: (number: string, phone: string) =>
+    req<{ order: OrderDetail }>(`/api/orders/lookup?number=${encodeURIComponent(number)}&phone=${encodeURIComponent(phone)}`),
+  orderGet: (id: string, phone?: string) =>
+    req<{ order: OrderDetail }>(`/api/orders/${id}${phone ? `?phone=${encodeURIComponent(phone)}` : ""}`),
+  ordersList: (q = "", status?: OrderStatus, limit = 50) => {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (status) params.set("status", status);
+    params.set("limit", String(limit));
+    return req<{ orders: OrderDetail[] }>(`/api/orders?${params.toString()}`);
+  },
+  orderSetStatus: (id: string, status: OrderStatus, reason: string) =>
+    req<{ order: OrderDetail }>(
+      `/api/orders/${id}/status`,
+      { method: "PATCH", body: JSON.stringify({ status, reason }) },
+      true,
+    ),
+  orderAudit: () => req<{ items: AuditItem[] }>("/api/audit/orders?limit=100"),
 };
