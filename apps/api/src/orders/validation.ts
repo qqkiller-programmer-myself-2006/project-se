@@ -30,6 +30,10 @@ export interface NormalizedOrderLine {
   menuId: string;
   quantity: number;
   note: string | null;
+  /** รหัสตัวเลือกที่เลือกในรายการนี้ (ตรวจว่าเป็นของเมนูนี้และเปิดขายที่ store) */
+  optionIds: string[];
+  /** ความต้องการเฉพาะ — ข้อความล้วน ไม่เปลี่ยนราคา */
+  specialRequest: string | null;
 }
 
 export function normalizeServiceType(value: unknown): OrderServiceType {
@@ -132,16 +136,47 @@ export function normalizeOrderLines(value: unknown): NormalizedOrderLine[] {
   }
   const seen = new Set<string>();
   return value.map((raw) => {
-    const row = raw as { menuId?: unknown; quantity?: unknown; note?: unknown };
+    const row = raw as { menuId?: unknown; quantity?: unknown; note?: unknown; options?: unknown; optionIds?: unknown; specialRequest?: unknown };
     const menuId = normalizeMenuId(row?.menuId);
-    if (seen.has(menuId)) throw new Error("มีเมนูซ้ำกันในตะกร้า กรุณารวมเป็นรายการเดียว");
-    seen.add(menuId);
-    return {
-      menuId,
-      quantity: normalizeQuantity(row?.quantity),
-      note: normalizeOrderNote(row?.note ?? null),
-    };
+    const quantity = normalizeQuantity(row?.quantity);
+    const note = normalizeOrderNote(row?.note ?? null);
+    // Ticket 07: ตัวเลือก (รับได้ทั้งคีย์ `options` และ `optionIds`) + ความต้องการเฉพาะ
+    const optionIds = normalizeLineOptionIds(row?.options ?? row?.optionIds ?? []);
+    const specialRequest = normalizeLineSpecialRequest(row?.specialRequest ?? null);
+    // เมนูเดียวกันสั่งแยกหลายบรรทัดได้เมื่อตัวเลือก/หมายเหตุ/ความต้องการเฉพาะต่างกัน
+    // (บรรทัดที่เหมือนกันทุกอย่างยังต้องรวมเป็นรายการเดียว)
+    const key = `${menuId}|${[...optionIds].sort().join(",")}|${note ?? ""}|${specialRequest ?? ""}`;
+    if (seen.has(key)) throw new Error("มีเมนูซ้ำกันในตะกร้า กรุณารวมเป็นรายการเดียว");
+    seen.add(key);
+    return { menuId, quantity, note, optionIds, specialRequest };
   });
+}
+
+/** normalize รหัสตัวเลือกแบบกันพลาด (ตรวจว่าเป็นของเมนูนี้/เปิดขายที่ store) */
+function normalizeLineOptionIds(value: unknown): string[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new Error("ตัวเลือกเมนูไม่ถูกต้อง");
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    if (typeof raw !== "string" || raw.trim().length === 0) throw new Error("ตัวเลือกเมนูไม่ถูกต้อง");
+    const id = raw.trim();
+    if (seen.has(id)) throw new Error("มีตัวเลือกซ้ำกันในรายการ กรุณาเลือกอย่างละครั้งเดียว");
+    seen.add(id);
+    out.push(id);
+  }
+  if (out.length > 20) throw new Error("ตัวเลือกในหนึ่งรายการมีได้ไม่เกิน 20 ตัวเลือก");
+  return out;
+}
+
+/** normalize ความต้องการเฉพาะแบบกันพลาด (ข้อความล้วน ไม่เปลี่ยนราคา) */
+function normalizeLineSpecialRequest(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") throw new Error("ความต้องการเฉพาะต้องเป็นข้อความ");
+  const v = value.trim();
+  if (!v) return null;
+  if (v.length > ORDER_NOTE_MAX) throw new Error(`ความต้องการเฉพาะต้องไม่เกิน ${ORDER_NOTE_MAX} ตัวอักษร`);
+  return v;
 }
 
 export function normalizeOrderStatus(value: unknown): OrderStatus {
@@ -205,7 +240,15 @@ export function orderPayloadHash(payload: {
     scheduledAt: payload.scheduledAt,
     items: [...payload.items]
       .sort((a, b) => a.menuId.localeCompare(b.menuId))
-      .map((i) => ({ menuId: i.menuId, quantity: i.quantity, note: i.note })),
+      // Ticket 07: ตัวเลือก (เรียงรหัสก่อน hash — ลำดับที่ส่งมาไม่กระทบการเทียบซ้ำ)
+      // และความต้องการเฉพาะเป็นส่วนหนึ่งของ payload กัน key เดิมแต่คนละตัวเลือกชนกันเงียบ ๆ
+      .map((i) => ({
+        menuId: i.menuId,
+        quantity: i.quantity,
+        note: i.note,
+        options: [...(i.optionIds ?? [])].sort(),
+        specialRequest: i.specialRequest ?? null,
+      })),
   });
   return createHash("sha256").update(canonical).digest("hex");
 }
@@ -213,4 +256,30 @@ export function orderPayloadHash(payload: {
 /** ปัดเศษเงิน 2 ตำแหน่ง (กัน floating point เพี้ยน เช่น 0.1+0.2) */
 export function roundBaht(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/**
+ * hash สคีมาเดิม (ก่อน Ticket 07 — ไม่มีตัวเลือก/ความต้องการเฉพาะ):
+ * ใช้เทียบ idempotency key เก่าที่ยืนยันก่อน deploy Ticket 07 เท่านั้น
+ * (กัน replay ของ key เก่าเพี้ยนเป็น 409; key ใหม่ใช้ orderPayloadHash เสมอ)
+ */
+export function orderPayloadHashWithoutOptions(payload: {
+  customerId: string | null;
+  guestName: string | null;
+  guestPhone: string | null;
+  serviceType: OrderServiceType;
+  scheduledAt: string | null;
+  items: NormalizedOrderLine[];
+}): string {
+  const canonical = JSON.stringify({
+    customerId: payload.customerId,
+    guestName: payload.guestName,
+    guestPhone: payload.guestPhone,
+    serviceType: payload.serviceType,
+    scheduledAt: payload.scheduledAt,
+    items: [...payload.items]
+      .sort((a, b) => a.menuId.localeCompare(b.menuId))
+      .map((i) => ({ menuId: i.menuId, quantity: i.quantity, note: i.note })),
+  });
+  return createHash("sha256").update(canonical).digest("hex");
 }

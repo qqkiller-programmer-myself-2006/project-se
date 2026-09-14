@@ -72,7 +72,21 @@ export type AuditAction =
   | "reservation_status_changed"
   | "reservation_checked_in"
   | "table_round_opened"
-  | "table_round_closed";
+  | "table_round_closed"
+  // ---------- Ticket 07: ตัวเลือกเมนู สูตร และสต๊อก ----------
+  | "menu_option_group_created"
+  | "menu_option_group_updated"
+  | "menu_option_created"
+  | "menu_option_updated"
+  | "menu_option_status_changed"
+  | "ingredient_created"
+  | "ingredient_updated"
+  | "ingredient_status_changed"
+  | "recipe_created"
+  | "stock_updated"
+  | "order_stock_reserved"
+  | "order_stock_released"
+  | "order_stock_consumed";
 
 export interface AuditEntry {
   id: number;
@@ -303,6 +317,22 @@ export interface OrderItem {
   lineTotal: number;
   /** หมายเหตุต่อรายการ (เช่น ไม่ใส่ผัก) — ไม่เปลี่ยนราคา */
   note: string | null;
+  // ---------- Ticket 07: snapshot ตัวเลือก/ความต้องการเฉพาะ/ต้นทุน ----------
+  /** snapshot ตัวเลือกที่ลูกค้าเลือก (ชื่อกลุ่ม+ชื่อตัวเลือก+ส่วนต่างราคา ณ เวลายืนยัน) */
+  selectedOptions: OrderItemOptionSnapshot[];
+  /** ความต้องการเฉพาะ (เช่น เผ็ดน้อย ไม่ใส่ผัก) — ข้อความล้วน ไม่เปลี่ยนราคา */
+  specialRequest: string | null;
+  /** ต้นทุนวัตถุดิบประมาณการของรายการนี้ (บาท, คำนวณจากสูตรล่าสุดตอนยืนยัน) */
+  estimatedCost: number;
+}
+
+/** snapshot ตัวเลือกหนึ่งตัวในรายการคำสั่งซื้อ (ตรึงชื่อ+ส่วนต่างราคาตอนยืนยัน) */
+export interface OrderItemOptionSnapshot {
+  groupId: string;
+  groupName: string;
+  optionId: string;
+  optionName: string;
+  priceDelta: number;
 }
 
 /** คำสั่งซื้อ: snapshot รวมของตะกร้าที่ลูกค้ายืนยันแล้ว */
@@ -331,6 +361,13 @@ export interface Order {
   roundId: string | null;
   /** คีย์กันยืนยันซ้ำจาก request เดิม (client สร้าง UUID ต่อการกดยืนยันหนึ่งครั้ง) */
   idempotencyKey: string;
+  // ---------- Ticket 07: การจองสต๊อกผูกกับคำสั่งซื้อ ----------
+  /** จองสต๊อกแล้ว (จองตอนยืนยันก่อนรับชำระ — กันขายเกิน) */
+  stockReserved: boolean;
+  /** ตัดสต๊อกจริงแล้ว (ตัดเมื่อเริ่มทำ — เหตุการณ์ซ้ำเป็น no-op) */
+  stockConsumed: boolean;
+  /** ต้นทุนวัตถุดิบประมาณการรวม (บาท, จากสูตรล่าสุดตอนยืนยัน — แยกจากรายจ่ายจริง) */
+  estimatedCost: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -443,4 +480,205 @@ export function toPublicCustomer(c: Customer): PublicCustomer {
     isDeleted: c.isDeleted,
     createdAt: c.createdAt,
   };
+}
+
+/** ---------- Ticket 07: ตัวเลือกเมนู สูตร และสต๊อก ---------- */
+
+/** ขีดจำกัด validation ตัวเลือกเมนู */
+export const OPTION_GROUP_NAME_MAX = 64;
+export const OPTION_NAME_MAX = 120;
+export const OPTION_PRICE_DELTA_MAX = 1000000;
+export const OPTION_SORT_ORDER_MIN = 0;
+export const OPTION_SORT_ORDER_MAX = 10000;
+
+/** กลุ่มตัวเลือกของเมนูหนึ่งรายการ (เช่น "ขนาด", "เพิ่มท็อปปิ้ง") */
+export interface MenuOptionGroup {
+  id: string;
+  menuId: string;
+  name: string;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** ตัวเลือกในกลุ่ม (เช่น "พิเศษ +10 บาท") — เปิด/ปิดขายรายตัวเลือกได้ */
+export interface MenuOption {
+  id: string;
+  groupId: string;
+  menuId: string;
+  name: string;
+  /** ส่วนต่างราคาต่อหน่วย (บาท, บวก/ลบได้ — รวมกับราคาเมนูตอนยืนยัน) */
+  priceDelta: number;
+  isEnabled: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** ตัวเลือกแบบสาธารณะ (เฉพาะตัวที่เปิดขาย) */
+export interface PublicMenuOption {
+  id: string;
+  name: string;
+  priceDelta: number;
+  sortOrder: number;
+}
+
+/** กลุ่มตัวเลือกแบบสาธารณะ (เฉพาะกลุ่มที่มีตัวอย่างน้อยหนึ่งตัวเลือกที่เปิดขาย) */
+export interface PublicMenuOptionGroup {
+  id: string;
+  name: string;
+  sortOrder: number;
+  options: PublicMenuOption[];
+}
+
+/** เมนูสาธารณะพร้อมกลุ่มตัวเลือก + สถานะพร้อมขายจากสต๊อก */
+export interface PublicMenuItemWithOptions extends PublicMenuItem {
+  optionGroups: PublicMenuOptionGroup[];
+  /**
+   * พร้อมขายจากสต๊อกหรือไม่ (true เมื่อไม่มีสูตร หรือสูตรล่าสุดมีสต๊อกพร้อมขายพอ
+   * สำหรับ 1 หน่วย — งาน Ticket สต๊อก; false = แสดงป้าย "วัตถุดิบหมดชั่วคราว")
+   */
+  inStock: boolean;
+}
+
+export function toPublicMenuOption(o: MenuOption): PublicMenuOption {
+  return { id: o.id, name: o.name, priceDelta: o.priceDelta, sortOrder: o.sortOrder };
+}
+
+/** ขีดจำกัด validation วัตถุดิบ/สูตร/สต๊อก */
+export const INGREDIENT_NAME_MAX = 120;
+export const INGREDIENT_UNIT_MAX = 32;
+export const INGREDIENT_STOCK_MAX = 1000000000;
+export const INGREDIENT_COST_MAX = 1000000;
+export const RECIPE_QTY_MAX = 1000000000;
+export const RECIPE_MAX_LINES = 50;
+export const SPECIAL_REQUEST_MAX = 200;
+export const STOCK_REASON_MAX = 500;
+export const STOCK_QTY_DECIMALS = 3;
+
+/**
+ * วัตถุดิบ: หนึ่งรายการมีหนึ่งหน่วยเท่านั้น (เช่น กรัม ฟอง มิลลิลิตร ถุง)
+ * ไม่มีแปลงหน่วยอัตโนมัติ — หน่วยกำหนดตอนสร้างและเปลี่ยนไม่ได้
+ * พร้อมขาย = คงเหลือจริง (onHand) − ยอดจอง (reserved)
+ */
+export interface Ingredient {
+  id: string;
+  name: string;
+  /** หน่วยเดียวของวัตถุดิบนี้ (immutable หลังสร้าง) */
+  unit: string;
+  /** คงเหลือจริง */
+  onHand: number;
+  /** ยอดที่จองให้คำสั่งซื้อที่ยืนยันแล้ว (ยังไม่ตัดจริง) */
+  reserved: number;
+  /** ระดับเตือนเมื่อพร้อมขายต่ำกว่าค่านี้ */
+  reorderThreshold: number;
+  /** ราคาทุนล่าสุดต่อหน่วย (บาท — ใช้คำนวณต้นทุนประมาณการเท่านั้น) */
+  latestCost: number;
+  isEnabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** พร้อมขาย = คงเหลือจริง − ยอดจอง (ห้ามติดลบ — store บังคับก่อน mutate เสมอ) */
+export function ingredientAvailable(i: Ingredient): number {
+  return Math.round((i.onHand - i.reserved) * 1000) / 1000;
+}
+
+/** เป้าหมายของสูตร: สูตรฐานของเมนู หรือสูตรเพิ่มเติมของตัวเลือก */
+export type RecipeTargetType = "menu" | "option";
+
+export const RECIPE_TARGET_TYPES: RecipeTargetType[] = ["menu", "option"];
+
+/** สูตรหนึ่งบรรทัด: ใช้วัตถุดิบนี้ปริมาณเท่าใดต่อหน่วยขาย (ทศนิยมได้) */
+export interface RecipeLine {
+  ingredientId: string;
+  /** ปริมาณต่อ 1 หน่วยขาย (หน่วยเดียวกับวัตถุดิบ) */
+  qty: number;
+}
+
+/**
+ * สูตรแบบ versioned: แก้ไข = สร้างเวอร์ชันใหม่เท่านั้น (ห้ามแก้/ลบเวอร์ชันเก่า)
+ * คำสั่งซื้อยืนยันอ้างสูตรล่าสุดเสมอ; ประวัติเวอร์ชันเก่าคงไว้ตรวจสอบย้อนหลัง
+ */
+export interface Recipe {
+  id: string;
+  targetType: RecipeTargetType;
+  targetId: string;
+  version: number;
+  lines: RecipeLine[];
+  /** ต้นทุนประมาณการต่อหน่วยขาย (บาท, Σ qty × latestCost ณ เวลาสร้างเวอร์ชัน) */
+  estimatedCostPerUnit: number;
+  createdBy: string | null;
+  createdAt: string;
+}
+
+/** ประเภทธุรกรรมสต๊อก (ทุกครั้งมีเหตุผล ผู้ทำ เวลา ยอดก่อน–หลัง) */
+export type StockOp =
+  | "receive"
+  | "reserve"
+  | "release"
+  | "consume"
+  | "return"
+  | "waste"
+  | "expire"
+  | "personal_use"
+  | "adjust";
+
+export const STOCK_OPS: StockOp[] = [
+  "receive",
+  "reserve",
+  "release",
+  "consume",
+  "return",
+  "waste",
+  "expire",
+  "personal_use",
+  "adjust",
+];
+
+/** ประเภทที่ผู้ใช้กรอกเองได้ (reserve/release/consume เป็นของระบบจากคำสั่งซื้อเท่านั้น) */
+export type ManualStockOp = "receive" | "return" | "waste" | "expire" | "personal_use" | "adjust";
+
+export const MANUAL_STOCK_OPS: ManualStockOp[] = [
+  "receive",
+  "return",
+  "waste",
+  "expire",
+  "personal_use",
+  "adjust",
+];
+
+export const STOCK_OP_LABELS: Record<StockOp, string> = {
+  receive: "รับเข้า",
+  reserve: "จองสต๊อก",
+  release: "คืนยอดจอง",
+  consume: "ตัดใช้จริง",
+  return: "รับคืน",
+  waste: "ของเสีย",
+  expire: "หมดอายุ",
+  personal_use: "ใช้ส่วนตัว",
+  adjust: "ปรับยอดตรวจนับ",
+};
+
+/** ธุรกรรมสต๊อก: หลักฐานการเปลี่ยนปริมาณทุกครั้ง (append-only ห้ามแก้/ลบ) */
+export interface StockLedgerEntry {
+  id: string;
+  ingredientId: string;
+  op: StockOp;
+  /** ผลต่างคงเหลือจริง (บวก/ลบ) */
+  deltaOnHand: number;
+  /** ผลต่างยอดจอง (บวก/ลบ) */
+  deltaReserved: number;
+  beforeOnHand: number;
+  afterOnHand: number;
+  beforeReserved: number;
+  afterReserved: number;
+  reason: string;
+  actorId: string | null;
+  actorUsername: string | null;
+  /** คำสั่งซื้อต้นทาง (ธุรกรรมจากระบบจอง/ตัดสต๊อก) */
+  orderId: string | null;
+  /** เลขอ้างอิงเพิ่มเติม (เช่น เลขบิลซื้อ) */
+  reference: string | null;
+  createdAt: string;
 }

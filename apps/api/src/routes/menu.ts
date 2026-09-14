@@ -16,7 +16,14 @@ import {
   normalizePrice,
   normalizeSortOrder,
 } from "../menu/validation.js";
-import { toPublicMenuItem, type MenuItem } from "../types.js";
+import {
+  normalizeOptionGroupName,
+  normalizeOptionName,
+  normalizeOptionSortOrder,
+  normalizeEnabled,
+  normalizePriceDelta,
+} from "../inventory/validation.js";
+import { toPublicMenuItem, type MenuItem, type PublicMenuItemWithOptions } from "../types.js";
 
 export interface MenuMiddleware {
   requireAuth: (req: Request, res: Response, next: NextFunction) => void;
@@ -81,6 +88,19 @@ function groupPublic(items: MenuItem[]) {
     }));
 }
 
+/** จัดกลุ่มเมนูสาธารณะพร้อมตัวเลือก (Ticket 07 — ราคาทุนไม่ส่งออก) */
+function groupPublicWithOptions(items: PublicMenuItemWithOptions[]) {
+  const groups = new Map<string, PublicMenuItemWithOptions[]>();
+  for (const m of items) {
+    const list = groups.get(m.category) ?? [];
+    list.push(m);
+    groups.set(m.category, list);
+  }
+  return [...groups.entries()]
+    .sort(([a], [b]) => compareMenuCategory(a, b))
+    .map(([category, list]) => ({ category, items: list }));
+}
+
 /**
  * Ticket 04 routes: แคตตาล็อกสาธารณะ + จัดการเมนู (Owner/Admin)
  * - กฎธุรกิจอยู่ใน menu/validation.ts (domain) และ store.ts (atomic mutation + audit)
@@ -93,10 +113,11 @@ export function createMenuRouter(deps: MenuRouterDeps): express.Router {
   const router = express.Router();
 
   // Public catalog: ไม่ต้อง login — เฉพาะเมนูพร้อมขาย จัดกลุ่มตามหมวด
+  // Ticket 07: แนบกลุ่มตัวเลือกที่เปิดขาย + สถานะพร้อมขายจากสต๊อก (inStock) ต่อเมนู
   router.get("/api/menu/public", async (_req, res, next) => {
     try {
-      const items = await store.listPublicMenuItems();
-      res.json({ groups: groupPublic(items) });
+      const items = await store.listPublicMenuWithOptions();
+      res.json({ groups: groupPublicWithOptions(items) });
     } catch (err) {
       next(err);
     }
@@ -294,6 +315,197 @@ export function createMenuRouter(deps: MenuRouterDeps): express.Router {
   );
 
   // ตั้งใจไม่มี DELETE /api/menu/:id — archive แทน (ห้ามลบทำลายประวัติ)
+
+  // ---------- Ticket 07: กลุ่มตัวเลือก + ตัวเลือกของเมนู (Owner/Admin) ----------
+  // กฎธุรกิจอยู่ใน inventory/validation.ts (domain) และ store.ts (atomic + audit)
+  // router ทำแค่ validate รูปทรง input แล้วเรียก store
+
+  router.post(
+    "/api/menu/:id/option-groups",
+    requireAuth,
+    requireCsrf,
+    requireShopManager,
+    async (req, res, next) => {
+      try {
+        const parsed = z.object({ name: z.unknown(), sortOrder: z.unknown().optional() }).safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: zodMessage(parsed.error) });
+          return;
+        }
+        let input: { name: string; sortOrder: number };
+        try {
+          input = {
+            name: normalizeOptionGroupName(parsed.data.name),
+            sortOrder: normalizeOptionSortOrder(parsed.data.sortOrder ?? 0),
+          };
+        } catch (err) {
+          res.status(400).json({ error: err instanceof Error ? err.message : "ข้อมูลกลุ่มตัวเลือกไม่ถูกต้อง" });
+          return;
+        }
+        const actor = req.user!;
+        const group = await store.createMenuOptionGroup(req.params.id, input, {
+          actorId: actor.id,
+          actorUsername: actor.username,
+          ip: clientIp(req),
+        });
+        res.status(201).json({ group });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  router.get("/api/menu/:id/option-groups", requireAuth, requireShopManager, async (req, res, next) => {
+    try {
+      const menu = await store.getMenuItem(req.params.id);
+      if (!menu) {
+        res.status(404).json({ error: "ไม่พบเมนู" });
+        return;
+      }
+      const groups = await store.listMenuOptionGroups(req.params.id);
+      const options = await store.listMenuOptions(req.params.id);
+      res.json({
+        groups: groups.map((g) => ({
+          ...g,
+          options: options.filter((o) => o.groupId === g.id),
+        })),
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.patch(
+    "/api/menu/option-groups/:groupId",
+    requireAuth,
+    requireCsrf,
+    requireShopManager,
+    async (req, res, next) => {
+      try {
+        const parsed = z.object({ name: z.unknown().optional(), sortOrder: z.unknown().optional() }).safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: zodMessage(parsed.error) });
+          return;
+        }
+        if (parsed.data.name === undefined && parsed.data.sortOrder === undefined) {
+          res.status(400).json({ error: "กรุณาระบุข้อมูลที่ต้องการแก้ไขอย่างน้อย 1 อย่าง" });
+          return;
+        }
+        const patch: { name?: string; sortOrder?: number } = {};
+        try {
+          if (parsed.data.name !== undefined) patch.name = normalizeOptionGroupName(parsed.data.name);
+          if (parsed.data.sortOrder !== undefined) patch.sortOrder = normalizeOptionSortOrder(parsed.data.sortOrder);
+        } catch (err) {
+          res.status(400).json({ error: err instanceof Error ? err.message : "ข้อมูลกลุ่มตัวเลือกไม่ถูกต้อง" });
+          return;
+        }
+        const actor = req.user!;
+        const group = await store.updateMenuOptionGroup(req.params.groupId, patch, {
+          actorId: actor.id,
+          actorUsername: actor.username,
+          ip: clientIp(req),
+        });
+        res.json({ group });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  router.post(
+    "/api/menu/option-groups/:groupId/options",
+    requireAuth,
+    requireCsrf,
+    requireShopManager,
+    async (req, res, next) => {
+      try {
+        const parsed = z
+          .object({
+            name: z.unknown(),
+            priceDelta: z.unknown().optional(),
+            isEnabled: z.unknown().optional(),
+            sortOrder: z.unknown().optional(),
+          })
+          .safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: zodMessage(parsed.error) });
+          return;
+        }
+        let input: { name: string; priceDelta: number; isEnabled: boolean; sortOrder: number };
+        try {
+          input = {
+            name: normalizeOptionName(parsed.data.name),
+            priceDelta: normalizePriceDelta(parsed.data.priceDelta ?? 0),
+            isEnabled: parsed.data.isEnabled === undefined ? true : normalizeEnabled(parsed.data.isEnabled),
+            sortOrder: normalizeOptionSortOrder(parsed.data.sortOrder ?? 0),
+          };
+        } catch (err) {
+          res.status(400).json({ error: err instanceof Error ? err.message : "ข้อมูลตัวเลือกไม่ถูกต้อง" });
+          return;
+        }
+        const actor = req.user!;
+        const option = await store.createMenuOption(req.params.groupId, input, {
+          actorId: actor.id,
+          actorUsername: actor.username,
+          ip: clientIp(req),
+        });
+        res.status(201).json({ option });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  router.patch(
+    "/api/menu/options/:optionId",
+    requireAuth,
+    requireCsrf,
+    requireShopManager,
+    async (req, res, next) => {
+      try {
+        const parsed = z
+          .object({
+            name: z.unknown().optional(),
+            priceDelta: z.unknown().optional(),
+            isEnabled: z.unknown().optional(),
+            sortOrder: z.unknown().optional(),
+          })
+          .safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: zodMessage(parsed.error) });
+          return;
+        }
+        if (
+          parsed.data.name === undefined &&
+          parsed.data.priceDelta === undefined &&
+          parsed.data.isEnabled === undefined &&
+          parsed.data.sortOrder === undefined
+        ) {
+          res.status(400).json({ error: "กรุณาระบุข้อมูลที่ต้องการแก้ไขอย่างน้อย 1 อย่าง" });
+          return;
+        }
+        const patch: { name?: string; priceDelta?: number; isEnabled?: boolean; sortOrder?: number } = {};
+        try {
+          if (parsed.data.name !== undefined) patch.name = normalizeOptionName(parsed.data.name);
+          if (parsed.data.priceDelta !== undefined) patch.priceDelta = normalizePriceDelta(parsed.data.priceDelta);
+          if (parsed.data.isEnabled !== undefined) patch.isEnabled = normalizeEnabled(parsed.data.isEnabled);
+          if (parsed.data.sortOrder !== undefined) patch.sortOrder = normalizeOptionSortOrder(parsed.data.sortOrder);
+        } catch (err) {
+          res.status(400).json({ error: err instanceof Error ? err.message : "ข้อมูลตัวเลือกไม่ถูกต้อง" });
+          return;
+        }
+        const actor = req.user!;
+        const option = await store.updateMenuOption(req.params.optionId, patch, {
+          actorId: actor.id,
+          actorUsername: actor.username,
+          ip: clientIp(req),
+        });
+        res.json({ option });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
 
   router.get("/api/audit/menu", requireAuth, requireShopManager, async (req, res, next) => {
     try {

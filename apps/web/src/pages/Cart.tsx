@@ -3,27 +3,36 @@ import { Link } from "react-router-dom";
 import {
   ORDER_SERVICE_LABELS,
   api,
-  type MenuGroup,
   type OrderDetail,
   type OrderServiceType,
   type PublicCustomer,
+  type PublicMenuGroupWithOptions,
 } from "../lib/api";
 import {
   addToCart,
   cartCount,
-  cartTotal,
+  cartTotalWith,
   clearCart,
   loadCart,
   removeFromCart,
   saveCart,
+  setLineOption,
+  setSpecialRequest,
   setNote,
   setQuantity,
+  toggleLineOption,
   type Cart,
 } from "../lib/cart";
 import { Alert, Badge, Panel, Spinner, inputClass, primaryButtonClass, secondaryButtonClass } from "../components/ui";
 
 function fmtPrice(n: number): string {
   return `${n.toLocaleString("th-TH", { maximumFractionDigits: 2 })} บาท`;
+}
+
+function fmtDelta(n: number): string {
+  if (n === 0) return "ไม่เพิ่มราคา";
+  const sign = n > 0 ? "+" : "−";
+  return `${sign}${Math.abs(n).toLocaleString("th-TH", { maximumFractionDigits: 2 })} บาท`;
 }
 
 function newIdempotencyKey(): string {
@@ -36,13 +45,15 @@ function newIdempotencyKey(): string {
 }
 
 /**
- * หน้าตะกร้าและยืนยันคำสั่งซื้อ (Ticket 05):
+ * หน้าตะกร้าและยืนยันคำสั่งซื้อ (Ticket 05 + Ticket 07):
  * - ดูเมนูพร้อมขาย + เพิ่ม/ลด/ลบ/หมายเหตุในตะกร้า (เก็บใน localStorage)
+ * - Ticket 07: เลือกตัวเลือกต่อบรรทัด (กลุ่มละ 1 ตัวเลือก มีส่วนต่างราคา) +
+ *   ความต้องการเฉพาะ (ข้อความล้วน ไม่เปลี่ยนราคา)
  * - ยืนยันเป็นคำสั่งซื้อแบบสมาชิก (login แล้ว) หรือ Guest (ชื่อ+เบอร์)
- * - server ตรวจราคา/สถานะเมนูอีกครั้งแล้ว snapshot — ราคาภายหลังไม่กระทบคำสั่งซื้อเดิม
+ * - server ตรวจราคา/สถานะเมนู/ตัวเลือก/สต๊อกอีกครั้งแล้ว snapshot + จองสต๊อก
  */
 export default function CartPage() {
-  const [groups, setGroups] = useState<MenuGroup[]>([]);
+  const [groups, setGroups] = useState<PublicMenuGroupWithOptions[]>([]);
   const [menuLoading, setMenuLoading] = useState(true);
   const [menuError, setMenuError] = useState<string | null>(null);
   const [cart, setCart] = useState<Cart>(() => loadCart());
@@ -83,14 +94,42 @@ export default function CartPage() {
   }, [cart]);
 
   const priceMap = useMemo(() => {
-    const map = new Map<string, { price: number; name: string }>();
-    for (const g of groups) for (const m of g.items) map.set(m.id, { price: m.price, name: m.name });
+    const map = new Map<string, { price: number; name: string; inStock: boolean }>();
+    for (const g of groups)
+      for (const m of g.items) map.set(m.id, { price: m.price, name: m.name, inStock: m.inStock ?? true });
     return map;
   }, [groups]);
 
-  const total = cartTotal(cart, (id) => priceMap.get(id)?.price ?? null);
+  const optionMap = useMemo(() => {
+    const map = new Map<string, { menuId: string; groupId: string; name: string; priceDelta: number }>();
+    for (const g of groups)
+      for (const m of g.items)
+        for (const og of m.optionGroups ?? [])
+          for (const o of og.options) map.set(o.id, { menuId: m.id, groupId: og.id, name: o.name, priceDelta: o.priceDelta });
+    return map;
+  }, [groups]);
+
+  const groupsByMenu = useMemo(() => {
+    const map = new Map<string, PublicMenuGroupWithOptions["items"][number]["optionGroups"]>();
+    for (const g of groups) for (const m of g.items) map.set(m.id, m.optionGroups ?? []);
+    return map;
+  }, [groups]);
+
+  function lineUnitPrice(line: Cart[number]): number | null {
+    const base = priceMap.get(line.menuId);
+    if (!base) return null;
+    let price = base.price;
+    for (const optionId of line.options) {
+      const opt = optionMap.get(optionId);
+      if (!opt || opt.menuId !== line.menuId) return null;
+      price = Math.round((price + opt.priceDelta) * 100) / 100;
+    }
+    return price;
+  }
+
+  const total = cartTotalWith(cart, (l) => lineUnitPrice(l));
   const count = cartCount(cart);
-  const staleLines = cart.filter((l) => !priceMap.has(l.menuId));
+  const staleLines = cart.filter((l) => lineUnitPrice(l) === null);
 
   function add(menuId: string) {
     setSubmitError(null);
@@ -120,7 +159,13 @@ export default function CartPage() {
     const body = {
       serviceType,
       scheduledAt: scheduled,
-      items: cart.map((l) => ({ menuId: l.menuId, quantity: l.quantity, note: l.note || null })),
+      items: cart.map((l) => ({
+        menuId: l.menuId,
+        quantity: l.quantity,
+        note: l.note || null,
+        options: l.options.length > 0 ? l.options : null,
+        specialRequest: l.specialRequest || null,
+      })),
       ...(customer
         ? {}
         : { guestName: guestName.trim(), guestPhone: guestPhone.trim() }),
@@ -148,7 +193,7 @@ export default function CartPage() {
       <header className="text-center">
         <h1 className="text-xl font-bold text-ink-900 sm:text-2xl">ตะกร้าและสั่งซื้อ</h1>
         <p className="mt-1 text-sm text-ink-600">
-          เลือกเมนูพร้อมขาย ปรับจำนวนและหมายเหตุ แล้วกดยืนยันเป็นคำสั่งซื้อ
+          เลือกเมนูพร้อมขาย ปรับจำนวน ตัวเลือก และหมายเหตุ แล้วกดยืนยันเป็นคำสั่งซื้อ
           {sessionChecked && customer ? ` (สั่งในนาม ${customer.name})` : " (ไม่ต้องสมัครก็สั่งแบบ Guest ได้)"}
         </p>
       </header>
@@ -188,37 +233,82 @@ export default function CartPage() {
               </div>
             ) : (
               <ul className="space-y-3">
-                {cart.map((l) => {
+                {cart.map((l, index) => {
                   const info = priceMap.get(l.menuId);
+                  const unit = lineUnitPrice(l);
+                  const menuGroups = groupsByMenu.get(l.menuId) ?? [];
+                  const optionNames = l.options.map((id) => optionMap.get(id)?.name ?? "ตัวเลือกที่ไม่พบ");
                   return (
-                    <li key={l.menuId} className="rounded-xl border border-ink-200 p-3">
+                    <li key={`${l.menuId}-${index}`} className="rounded-xl border border-ink-200 p-3">
                       <div className="flex flex-wrap items-start justify-between gap-2">
                         <div className="min-w-0">
                           <p className="font-bold text-ink-900">{info?.name ?? "เมนูที่เลือก"}</p>
                           <p className="text-sm text-ink-600">
-                            {info ? fmtPrice(info.price) : "กำลังตรวจราคา…"} · รวม{" "}
-                            {info ? fmtPrice(info.price * l.quantity) : "–"}
+                            {unit !== null ? fmtPrice(unit) : "กำลังตรวจราคา…"}
+                            {l.options.length > 0 ? ` · ตัวเลือก: ${optionNames.join(" · ")}` : null} · รวม{" "}
+                            {unit !== null ? fmtPrice(unit * l.quantity) : "–"}
                           </p>
-                          {!info && !menuLoading ? (
+                          {unit === null && !menuLoading ? (
                             <p className="mt-1 text-sm font-medium text-red-700">
-                              เมนูนี้อาจไม่พร้อมขายแล้ว ระบบจะตรวจอีกครั้งตอนยืนยัน
+                              เมนูหรือตัวเลือกนี้อาจไม่พร้อมขายแล้ว ระบบจะตรวจอีกครั้งตอนยืนยัน
                             </p>
                           ) : null}
                         </div>
                         <button
                           type="button"
-                          onClick={() => setCart((c) => removeFromCart(c, l.menuId))}
+                          onClick={() => setCart((c) => removeFromCart(c, l.menuId, l.options))}
                           aria-label={`ลบ${info?.name ?? "รายการ"}ออกจากตะกร้า`}
                           className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl border border-red-300 bg-white px-3 py-1.5 text-sm font-semibold text-red-700 hover:bg-red-50"
                         >
                           ลบ
                         </button>
                       </div>
+                      {menuGroups.length > 0 ? (
+                        <fieldset className="mt-2 space-y-2 rounded-xl bg-ink-50 p-2.5">
+                          <legend className="px-1 text-sm font-semibold text-ink-800">ตัวเลือก (กลุ่มละ 1 ตัวเลือก)</legend>
+                          {menuGroups.map((og) => (
+                            <div key={og.id}>
+                              <p className="text-xs font-semibold text-ink-600">{og.name}</p>
+                              <div className="mt-1 flex flex-wrap gap-1.5" role="group" aria-label={og.name}>
+                                {og.options.map((o) => {
+                                  const checked = l.options.includes(o.id);
+                                  return (
+                                    <label
+                                      key={o.id}
+                                      className={`inline-flex min-h-[44px] cursor-pointer items-center gap-1.5 rounded-xl border px-3 py-1.5 text-sm font-medium ${
+                                        checked
+                                          ? "border-brand-600 bg-brand-50 text-brand-800"
+                                          : "border-ink-300 bg-white text-ink-700 hover:border-ink-400"
+                                      }`}
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        className="h-5 w-5 accent-brand-600"
+                                        checked={checked}
+                                        onChange={(e) =>
+                                          setCart((c) =>
+                                            e.target.checked
+                                              ? // เลือกตัวใหม่ในกลุ่มเดียวกันให้แทนที่ตัวเดิม (กลุ่มละ 1 ตัวเลือก)
+                                                setLineOption(c, index, o.id, og.options.map((x) => x.id))
+                                              : toggleLineOption(c, index, o.id),
+                                          )
+                                        }
+                                        aria-label={`${o.name} ${fmtDelta(o.priceDelta)}`}
+                                      />
+                                      {o.name} ({fmtDelta(o.priceDelta)})
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </fieldset>
+                      ) : null}
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <div className="flex items-center gap-1" role="group" aria-label={`จำนวน${info?.name ?? ""}`}>
                           <button
                             type="button"
-                            onClick={() => setCart((c) => setQuantity(c, l.menuId, l.quantity - 1))}
+                            onClick={() => setCart((c) => setQuantity(c, l.menuId, l.quantity - 1, l.options))}
                             disabled={l.quantity <= 1}
                             aria-label="ลดจำนวน"
                             className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl border border-ink-300 bg-white text-lg font-bold text-ink-800 hover:bg-ink-50 disabled:cursor-not-allowed disabled:opacity-50"
@@ -230,7 +320,7 @@ export default function CartPage() {
                           </span>
                           <button
                             type="button"
-                            onClick={() => setCart((c) => setQuantity(c, l.menuId, l.quantity + 1))}
+                            onClick={() => setCart((c) => setQuantity(c, l.menuId, l.quantity + 1, l.options))}
                             disabled={l.quantity >= 20}
                             aria-label="เพิ่มจำนวน"
                             className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl border border-ink-300 bg-white text-lg font-bold text-ink-800 hover:bg-ink-50 disabled:cursor-not-allowed disabled:opacity-50"
@@ -238,18 +328,33 @@ export default function CartPage() {
                             +
                           </button>
                         </div>
-                        <div className="min-w-[12rem] flex-1">
-                          <label htmlFor={`note-${l.menuId}`} className="sr-only">
-                            หมายเหตุ{info ? ` ${info.name}` : ""} (ไม่เกิน 200 ตัวอักษร)
-                          </label>
-                          <input
-                            id={`note-${l.menuId}`}
-                            className={inputClass}
-                            value={l.note}
-                            maxLength={200}
-                            onChange={(e) => setCart((c) => setNote(c, l.menuId, e.target.value))}
-                            placeholder="หมายเหตุ เช่น ไม่ใส่ผัก (ไม่เกิน 200 ตัวอักษร)"
-                          />
+                        <div className="min-w-[12rem] flex-1 space-y-2">
+                          <div>
+                            <label htmlFor={`note-${l.menuId}-${index}`} className="sr-only">
+                              หมายเหตุ{info ? ` ${info.name}` : ""} (ไม่เกิน 200 ตัวอักษร)
+                            </label>
+                            <input
+                              id={`note-${l.menuId}-${index}`}
+                              className={inputClass}
+                              value={l.note}
+                              maxLength={200}
+                              onChange={(e) => setCart((c) => setNote(c, l.menuId, e.target.value, l.options))}
+                              placeholder="หมายเหตุ เช่น ไม่ใส่ผัก (ไม่เกิน 200 ตัวอักษร)"
+                            />
+                          </div>
+                          <div>
+                            <label htmlFor={`special-${l.menuId}-${index}`} className="sr-only">
+                              ความต้องการเฉพาะ{info ? ` ${info.name}` : ""} (ไม่เกิน 200 ตัวอักษร ไม่เปลี่ยนราคา)
+                            </label>
+                            <input
+                              id={`special-${l.menuId}-${index}`}
+                              className={inputClass}
+                              value={l.specialRequest}
+                              maxLength={200}
+                              onChange={(e) => setCart((c) => setSpecialRequest(c, l.menuId, e.target.value, l.options))}
+                              placeholder="ความต้องการเฉพาะ เช่น เผ็ดน้อย (ไม่เปลี่ยนราคา)"
+                            />
+                          </div>
                         </div>
                       </div>
                     </li>
@@ -362,7 +467,7 @@ export default function CartPage() {
                 {submitting ? "กำลังยืนยันคำสั่งซื้อ…" : `ยืนยันคำสั่งซื้อ · ${fmtPrice(total)}`}
               </button>
               <p className="text-xs text-ink-500">
-                กดยืนยันแล้วระบบจะตรวจราคาและสถานะเมนูอีกครั้งก่อนสร้างคำสั่งซื้อ
+                กดยืนยันแล้วระบบจะตรวจราคา ตัวเลือก และสต๊อกอีกครั้งก่อนสร้างคำสั่งซื้อ
                 ราคาที่บันทึกจะไม่เปลี่ยนแม้ราคาเมนูภายหลังเปลี่ยน
               </p>
             </div>
@@ -396,7 +501,8 @@ export default function CartPage() {
                   <h3 className="font-bold text-ink-900">{g.category}</h3>
                   <ul className="grid gap-2 sm:grid-cols-2">
                     {g.items.map((m) => {
-                      const line = cart.find((l) => l.menuId === m.id);
+                      const inStock = m.inStock ?? true;
+                      const countInCart = cart.filter((l) => l.menuId === m.id).reduce((n, l) => n + l.quantity, 0);
                       return (
                         <li
                           key={m.id}
@@ -405,15 +511,22 @@ export default function CartPage() {
                           <div className="min-w-0">
                             <p className="truncate font-semibold text-ink-900">{m.name}</p>
                             <p className="text-sm font-bold text-brand-700">{fmtPrice(m.price)}</p>
+                            {(m.optionGroups ?? []).length > 0 ? (
+                              <p className="truncate text-xs text-ink-500">
+                                มี {(m.optionGroups ?? []).length} กลุ่มตัวเลือก
+                              </p>
+                            ) : null}
+                            {inStock ? null : (
+                              <p className="text-xs font-semibold text-red-700">วัตถุดิบหมดชั่วคราว</p>
+                            )}
                           </div>
-                          {line ? (
-                            <Badge tone="brand">ในตะกร้า {line.quantity}</Badge>
-                          ) : null}
+                          {countInCart > 0 ? <Badge tone="brand">ในตะกร้า {countInCart}</Badge> : null}
                           <button
                             type="button"
                             onClick={() => add(m.id)}
+                            disabled={!inStock}
                             aria-label={`เพิ่ม${m.name}ลงตะกร้า`}
-                            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
+                            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             เพิ่ม
                           </button>

@@ -144,6 +144,136 @@ export interface PublicMenuItem {
   sortOrder: number;
 }
 
+// ---------- Ticket 07: ตัวเลือกเมนู ----------
+
+export interface PublicMenuOption {
+  id: string;
+  name: string;
+  priceDelta: number;
+  sortOrder: number;
+}
+
+export interface PublicMenuOptionGroup {
+  id: string;
+  name: string;
+  sortOrder: number;
+  options: PublicMenuOption[];
+}
+
+export interface PublicMenuItemWithOptions extends PublicMenuItem {
+  optionGroups: PublicMenuOptionGroup[];
+  /** พร้อมขายจากสต๊อก (false = วัตถุดิบหมดชั่วคราว) */
+  inStock: boolean;
+}
+
+export interface PublicMenuGroupWithOptions {
+  category: string;
+  items: PublicMenuItemWithOptions[];
+}
+
+export interface MenuOptionGroup {
+  id: string;
+  menuId: string;
+  name: string;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MenuOption {
+  id: string;
+  groupId: string;
+  menuId: string;
+  name: string;
+  priceDelta: number;
+  isEnabled: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MenuOptionGroupDetail extends MenuOptionGroup {
+  options: MenuOption[];
+}
+
+// ---------- Ticket 07: วัตถุดิบ/สูตร/สต๊อก ----------
+
+export interface Ingredient {
+  id: string;
+  name: string;
+  unit: string;
+  onHand: number;
+  reserved: number;
+  /** พร้อมขาย = คงเหลือจริง − ยอดจอง */
+  available: number;
+  reorderThreshold: number;
+  latestCost: number;
+  isEnabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type StockOp =
+  | "receive"
+  | "reserve"
+  | "release"
+  | "consume"
+  | "return"
+  | "waste"
+  | "expire"
+  | "personal_use"
+  | "adjust";
+
+export type ManualStockOp = "receive" | "return" | "waste" | "expire" | "personal_use" | "adjust";
+
+export const STOCK_OP_LABELS: Record<StockOp, string> = {
+  receive: "รับเข้า",
+  reserve: "จองสต๊อก",
+  release: "คืนยอดจอง",
+  consume: "ตัดใช้จริง",
+  return: "รับคืน",
+  waste: "ของเสีย",
+  expire: "หมดอายุ",
+  personal_use: "ใช้ส่วนตัว",
+  adjust: "ปรับยอดตรวจนับ",
+};
+
+export const MANUAL_STOCK_OPS: ManualStockOp[] = ["receive", "return", "waste", "expire", "personal_use", "adjust"];
+
+export interface StockLedgerEntry {
+  id: string;
+  ingredientId: string;
+  op: StockOp;
+  deltaOnHand: number;
+  deltaReserved: number;
+  beforeOnHand: number;
+  afterOnHand: number;
+  beforeReserved: number;
+  afterReserved: number;
+  reason: string;
+  actorId: string | null;
+  actorUsername: string | null;
+  orderId: string | null;
+  reference: string | null;
+  createdAt: string;
+}
+
+export interface RecipeLine {
+  ingredientId: string;
+  qty: number;
+}
+
+export interface Recipe {
+  id: string;
+  targetType: "menu" | "option";
+  targetId: string;
+  version: number;
+  lines: RecipeLine[];
+  estimatedCostPerUnit: number;
+  createdBy: string | null;
+  createdAt: string;
+}
+
 export interface MenuGroup {
   category: string;
   items: PublicMenuItem[];
@@ -214,6 +344,12 @@ export interface OrderItem {
   quantity: number;
   lineTotal: number;
   note: string | null;
+  /** Ticket 07: snapshot ตัวเลือกที่เลือก (ชื่อ+ส่วนต่างราคาตอนยืนยัน) */
+  selectedOptions: { groupId: string; groupName: string; optionId: string; optionName: string; priceDelta: number }[];
+  /** Ticket 07: ความต้องการเฉพาะ — ข้อความล้วน ไม่เปลี่ยนราคา */
+  specialRequest: string | null;
+  /** Ticket 07: ต้นทุนวัตถุดิบประมาณการของรายการนี้ */
+  estimatedCost: number;
 }
 
 export interface OrderDetail {
@@ -231,6 +367,10 @@ export interface OrderDetail {
   /** Ticket 06: ผูกกับโต๊ะ/รอบที่เปิดอยู่ (null เมื่อไม่ได้ผูก) */
   tableId?: string | null;
   roundId?: string | null;
+  /** Ticket 07: จองสต๊อกแล้ว / ตัดสต๊อกจริงแล้ว / ต้นทุนประมาณการรวม */
+  stockReserved?: boolean;
+  stockConsumed?: boolean;
+  estimatedCost?: number;
   createdAt: string;
   updatedAt: string;
   items: OrderItem[];
@@ -239,7 +379,7 @@ export interface OrderDetail {
 export interface CreateOrderRequest {
   serviceType: OrderServiceType;
   scheduledAt?: string | null;
-  items: { menuId: string; quantity: number; note?: string | null }[];
+  items: { menuId: string; quantity: number; note?: string | null; options?: string[] | null; specialRequest?: string | null }[];
   guestName?: string;
   guestPhone?: string;
   idempotencyKey: string;
@@ -450,7 +590,8 @@ export const api = {
     req<{ customer: PublicCustomer }>(`/api/admin/customers/${id}/activate`, { method: "POST" }, true),
   customerAudit: () => req<{ items: AuditItem[] }>("/api/audit/customers?limit=100"),
   // Ticket 04: เมนู (public ไม่ต้อง login; หลังร้านเฉพาะ Owner/Admin)
-  menuPublic: () => req<{ groups: MenuGroup[] }>("/api/menu/public"),
+  // Ticket 07: public แนบกลุ่มตัวเลือกที่เปิดขาย + สถานะพร้อมขายจากสต๊อก
+  menuPublic: () => req<{ groups: PublicMenuGroupWithOptions[] }>("/api/menu/public"),
   menuList: (q: MenuListQuery = {}) => {
     const params = new URLSearchParams();
     if (q.includeArchived) params.set("includeArchived", "1");
@@ -495,6 +636,66 @@ export const api = {
       true,
     ),
   orderAudit: () => req<{ items: AuditItem[] }>("/api/audit/orders?limit=100"),
+  // Ticket 07: ตัดสต๊อกจริงเมื่อเริ่มทำ (พนักงานหลังร้าน; เรียกซ้ำเป็น no-op)
+  orderConsume: (id: string) =>
+    req<{ order: OrderDetail; deduplicated: boolean }>(`/api/orders/${id}/consume`, { method: "POST", body: JSON.stringify({}) }, true),
+  // Ticket 07: กลุ่มตัวเลือก + ตัวเลือกของเมนู (หลังร้าน Owner/Admin)
+  menuOptionGroups: (menuId: string) =>
+    req<{ groups: MenuOptionGroupDetail[] }>(`/api/menu/${menuId}/option-groups`),
+  menuOptionGroupCreate: (menuId: string, body: { name: string; sortOrder?: number }) =>
+    req<{ group: MenuOptionGroup }>(`/api/menu/${menuId}/option-groups`, { method: "POST", body: JSON.stringify(body) }, true),
+  menuOptionGroupUpdate: (groupId: string, patch: { name?: string; sortOrder?: number }) =>
+    req<{ group: MenuOptionGroup }>(
+      `/api/menu/option-groups/${groupId}`,
+      { method: "PATCH", body: JSON.stringify(patch) },
+      true,
+    ),
+  menuOptionCreate: (groupId: string, body: { name: string; priceDelta?: number; isEnabled?: boolean; sortOrder?: number }) =>
+    req<{ option: MenuOption }>(
+      `/api/menu/option-groups/${groupId}/options`,
+      { method: "POST", body: JSON.stringify(body) },
+      true,
+    ),
+  menuOptionUpdate: (optionId: string, patch: { name?: string; priceDelta?: number; isEnabled?: boolean; sortOrder?: number }) =>
+    req<{ option: MenuOption }>(
+      `/api/menu/options/${optionId}`,
+      { method: "PATCH", body: JSON.stringify(patch) },
+      true,
+    ),
+  // Ticket 07: วัตถุดิบ/สต๊อก/สูตร/ledger (หลังร้าน Owner/Admin)
+  ingredients: (includeDisabled = false) =>
+    req<{ items: Ingredient[] }>(`/api/inventory/ingredients${includeDisabled ? "?includeDisabled=1" : ""}`),
+  ingredientGet: (id: string) =>
+    req<{ item: Ingredient }>(`/api/inventory/ingredients/${id}`),
+  ingredientCreate: (body: { name: string; unit: string; reorderThreshold?: number; latestCost?: number; initialOnHand?: number }) =>
+    req<{ item: Ingredient }>("/api/inventory/ingredients", { method: "POST", body: JSON.stringify(body) }, true),
+  ingredientUpdate: (id: string, patch: { name?: string; reorderThreshold?: number; latestCost?: number; isEnabled?: boolean }) =>
+    req<{ item: Ingredient }>(`/api/inventory/ingredients/${id}`, { method: "PATCH", body: JSON.stringify(patch) }, true),
+  stockMove: (id: string, body: { op: ManualStockOp; qty: number; reason: string; reference?: string | null }) =>
+    req<{ ingredient: Ingredient; entry: StockLedgerEntry }>(
+      `/api/inventory/ingredients/${id}/stock`,
+      { method: "POST", body: JSON.stringify(body) },
+      true,
+    ),
+  stockLedger: (q: { ingredientId?: string; orderId?: string; op?: StockOp; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (q.ingredientId) params.set("ingredientId", q.ingredientId);
+    if (q.orderId) params.set("orderId", q.orderId);
+    if (q.op) params.set("op", q.op);
+    params.set("limit", String(q.limit ?? 50));
+    return req<{ entries: StockLedgerEntry[] }>(`/api/inventory/ledger?${params.toString()}`);
+  },
+  recipeCreate: (body: { targetType: "menu" | "option"; targetId: string; lines: RecipeLine[] }) =>
+    req<{ recipe: Recipe }>("/api/inventory/recipes", { method: "POST", body: JSON.stringify(body) }, true),
+  recipes: (targetType: "menu" | "option", targetId: string) =>
+    req<{ recipes: Recipe[] }>(
+      `/api/inventory/recipes?targetType=${targetType}&targetId=${encodeURIComponent(targetId)}`,
+    ),
+  recipeLatest: (targetType: "menu" | "option", targetId: string) =>
+    req<{ recipe: Recipe }>(
+      `/api/inventory/recipes/latest?targetType=${targetType}&targetId=${encodeURIComponent(targetId)}`,
+    ),
+  inventoryAudit: () => req<{ items: AuditItem[] }>("/api/audit/inventory?limit=100"),
   // Ticket 06: การจอง (ลูกค้า) + เช็กอิน/รอบโต๊ะ + จัดการหลังร้าน (Owner/Admin)
   reservationRecommend: (partySize: number, reservedAt: string) =>
     req<{ table: RecommendedTable | null }>(

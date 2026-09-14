@@ -1,15 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { MENU_KIND_LABELS, api, type MenuGroup, type MenuKind } from "../lib/api";
+import { MENU_KIND_LABELS, api, type MenuKind, type PublicMenuGroupWithOptions } from "../lib/api";
 import { Alert, Badge, Panel, Spinner } from "../components/ui";
 
 function fmtPrice(n: number): string {
   return `${n.toLocaleString("th-TH", { maximumFractionDigits: 2 })} บาท`;
 }
 
+function fmtDelta(n: number): string {
+  if (n === 0) return "ไม่เพิ่มราคา";
+  const sign = n > 0 ? "+" : "−";
+  return `${sign}${Math.abs(n).toLocaleString("th-TH", { maximumFractionDigits: 2 })} บาท`;
+}
+
 /** หน้าเมนูสาธารณะ: ดูได้โดยไม่ต้องเข้าสู่ระบบ — เฉพาะเมนูพร้อมขาย จัดกลุ่มตามหมวด */
 export default function MenuPublicPage() {
-  const [groups, setGroups] = useState<MenuGroup[]>([]);
+  const [groups, setGroups] = useState<PublicMenuGroupWithOptions[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [kind, setKind] = useState<"" | MenuKind>("");
@@ -137,29 +143,47 @@ export default function MenuPublicPage() {
               <section key={g.category} aria-label={`หมวด ${g.category}`} className="space-y-3">
                 <h2 className="text-lg font-bold text-ink-900">{g.category}</h2>
                 <ul className="grid gap-3 sm:grid-cols-2">
-                  {g.items.map((m) => (
-                    <li key={m.id} className="overflow-hidden rounded-2xl border border-ink-200 bg-white shadow-sm">
-                      {m.imageUrl ? (
-                        <img
-                          src={m.imageUrl}
-                          alt={`รูป${m.name}`}
-                          loading="lazy"
-                          className="h-36 w-full object-cover"
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).style.display = "none";
-                          }}
-                        />
-                      ) : null}
-                      <div className="space-y-1.5 p-4">
-                        <div className="flex flex-wrap items-start justify-between gap-2">
-                          <p className="text-base font-bold text-ink-900">{m.name}</p>
-                          <Badge tone="brand">{MENU_KIND_LABELS[m.kind]}</Badge>
+                  {g.items.map((m) => {
+                    // Ticket 07: ข้อมูลเก่า/จำลองอาจไม่มีฟิลด์ใหม่ — ค่าเริ่มต้นพร้อมขายโดยไม่มีตัวเลือก
+                    const optionGroups = m.optionGroups ?? [];
+                    const inStock = m.inStock ?? true;
+                    return (
+                      <li key={m.id} className="overflow-hidden rounded-2xl border border-ink-200 bg-white shadow-sm">
+                        {m.imageUrl ? (
+                          <img
+                            src={m.imageUrl}
+                            alt={`รูป${m.name}`}
+                            loading="lazy"
+                            className="h-36 w-full object-cover"
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).style.display = "none";
+                            }}
+                          />
+                        ) : null}
+                        <div className="space-y-1.5 p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <p className="text-base font-bold text-ink-900">{m.name}</p>
+                            <span className="flex flex-wrap gap-1.5">
+                              <Badge tone="brand">{MENU_KIND_LABELS[m.kind]}</Badge>
+                              {inStock ? null : <Badge tone="danger">วัตถุดิบหมดชั่วคราว</Badge>}
+                            </span>
+                          </div>
+                          {m.description ? <p className="text-sm text-ink-600">{m.description}</p> : null}
+                          <p className="text-base font-bold text-brand-700">{fmtPrice(m.price)}</p>
+                          {optionGroups.length > 0 ? (
+                            <div className="space-y-1 border-t border-ink-100 pt-2">
+                              {optionGroups.map((og) => (
+                                <p key={og.id} className="text-xs text-ink-600">
+                                  <span className="font-semibold text-ink-800">{og.name}:</span>{" "}
+                                  {og.options.map((o) => `${o.name} (${fmtDelta(o.priceDelta)})`).join(" · ")}
+                                </p>
+                              ))}
+                            </div>
+                          ) : null}
                         </div>
-                        {m.description ? <p className="text-sm text-ink-600">{m.description}</p> : null}
-                        <p className="text-base font-bold text-brand-700">{fmtPrice(m.price)}</p>
-                      </div>
-                    </li>
-                  ))}
+                      </li>
+                    );
+                  })}
                 </ul>
               </section>
             ))}

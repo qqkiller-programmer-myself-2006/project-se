@@ -41,6 +41,11 @@ const orderItemSchema = z.object({
   menuId: z.unknown(),
   quantity: z.unknown(),
   note: z.unknown().optional(),
+  /** Ticket 07: รหัสตัวเลือกที่เลือกในรายการนี้ */
+  options: z.unknown().optional(),
+  optionIds: z.unknown().optional(),
+  /** Ticket 07: ความต้องการเฉพาะ — ข้อความล้วน ไม่เปลี่ยนราคา */
+  specialRequest: z.unknown().optional(),
 });
 
 const orderBodySchema = z.object({
@@ -149,7 +154,7 @@ export function createOrderRouter(deps: OrderRouterDeps): express.Router {
         serviceType: "dine_in" | "takeaway" | "preorder";
         scheduledAt?: string | null;
         idempotencyKey: string;
-        items: { menuId: string; quantity: number; note?: string | null }[];
+        items: { menuId: string; quantity: number; note?: string | null; options?: string[] | null; specialRequest?: string | null }[];
         tableId?: string | null;
         roundId?: string | null;
       };
@@ -162,13 +167,21 @@ export function createOrderRouter(deps: OrderRouterDeps): express.Router {
         // Ticket 06: linkage โต๊ะ/รอบส่งต่อให้ store ตรวจ (รอบต้องเปิด โต๊ะต้องตรงรอบ)
         const tableId = typeof b.tableId === "string" && b.tableId.trim() ? b.tableId.trim() : null;
         const roundId = typeof b.roundId === "string" && b.roundId.trim() ? b.roundId.trim() : null;
+        // Ticket 07: ตัวเลือก + ความต้องการเฉพาะแนบต่อรายการ (store ตรวจว่าเป็นของเมนูนั้น/เปิดขาย)
+        const items = lines.map((l) => ({
+          menuId: l.menuId,
+          quantity: l.quantity,
+          note: l.note,
+          options: l.optionIds,
+          specialRequest: l.specialRequest,
+        }));
         if (customer) {
           input = {
             customerId: customer.id,
             serviceType,
             scheduledAt,
             idempotencyKey,
-            items: lines.map((l) => ({ menuId: l.menuId, quantity: l.quantity, note: l.note })),
+            items,
             tableId,
             roundId,
           };
@@ -183,7 +196,7 @@ export function createOrderRouter(deps: OrderRouterDeps): express.Router {
             serviceType,
             scheduledAt,
             idempotencyKey,
-            items: lines.map((l) => ({ menuId: l.menuId, quantity: l.quantity, note: l.note })),
+            items,
             tableId,
             roundId,
           };
@@ -353,6 +366,28 @@ export function createOrderRouter(deps: OrderRouterDeps): express.Router {
       next(err);
     }
   });
+
+  // ---------- Ticket 07: ตัดสต๊อกจริงเมื่อเริ่มทำ (พนักงานหลังร้านทุกบทบาท) ----------
+  // - ต้องเป็น staff ที่ login แล้ว (requireAuth ตรวจ sid — ลูกค้า/Guest เรียกไม่ได้)
+  // - จองไว้แล้ว + ยังไม่ตัด → ตัดจริงพร้อม ledger/audit; ตัดแล้วเรียกซ้ำเป็น no-op
+  router.post(
+    "/api/orders/:id/consume",
+    requireAuth,
+    requireCsrf,
+    async (req, res, next) => {
+      try {
+        const actor = req.user!;
+        const { order, deduplicated } = await store.consumeOrderStock(req.params.id, {
+          actorId: actor.id,
+          actorUsername: actor.username,
+          ip: clientIp(req),
+        });
+        res.json({ order, deduplicated });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
 
   return router;
 }

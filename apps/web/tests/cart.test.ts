@@ -29,7 +29,7 @@ function memStorage(initial?: Record<string, string>) {
 describe("ตะกร้าฝั่งเว็บ (Ticket 05 lib)", () => {
   it("เพิ่ม/ลดจำนวน รวมยอด และลบรายการ", () => {
     let cart = addToCart([], "m1");
-    expect(cart).toEqual([{ menuId: "m1", quantity: 1, note: "" }]);
+    expect(cart).toEqual([{ menuId: "m1", quantity: 1, note: "", options: [], specialRequest: "" }]);
     cart = addToCart(cart, "m1");
     cart = addToCart(cart, "m2");
     expect(cartCount(cart)).toBe(3);
@@ -43,14 +43,14 @@ describe("ตะกร้าฝั่งเว็บ (Ticket 05 lib)", () => {
   });
 
   it("จำนวนเกิน 20 ไม่เพิ่ม/ไม่รับค่า", () => {
-    let cart = [{ menuId: "m1", quantity: 20, note: "" }];
+    let cart = [{ menuId: "m1", quantity: 20, note: "", options: [], specialRequest: "" }];
     expect(addToCart(cart, "m1")).toEqual(cart);
     expect(setQuantity(cart, "m1", 21)).toEqual(cart);
     expect(setQuantity(cart, "m1", -1)).toEqual(cart);
   });
 
   it("หมายเหตุถูกตัดที่ 200 ตัวอักษร", () => {
-    const cart = setNote([{ menuId: "m1", quantity: 1, note: "" }], "m1", "ก".repeat(250));
+    const cart = setNote([{ menuId: "m1", quantity: 1, note: "", options: [], specialRequest: "" }], "m1", "ก".repeat(250));
     expect(cart[0]!.note).toHaveLength(200);
   });
 
@@ -58,8 +58,8 @@ describe("ตะกร้าฝั่งเว็บ (Ticket 05 lib)", () => {
     const storage = memStorage();
     saveCart(
       [
-        { menuId: "m1", quantity: 2, note: "ไม่เผ็ด" },
-        { menuId: "m2", quantity: 1, note: "" },
+        { menuId: "m1", quantity: 2, note: "ไม่เผ็ด", options: [], specialRequest: "" },
+        { menuId: "m2", quantity: 1, note: "", options: [], specialRequest: "" },
       ],
       storage,
     );
@@ -69,15 +69,15 @@ describe("ตะกร้าฝั่งเว็บ (Ticket 05 lib)", () => {
     // ข้อมูลเสีย: เมนูซ้ำ/จำนวนผิด/ไม่มี menuId ถูกกรองทิ้ง
     const dirty = memStorage({
       [CART_STORAGE_KEY]: JSON.stringify([
-        { menuId: "m1", quantity: 1, note: "" },
-        { menuId: "m1", quantity: 2, note: "" },
+        { menuId: "m1", quantity: 1, note: "", options: [], specialRequest: "" },
+        { menuId: "m1", quantity: 2, note: "", options: [], specialRequest: "" },
         { menuId: "", quantity: 1 },
         { menuId: "m9", quantity: 0 },
         { menuId: "m9", quantity: 99 },
         "oops",
       ]),
     });
-    expect(loadCart(dirty)).toEqual([{ menuId: "m1", quantity: 1, note: "" }]);
+    expect(loadCart(dirty)).toEqual([{ menuId: "m1", quantity: 1, note: "", options: [], specialRequest: "" }]);
 
     // JSON พัง → ตะกร้าว่าง
     expect(loadCart(memStorage({ [CART_STORAGE_KEY]: "{nope" }))).toEqual([]);
@@ -87,7 +87,7 @@ describe("ตะกร้าฝั่งเว็บ (Ticket 05 lib)", () => {
   });
 
   it("ยอดรวมปัดเศษทศนิยม 2 ตำแหน่ง", () => {
-    const cart = [{ menuId: "m1", quantity: 3, note: "" }];
+    const cart = [{ menuId: "m1", quantity: 3, note: "", options: [], specialRequest: "" }];
     expect(cartTotal(cart, () => 19.99)).toBe(59.97);
   });
 });

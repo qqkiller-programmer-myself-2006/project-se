@@ -15,6 +15,7 @@ import CustomerProfilePage from "./pages/CustomerProfile";
 import AdminCustomersPage from "./pages/AdminCustomers";
 import MenuPublicPage from "./pages/MenuPublic";
 import MenuAdminPage from "./pages/MenuAdmin";
+import InventoryPage from "./pages/Inventory";
 import CartPage from "./pages/Cart";
 import MyOrdersPage from "./pages/MyOrders";
 import AdminOrdersPage from "./pages/AdminOrders";
@@ -164,6 +165,11 @@ export default function App() {
               </NavLink>
             )}
             {isManager && (
+              <NavLink to="/admin/inventory" className={({ isActive }) => navClass(isActive)}>
+                วัตถุดิบ/สต๊อก
+              </NavLink>
+            )}
+            {isManager && (
               <NavLink to="/tables" className={({ isActive }) => navClass(isActive)}>
                 โต๊ะ
               </NavLink>
@@ -209,6 +215,7 @@ export default function App() {
           {isManager && <Route path="/admin/reservations" element={<AdminReservationsPage />} />}
           {isManager && <Route path="/admin/orders" element={<AdminOrdersPage />} />}
           {isManager && <Route path="/admin/menu" element={<MenuAdminPage />} />}
+          {isManager && <Route path="/admin/inventory" element={<InventoryPage />} />}
           {isManager && <Route path="/shop" element={<ShopPage />} />}
           {isManager && <Route path="/tables" element={<TablesPage />} />}
           {isManager && <Route path="/admin/customers" element={<AdminCustomersPage />} />}

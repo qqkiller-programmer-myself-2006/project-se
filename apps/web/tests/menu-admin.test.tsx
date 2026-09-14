@@ -61,7 +61,8 @@ describe("หน้าจัดการเมนู (Owner/Admin, Ticket 04)", 
         <MenuAdminPage />
       </MemoryRouter>,
     );
-    expect(await screen.findByText(/ข้าวผัดป้าอ้อ/)).toBeInTheDocument();
+    // ชื่อเมนูปรากฏทั้งในรายการและในตัวเลือกเมนูของส่วนจัดการตัวเลือก (Ticket 07) — ขอแค่อย่างน้อยหนึ่งจุด
+    expect((await screen.findAllByText(/ข้าวผัดป้าอ้อ/)).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("อาหาร").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("เครื่องดื่ม").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("เปิดขาย").length).toBeGreaterThanOrEqual(1);
@@ -100,7 +101,8 @@ describe("หน้าจัดการเมนู (Owner/Admin, Ticket 04)", 
         <MenuAdminPage />
       </MemoryRouter>,
     );
-    expect(await screen.findByText(/ข้าวผัดป้าอ้อ/)).toBeInTheDocument();
+    // ชื่อเมนูปรากฏทั้งในรายการและในตัวเลือกเมนูของส่วนจัดการตัวเลือก (Ticket 07) — ขอแค่อย่างน้อยหนึ่งจุด
+    expect((await screen.findAllByText(/ข้าวผัดป้าอ้อ/)).length).toBeGreaterThanOrEqual(1);
     await user.type(screen.getByLabelText(/หมวดหมู่/), "อาหารจานเดียว");
     await user.type(screen.getByLabelText(/ชื่อเมนู/), "ข้าวผัดป้าอ้อ");
     await user.type(screen.getByLabelText(/ราคา/), "50");
@@ -120,7 +122,8 @@ describe("หน้าจัดการเมนู (Owner/Admin, Ticket 04)", 
         <MenuAdminPage />
       </MemoryRouter>,
     );
-    expect(await screen.findByText(/ข้าวผัดป้าอ้อ/)).toBeInTheDocument();
+    // ชื่อเมนูปรากฏทั้งในรายการและในตัวเลือกเมนูของส่วนจัดการตัวเลือก (Ticket 07) — ขอแค่อย่างน้อยหนึ่งจุด
+    expect((await screen.findAllByText(/ข้าวผัดป้าอ้อ/)).length).toBeGreaterThanOrEqual(1);
     const group = screen.getByRole("group", { name: "จัดการเมนู ข้าวผัดป้าอ้อ" });
     await user.click(within(group).getByRole("button", { name: "ปิดขาย" }));
     expect(await screen.findByRole("status")).toHaveTextContent("ปิดขายเมนู ข้าวผัดป้าอ้อ แล้ว");
@@ -139,7 +142,8 @@ describe("หน้าจัดการเมนู (Owner/Admin, Ticket 04)", 
         <MenuAdminPage />
       </MemoryRouter>,
     );
-    expect(await screen.findByText(/ข้าวผัดป้าอ้อ/)).toBeInTheDocument();
+    // ชื่อเมนูปรากฏทั้งในรายการและในตัวเลือกเมนูของส่วนจัดการตัวเลือก (Ticket 07) — ขอแค่อย่างน้อยหนึ่งจุด
+    expect((await screen.findAllByText(/ข้าวผัดป้าอ้อ/)).length).toBeGreaterThanOrEqual(1);
     const group = screen.getByRole("group", { name: "จัดการเมนู ข้าวผัดป้าอ้อ" });
     await user.click(within(group).getByRole("button", { name: "archive" }));
     expect(confirm).toHaveBeenCalled();

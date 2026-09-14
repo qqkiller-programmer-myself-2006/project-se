@@ -55,6 +55,25 @@
 - ไม่รวมตาม scope (งาน ticket ถัดไป): LINE, payment/deposit, external notification,
   full waitlist, Prisma/experiments
 
+### Ticket 07 — ตัวเลือกเมนู สูตร และสต๊อก
+
+- สถานะ: resolved (2026-09-14, implement โดย Muse Spark via opencode — สานงานค้างใน working tree)
+- ผลตรวจ: API 172 ผ่าน/25 ข้าม (MySQL int ไม่มี TEST_DATABASE_URL), Web 134 ผ่าน
+  (เดิม 126 + ใหม่ 8: inventory/stock/ledger/recipe/options),
+  typecheck ผ่าน, build ผ่าน (api tsc + web vite 62 modules)
+- ไม่แตะ Prisma/experiments/package dependencies/preset งานอื่นที่ค้างอยู่ก่อนแล้ว
+  (apps/api/package.json, package-lock.json, apps/api/.gitignore, generated/,
+  prisma.config.ts, prisma/, src/db/, experiments/); Tickets 01–06 ไม่ regression
+  (ซ่อมเฉพาะจุดที่ Ticket 07 ทำให้พัง: cart.test.ts shape ใหม่ + menu-admin.test.tsx
+  query กำกวมจาก selector ตัวเลือกเมนูใหม่)
+- งานที่ข้าม (บันทึกตาม ticket — ไม่ทำให้ ticket ล้ม):
+  MySQL runtime จริง, การชำระเงินจริง/SlipOK/PromptPay, งานคิวครัว/เครื่องดื่ม,
+  LINE notification, image/external storage, Docker/MySQL runtime, browser QA จริง
+  (รวม Playwright/Taste — ไม่มี reference URL ภายนอก เลื่อนตามนโยบายโปรเจกต์)
+- ไม่รวมตาม scope (งาน ticket ถัดไป): payment/ใบเสร็จ/คืนเงิน (08),
+  คิวครัว/เครื่องดื่ม (09), คะแนน/รางวัล (10), การเงิน/Dashboard/CSV (11),
+  LINE (12), capacity/พยากรณ์ (13), backup/security/E2E (14)
+
 ## Roadmap หลัง Ticket 06
 
 - Ticket 07: ตัวเลือกเมนู สูตร และสต๊อก

@@ -5,6 +5,7 @@ import {
   api,
   type MenuItem,
   type MenuKind,
+  type MenuOptionGroupDetail,
   type MenuStatus,
 } from "../lib/api";
 import {
@@ -74,6 +75,26 @@ export default function MenuAdminPage() {
   const [editing, setEditing] = useState<MenuItem | null>(null);
   const [editForm, setEditForm] = useState<FormState>(EMPTY_FORM);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // ---------- Ticket 07: จัดการกลุ่มตัวเลือก + ตัวเลือกของเมนูที่เลือก ----------
+  const [optionMenuId, setOptionMenuId] = useState("");
+  const [optionGroups, setOptionGroups] = useState<MenuOptionGroupDetail[]>([]);
+  const [optionsLoading, setOptionsLoading] = useState(false);
+  const [optionsError, setOptionsError] = useState<string | null>(null);
+  const [groupName, setGroupName] = useState("");
+  const [groupSort, setGroupSort] = useState("0");
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [editGroupName, setEditGroupName] = useState("");
+  const [editGroupSort, setEditGroupSort] = useState("0");
+  const [optGroupId, setOptGroupId] = useState("");
+  const [optName, setOptName] = useState("");
+  const [optDelta, setOptDelta] = useState("0");
+  const [optEnabled, setOptEnabled] = useState(true);
+  const [optSort, setOptSort] = useState("0");
+  const [editingOptionId, setEditingOptionId] = useState<string | null>(null);
+  const [editOptName, setEditOptName] = useState("");
+  const [editOptDelta, setEditOptDelta] = useState("0");
+  const [editOptSort, setEditOptSort] = useState("0");
+  const [optionsBusy, setOptionsBusy] = useState(false);
 
   async function refresh(archived = showArchived) {
     try {
@@ -213,6 +234,140 @@ export default function MenuAdminPage() {
       setError(err instanceof Error ? err.message : "นำเมนูกลับมาไม่สำเร็จ");
     } finally {
       setBusyId(null);
+    }
+  }
+
+  // ---------- Ticket 07: helpers จัดการตัวเลือก ----------
+
+  async function loadOptionGroups(menuId: string) {
+    if (!menuId) {
+      setOptionGroups([]);
+      return;
+    }
+    try {
+      setOptionsLoading(true);
+      setOptionsError(null);
+      const res = await api.menuOptionGroups(menuId);
+      setOptionGroups(res.groups);
+      if (!res.groups.some((g) => g.id === optGroupId)) {
+        setOptGroupId(res.groups[0]?.id ?? "");
+      }
+    } catch (err) {
+      setOptionsError(err instanceof Error ? err.message : "โหลดตัวเลือกไม่สำเร็จ");
+    } finally {
+      setOptionsLoading(false);
+    }
+  }
+
+  function pickOptionMenu(menuId: string) {
+    setOptionMenuId(menuId);
+    setOptionsError(null);
+    void loadOptionGroups(menuId);
+  }
+
+  async function createGroup(e: React.FormEvent) {
+    e.preventDefault();
+    if (!optionMenuId || optionsBusy) return;
+    setOptionsBusy(true);
+    try {
+      setOptionsError(null);
+      setNotice(null);
+      const res = await api.menuOptionGroupCreate(optionMenuId, {
+        name: groupName.trim(),
+        sortOrder: Number(groupSort),
+      });
+      setNotice(`เพิ่มกลุ่มตัวเลือก ${res.group.name} แล้ว`);
+      setGroupName("");
+      setGroupSort("0");
+      await loadOptionGroups(optionMenuId);
+    } catch (err) {
+      setOptionsError(err instanceof Error ? err.message : "เพิ่มกลุ่มตัวเลือกไม่สำเร็จ");
+    } finally {
+      setOptionsBusy(false);
+    }
+  }
+
+  async function saveGroup(groupId: string) {
+    if (optionsBusy) return;
+    setOptionsBusy(true);
+    try {
+      setOptionsError(null);
+      setNotice(null);
+      const res = await api.menuOptionGroupUpdate(groupId, {
+        name: editGroupName.trim(),
+        sortOrder: Number(editGroupSort),
+      });
+      setNotice(`บันทึกกลุ่มตัวเลือก ${res.group.name} แล้ว`);
+      setEditingGroupId(null);
+      await loadOptionGroups(optionMenuId);
+    } catch (err) {
+      setOptionsError(err instanceof Error ? err.message : "บันทึกกลุ่มตัวเลือกไม่สำเร็จ");
+    } finally {
+      setOptionsBusy(false);
+    }
+  }
+
+  async function createOption(e: React.FormEvent) {
+    e.preventDefault();
+    if (!optGroupId || optionsBusy) return;
+    setOptionsBusy(true);
+    try {
+      setOptionsError(null);
+      setNotice(null);
+      const res = await api.menuOptionCreate(optGroupId, {
+        name: optName.trim(),
+        priceDelta: Number(optDelta),
+        isEnabled: optEnabled,
+        sortOrder: Number(optSort),
+      });
+      setNotice(`เพิ่มตัวเลือก ${res.option.name} แล้ว`);
+      setOptName("");
+      setOptDelta("0");
+      setOptSort("0");
+      setOptEnabled(true);
+      await loadOptionGroups(optionMenuId);
+    } catch (err) {
+      setOptionsError(err instanceof Error ? err.message : "เพิ่มตัวเลือกไม่สำเร็จ");
+    } finally {
+      setOptionsBusy(false);
+    }
+  }
+
+  async function saveOption(optionId: string) {
+    if (optionsBusy) return;
+    setOptionsBusy(true);
+    try {
+      setOptionsError(null);
+      setNotice(null);
+      const res = await api.menuOptionUpdate(optionId, {
+        name: editOptName.trim(),
+        priceDelta: Number(editOptDelta),
+        sortOrder: Number(editOptSort),
+      });
+      setNotice(`บันทึกตัวเลือก ${res.option.name} แล้ว`);
+      setEditingOptionId(null);
+      await loadOptionGroups(optionMenuId);
+    } catch (err) {
+      setOptionsError(err instanceof Error ? err.message : "บันทึกตัวเลือกไม่สำเร็จ");
+    } finally {
+      setOptionsBusy(false);
+    }
+  }
+
+  async function toggleOptionEnabled(groupId: string, optionId: string, next: boolean) {
+    if (optionsBusy) return;
+    setOptionsBusy(true);
+    try {
+      setOptionsError(null);
+      setNotice(null);
+      await api.menuOptionUpdate(optionId, { isEnabled: next });
+      setNotice(next ? "เปิดขายตัวเลือกแล้ว" : "ปิดขายตัวเลือกแล้ว");
+      void groupId;
+      await loadOptionGroups(optionMenuId);
+    } catch (err) {
+      setOptionsError(err instanceof Error ? err.message : "เปลี่ยนสถานะตัวเลือกไม่สำเร็จ");
+    } finally {
+      setOptionsBusy(false);
     }
   }
 
@@ -498,6 +653,286 @@ export default function MenuAdminPage() {
             ))}
           </ul>
         )}
+      </Panel>
+
+      <Panel label="ตัวเลือกของเมนู" className="space-y-4">
+        <p className="text-sm text-ink-600">
+          เลือกเมนูเพื่อจัดการกลุ่มตัวเลือก (เช่น ขนาด ท็อปปิ้ง) และตัวเลือกพร้อมส่วนต่างราคา
+          ลูกค้าเลือกได้กลุ่มละ 1 ตัวเลือกต่อรายการ
+        </p>
+        <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+          <div>
+            <label htmlFor="option-menu" className="mb-1 block text-sm font-semibold text-ink-800">
+              เมนูที่จัดการตัวเลือก
+            </label>
+            <select
+              id="option-menu"
+              className={inputClass}
+              value={optionMenuId}
+              onChange={(e) => pickOptionMenu(e.target.value)}
+            >
+              <option value="">— เลือกเมนู —</option>
+              {items
+                .filter((m) => !m.isArchived)
+                .map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.category} · {m.name} ({fmtPrice(m.price)})
+                  </option>
+                ))}
+            </select>
+          </div>
+          <div className="flex items-end">
+            <button
+              type="button"
+              onClick={() => void loadOptionGroups(optionMenuId)}
+              disabled={!optionMenuId || optionsLoading}
+              className={secondaryButtonClass}
+            >
+              {optionsLoading ? "กำลังโหลด…" : "โหลดใหม่"}
+            </button>
+          </div>
+        </div>
+
+        {optionsError ? (
+          <Alert tone="error" role="alert">
+            {optionsError}
+          </Alert>
+        ) : null}
+
+        {optionMenuId ? (
+          <div className="space-y-4">
+            <form onSubmit={createGroup} aria-label="ฟอร์มเพิ่มกลุ่มตัวเลือก" className="space-y-3 rounded-xl bg-ink-50 p-3">
+              <h3 className="font-bold text-ink-900">เพิ่มกลุ่มตัวเลือก</h3>
+              <div className="grid gap-3 sm:grid-cols-[1fr_10rem_auto]">
+                <div>
+                  <label htmlFor="group-name" className="mb-1 block text-sm font-semibold text-ink-800">
+                    ชื่อกลุ่ม (เช่น ขนาด เพิ่มท็อปปิ้ง)
+                  </label>
+                  <input
+                    id="group-name"
+                    className={inputClass}
+                    value={groupName}
+                    onChange={(e) => setGroupName(e.target.value)}
+                    maxLength={64}
+                    placeholder="เช่น ขนาด"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="group-sort" className="mb-1 block text-sm font-semibold text-ink-800">
+                    ลำดับ (0–10000)
+                  </label>
+                  <input
+                    id="group-sort"
+                    className={inputClass}
+                    value={groupSort}
+                    onChange={(e) => setGroupSort(e.target.value)}
+                    inputMode="numeric"
+                  />
+                </div>
+                <div className="flex items-end">
+                  <button type="submit" disabled={optionsBusy} aria-busy={optionsBusy} className={primaryButtonClass}>
+                    {optionsBusy ? "กำลังบันทึก…" : "เพิ่มกลุ่ม"}
+                  </button>
+                </div>
+              </div>
+            </form>
+
+            {optionsLoading ? (
+              <p className="py-4 text-center">
+                <Spinner label="กำลังโหลดตัวเลือก…" />
+              </p>
+            ) : optionGroups.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-ink-300 px-4 py-6 text-center">
+                <p className="font-semibold text-ink-800">เมนูนี้ยังไม่มีกลุ่มตัวเลือก</p>
+                <p className="mt-1 text-sm text-ink-600">เพิ่มกลุ่มแรกจากแบบฟอร์มด้านบน</p>
+              </div>
+            ) : (
+              <ul className="space-y-3">
+                {optionGroups.map((g) => (
+                  <li key={g.id} className="space-y-2 rounded-xl border border-ink-200 p-3">
+                    {editingGroupId === g.id ? (
+                      <div className="grid gap-2 sm:grid-cols-[1fr_10rem_auto_auto]">
+                        <input
+                          aria-label="ชื่อกลุ่มตัวเลือก"
+                          className={inputClass}
+                          value={editGroupName}
+                          onChange={(e) => setEditGroupName(e.target.value)}
+                          maxLength={64}
+                        />
+                        <input
+                          aria-label="ลำดับกลุ่ม"
+                          className={inputClass}
+                          value={editGroupSort}
+                          onChange={(e) => setEditGroupSort(e.target.value)}
+                          inputMode="numeric"
+                        />
+                        <button type="button" onClick={() => void saveGroup(g.id)} disabled={optionsBusy} className={primaryButtonClass}>
+                          บันทึก
+                        </button>
+                        <button type="button" onClick={() => setEditingGroupId(null)} className={secondaryButtonClass}>
+                          ยกเลิก
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="font-bold text-ink-900">
+                          {g.name} <span className="text-sm font-medium text-ink-500">· ลำดับ {g.sortOrder}</span>
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingGroupId(g.id);
+                            setEditGroupName(g.name);
+                            setEditGroupSort(String(g.sortOrder));
+                          }}
+                          className={secondaryButtonClass}
+                        >
+                          แก้ไขกลุ่ม
+                        </button>
+                      </div>
+                    )}
+                    <ul className="space-y-1.5">
+                      {g.options.map((o) => (
+                        <li
+                          key={o.id}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-ink-50 px-3 py-2"
+                        >
+                          {editingOptionId === o.id ? (
+                            <div className="grid w-full gap-2 sm:grid-cols-[1fr_8rem_8rem_auto_auto]">
+                              <input
+                                aria-label="ชื่อตัวเลือก"
+                                className={inputClass}
+                                value={editOptName}
+                                onChange={(e) => setEditOptName(e.target.value)}
+                                maxLength={120}
+                              />
+                              <input
+                                aria-label="ส่วนต่างราคา"
+                                className={inputClass}
+                                value={editOptDelta}
+                                onChange={(e) => setEditOptDelta(e.target.value)}
+                                inputMode="decimal"
+                              />
+                              <input
+                                aria-label="ลำดับตัวเลือก"
+                                className={inputClass}
+                                value={editOptSort}
+                                onChange={(e) => setEditOptSort(e.target.value)}
+                                inputMode="numeric"
+                              />
+                              <button type="button" onClick={() => void saveOption(o.id)} disabled={optionsBusy} className={primaryButtonClass}>
+                                บันทึก
+                              </button>
+                              <button type="button" onClick={() => setEditingOptionId(null)} className={secondaryButtonClass}>
+                                ยกเลิก
+                              </button>
+                            </div>
+                          ) : (
+                            <>
+                              <span className="text-sm text-ink-900">
+                                <span className="font-semibold">{o.name}</span>{" "}
+                                <span className="text-ink-600">
+                                  ({o.priceDelta === 0 ? "ไม่เพิ่มราคา" : `${o.priceDelta > 0 ? "+" : ""}${o.priceDelta} บาท`} · ลำดับ {o.sortOrder})
+                                </span>{" "}
+                                <Badge tone={o.isEnabled ? "success" : "danger"}>
+                                  {o.isEnabled ? "เปิดขาย" : "ปิดขาย"}
+                                </Badge>
+                              </span>
+                              <span className="flex flex-wrap gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingOptionId(o.id);
+                                    setEditOptName(o.name);
+                                    setEditOptDelta(String(o.priceDelta));
+                                    setEditOptSort(String(o.sortOrder));
+                                  }}
+                                  className={secondaryButtonClass}
+                                >
+                                  แก้ไข
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void toggleOptionEnabled(g.id, o.id, !o.isEnabled)}
+                                  disabled={optionsBusy}
+                                  className={o.isEnabled ? dangerButtonClass : successButtonClass}
+                                >
+                                  {o.isEnabled ? "ปิดขาย" : "เปิดขาย"}
+                                </button>
+                              </span>
+                            </>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                    <form
+                      onSubmit={createOption}
+                      aria-label={`ฟอร์มเพิ่มตัวเลือกในกลุ่ม ${g.name}`}
+                      className="grid gap-2 sm:grid-cols-[1fr_8rem_8rem_auto_auto]"
+                    >
+                      <input
+                        aria-label={`ชื่อตัวเลือกใหม่ในกลุ่ม ${g.name}`}
+                        className={inputClass}
+                        value={optGroupId === g.id ? optName : ""}
+                        onFocus={() => setOptGroupId(g.id)}
+                        onChange={(e) => {
+                          setOptGroupId(g.id);
+                          setOptName(e.target.value);
+                        }}
+                        maxLength={120}
+                        placeholder="ชื่อตัวเลือก เช่น พิเศษ"
+                      />
+                      <input
+                        aria-label="ส่วนต่างราคา (บาท)"
+                        className={inputClass}
+                        value={optGroupId === g.id ? optDelta : "0"}
+                        onFocus={() => setOptGroupId(g.id)}
+                        onChange={(e) => {
+                          setOptGroupId(g.id);
+                          setOptDelta(e.target.value);
+                        }}
+                        inputMode="decimal"
+                        placeholder="เช่น 10"
+                      />
+                      <input
+                        aria-label="ลำดับ"
+                        className={inputClass}
+                        value={optGroupId === g.id ? optSort : "0"}
+                        onFocus={() => setOptGroupId(g.id)}
+                        onChange={(e) => {
+                          setOptGroupId(g.id);
+                          setOptSort(e.target.value);
+                        }}
+                        inputMode="numeric"
+                        placeholder="0"
+                      />
+                      <label className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 text-sm font-semibold text-ink-800">
+                        <input
+                          type="checkbox"
+                          className="h-5 w-5 accent-brand-600"
+                          checked={optGroupId === g.id ? optEnabled : true}
+                          onChange={(e) => {
+                            setOptGroupId(g.id);
+                            setOptEnabled(e.target.checked);
+                          }}
+                        />
+                        เปิดขาย
+                      </label>
+                      <button
+                        type="submit"
+                        disabled={optionsBusy || optGroupId !== g.id}
+                        onClick={() => setOptGroupId(g.id)}
+                        className={primaryButtonClass}
+                      >
+                        เพิ่มตัวเลือก
+                      </button>
+                    </form>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ) : null}
       </Panel>
 
       {editing && (
