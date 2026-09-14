@@ -1,0 +1,177 @@
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import { MENU_KIND_LABELS, api, type MenuGroup, type MenuKind } from "../lib/api";
+import { Alert, Badge, Panel, Spinner } from "../components/ui";
+
+function fmtPrice(n: number): string {
+  return `${n.toLocaleString("th-TH", { maximumFractionDigits: 2 })} บาท`;
+}
+
+/** หน้าเมนูสาธารณะ: ดูได้โดยไม่ต้องเข้าสู่ระบบ — เฉพาะเมนูพร้อมขาย จัดกลุ่มตามหมวด */
+export default function MenuPublicPage() {
+  const [groups, setGroups] = useState<MenuGroup[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [kind, setKind] = useState<"" | MenuKind>("");
+  const [q, setQ] = useState("");
+
+  async function load() {
+    try {
+      setLoading(true);
+      setError(null);
+      setGroups((await api.menuPublic()).groups);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "โหลดเมนูไม่สำเร็จ");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return groups
+      .map((g) => ({
+        category: g.category,
+        items: g.items.filter(
+          (m) =>
+            (kind === "" || m.kind === kind) &&
+            (!needle ||
+              m.name.toLowerCase().includes(needle) ||
+              (m.description ?? "").toLowerCase().includes(needle)),
+        ),
+      }))
+      .filter((g) => g.items.length > 0);
+  }, [groups, kind, q]);
+
+  const total = useMemo(() => filtered.reduce((n, g) => n + g.items.length, 0), [filtered]);
+
+  return (
+    <div className="mx-auto w-full max-w-3xl space-y-5 px-4 py-6 sm:px-6">
+      <a href="#menu-main" className="ui-skip-link">
+        ข้ามไปยังรายการเมนู
+      </a>
+      <header className="text-center">
+        <p
+          aria-hidden="true"
+          className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-600 text-xl font-bold text-white shadow-sm"
+        >
+          ป
+        </p>
+        <h1 className="mt-2 text-xl font-bold text-ink-900 sm:text-2xl">เมนูร้านป้าอ้ออาหารตามสั่ง</h1>
+        <p className="mt-1 text-sm text-ink-600">
+          ดูเมนูพร้อมขายแยกตามหมวดหมู่ได้โดยไม่ต้องเข้าสู่ระบบ
+        </p>
+      </header>
+
+      <main id="menu-main" aria-label="รายการเมนูพร้อมขาย" className="space-y-4">
+        <Panel label="ค้นหาและกรองเมนู" className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label htmlFor="menu-search" className="mb-1 block text-sm font-semibold text-ink-800">
+                ค้นหาชื่อหรือรายละเอียด
+              </label>
+              <input
+                id="menu-search"
+                className="w-full min-h-[44px] rounded-xl border border-ink-300 bg-white px-3 py-2.5 text-base text-ink-900 placeholder:text-ink-400 shadow-sm"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="เช่น ข้าวผัด ชาเย็น"
+              />
+            </div>
+            <div>
+              <label htmlFor="menu-kind" className="mb-1 block text-sm font-semibold text-ink-800">
+                ประเภท
+              </label>
+              <select
+                id="menu-kind"
+                className="w-full min-h-[44px] rounded-xl border border-ink-300 bg-white px-3 py-2.5 text-base text-ink-900 shadow-sm"
+                value={kind}
+                onChange={(e) => setKind(e.target.value as "" | MenuKind)}
+              >
+                <option value="">ทั้งหมด (อาหาร + เครื่องดื่ม)</option>
+                <option value="food">{MENU_KIND_LABELS.food}</option>
+                <option value="drink">{MENU_KIND_LABELS.drink}</option>
+              </select>
+            </div>
+          </div>
+        </Panel>
+
+        {loading ? (
+          <p className="py-10 text-center">
+            <Spinner label="กำลังโหลดเมนู…" />
+          </p>
+        ) : error ? (
+          <div className="space-y-3">
+            <Alert tone="error" role="alert">
+              {error}
+            </Alert>
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="inline-flex min-h-[44px] items-center rounded-xl border border-ink-300 bg-white px-4 py-2.5 text-sm font-semibold text-ink-800 shadow-sm transition-colors hover:bg-ink-50"
+            >
+              ลองใหม่
+            </button>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-ink-300 bg-white px-4 py-10 text-center">
+            <p className="font-semibold text-ink-800">
+              {groups.length === 0 ? "ยังไม่มีเมนูพร้อมขาย" : "ไม่พบเมนูที่ตรงกับเงื่อนไข"}
+            </p>
+            <p className="mt-1 text-sm text-ink-600">
+              {groups.length === 0
+                ? "ร้านยังไม่เปิดขายเมนู โปรดกลับมาดูใหม่ภายหลัง"
+                : "ลองเปลี่ยนคำค้นหรือประเภท แล้วค้นใหม่อีกครั้ง"}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <p role="status" className="text-sm text-ink-600">
+              พบ {total} เมนูพร้อมขายใน {filtered.length} หมวดหมู่
+            </p>
+            {filtered.map((g) => (
+              <section key={g.category} aria-label={`หมวด ${g.category}`} className="space-y-3">
+                <h2 className="text-lg font-bold text-ink-900">{g.category}</h2>
+                <ul className="grid gap-3 sm:grid-cols-2">
+                  {g.items.map((m) => (
+                    <li key={m.id} className="overflow-hidden rounded-2xl border border-ink-200 bg-white shadow-sm">
+                      {m.imageUrl ? (
+                        <img
+                          src={m.imageUrl}
+                          alt={`รูป${m.name}`}
+                          loading="lazy"
+                          className="h-36 w-full object-cover"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = "none";
+                          }}
+                        />
+                      ) : null}
+                      <div className="space-y-1.5 p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <p className="text-base font-bold text-ink-900">{m.name}</p>
+                          <Badge tone="brand">{MENU_KIND_LABELS[m.kind]}</Badge>
+                        </div>
+                        {m.description ? <p className="text-sm text-ink-600">{m.description}</p> : null}
+                        <p className="text-base font-bold text-brand-700">{fmtPrice(m.price)}</p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))}
+          </div>
+        )}
+
+        <p className="text-center text-sm text-ink-500">
+          <Link to="/status" className="font-semibold text-brand-700 underline underline-offset-2">
+            ดูสถานะร้านและโต๊ะว่าง
+          </Link>
+        </p>
+      </main>
+    </div>
+  );
+}

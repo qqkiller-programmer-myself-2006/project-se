@@ -59,7 +59,12 @@ export type AuditAction =
   | "customer_line_link_failed"
   | "customer_line_unlinked"
   | "customer_deactivated"
-  | "customer_activated";
+  | "customer_activated"
+  | "menu_created"
+  | "menu_updated"
+  | "menu_status_changed"
+  | "menu_archived"
+  | "menu_restored";
 
 export interface AuditEntry {
   id: number;
@@ -175,6 +180,80 @@ export interface LineLoginTx {
   createdAt: string;
   expiresAt: string;
   usedAt: string | null;
+}
+
+// ---------- Ticket 04: แคตตาล็อกเมนู (ยังไม่รวมสูตร/สต๊อก/คำสั่งซื้อ) ----------
+
+export type MenuKind = "food" | "drink";
+export type MenuStatus = "available" | "unavailable";
+
+export const MENU_KINDS: MenuKind[] = ["food", "drink"];
+export const MENU_STATUSES: MenuStatus[] = ["available", "unavailable"];
+
+/** ขีดจำกัด validation เมนู (บันทึกเป็นกฎชัดเจนสำหรับ Ticket 04) */
+export const MENU_CATEGORY_MAX = 64;
+export const MENU_NAME_MAX = 120;
+export const MENU_DESCRIPTION_MAX = 500;
+export const MENU_IMAGE_URL_MAX = 2048;
+export const MENU_PRICE_MAX = 1000000;
+export const MENU_SORT_ORDER_MIN = 0;
+export const MENU_SORT_ORDER_MAX = 10000;
+
+export interface MenuItem {
+  id: string;
+  /** หมวดหมู่ เช่น "อาหารจานเดียว" — ชื่อซ้ำได้ข้ามหมวด แต่ห้ามซ้ำในหมวดเดียวกัน */
+  category: string;
+  name: string;
+  description: string | null;
+  /** URL รูปภาพ (absolute http/https) หรือ null — ยังไม่รองรับอัปโหลดไฟล์จริง */
+  imageUrl: string | null;
+  /** ราคาขายปัจจุบัน (บาท) — snapshot ราคาตอนยืนยันคำสั่งซื้อจะเก็บแยกใน Ticket คำสั่งซื้อ */
+  price: number;
+  /** ประเภทอาหาร/เครื่องดื่ม (ใช้แยกคิวครัว/เครื่องดื่มในอนาคต) */
+  kind: MenuKind;
+  /** สถานะเปิดขาย (available) / ปิดขายชั่วคราว (unavailable) */
+  status: MenuStatus;
+  /** archive = ซ่อนถาวรจากหน้าขาย แต่คงประวัติไว้ (ไม่ลบทำลาย) */
+  isArchived: boolean;
+  /** ลำดับแสดงผลในหมวด (น้อยขึ้นก่อน) */
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** DTO สาธารณะ: เฉพาะเมนูพร้อมขาย (available + ไม่ถูก archive) — ไม่มีข้อมูลหลังร้าน/ต้นทุน */
+export interface PublicMenuItem {
+  id: string;
+  category: string;
+  name: string;
+  description: string | null;
+  imageUrl: string | null;
+  price: number;
+  kind: MenuKind;
+  sortOrder: number;
+}
+
+export interface MenuGroup {
+  category: string;
+  items: PublicMenuItem[];
+}
+
+export function toPublicMenuItem(m: MenuItem): PublicMenuItem {
+  return {
+    id: m.id,
+    category: m.category,
+    name: m.name,
+    description: m.description,
+    imageUrl: m.imageUrl,
+    price: m.price,
+    kind: m.kind,
+    sortOrder: m.sortOrder,
+  };
+}
+
+/** พร้อมขายต่อลูกค้า = เปิดขายและไม่ถูก archive (ยังไม่ตรวจสต๊อกจากสูตร — งาน Ticket สต๊อก) */
+export function isMenuSellable(m: MenuItem): boolean {
+  return m.status === "available" && !m.isArchived;
 }
 
 export function toPublicCustomer(c: Customer): PublicCustomer {

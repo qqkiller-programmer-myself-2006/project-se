@@ -10,6 +10,7 @@ import type {
   CustomerLineLink,
   CustomerSession,
   LineLoginTx,
+  MenuItem,
   Role,
   Session,
   ShopTable,
@@ -47,6 +48,19 @@ import {
   shopTableCreatedEvent,
   shopTableUpdatedEvent,
 } from "./shop/audit-events.js";
+import {
+  menuArchivedEvent,
+  menuCreatedEvent,
+  menuRestoredEvent,
+  menuStatusChangedEvent,
+  menuUpdatedEvent,
+} from "./menu/audit-events.js";
+import {
+  compareMenuCategory,
+  normalizeMenuInput,
+  type MenuInput,
+} from "./menu/validation.js";
+import type { MenuKind, MenuStatus } from "./types.js";
 
 export interface CreateUserInput {
   username: string;
@@ -175,7 +189,7 @@ export interface Store {
   deleteSessionsForUser(userId: string): Promise<void>;
   audit(input: AuditInput): Promise<void>;
   listAudit(
-    prefix: "login_" | "account_" | "shop_" | "customer_" | "all",
+    prefix: "login_" | "account_" | "shop_" | "customer_" | "menu_" | "all",
     limit: number,
   ): Promise<AuditEntry[]>;
   // ---- Ticket 02: สถานะร้านและโต๊ะ (อ่านเดี่ยว + mutation แบบ atomic พร้อม audit) ----
@@ -299,7 +313,33 @@ export interface Store {
    * ใน seam เดียว — ล้มเหลวต้องไม่มี tx ค้างโดยไม่มี audit (และกลับกัน)
    */
   createLineLoginTxWithAudit(input: CreateLineTxInput, actor: CustomerActor): Promise<void>;
+  // ---- Ticket 04: แคตตาล็อกเมนู (mutation เขียนพร้อม audit แบบ all-or-nothing) ----
+  /** รายการเมนูทั้งหมดสำหรับหลังร้าน (รวม archive ตาม flag) เรียงหมวด → ลำดับ → ชื่อ */
+  listMenuItems(options?: { includeArchived?: boolean }): Promise<MenuItem[]>;
+  /** เฉพาะเมนูพร้อมขาย (available + ไม่ archive) สำหรับหน้าสาธารณะ */
+  listPublicMenuItems(): Promise<MenuItem[]>;
+  getMenuItem(id: string): Promise<MenuItem | null>;
+  /** สร้างเมนู + audit menu_created (ชื่อซ้ำในหมวดเดียวกัน → ConflictError) */
+  createMenuItem(input: MenuInput, actor: ShopActor): Promise<MenuItem>;
+  /** แก้เมนู + audit (เปลี่ยน status อย่างเดียว → menu_status_changed, อื่น ๆ → menu_updated) */
+  updateMenuItem(id: string, patch: MenuPatch, actor: ShopActor): Promise<MenuItem>;
+  /** archive (ซ่อนจากหน้าขาย คงประวัติ) + audit menu_archived */
+  archiveMenuItem(id: string, actor: ShopActor): Promise<MenuItem>;
+  /** นำกลับจาก archive + audit menu_restored */
+  restoreMenuItem(id: string, actor: ShopActor): Promise<MenuItem>;
   close?(): Promise<void>;
+}
+
+export interface MenuPatch {
+  category?: string;
+  name?: string;
+  description?: string | null;
+  imageUrl?: string | null;
+  price?: number;
+  kind?: MenuKind;
+  status?: MenuStatus;
+  sortOrder?: number;
+  isArchived?: boolean;
 }
 
 const nowIso = () => new Date().toISOString();
@@ -349,6 +389,8 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
   let schedule: WeeklySchedule = defaultWeeklySchedule();
   let override: ShopOverride | null = null;
   const tables = new Map<string, ShopTable>();
+  // ---- Ticket 04 memory state: เมนู (tests + dev ที่ไม่มี MySQL) ----
+  const menuItems = new Map<string, MenuItem>();
   // ---- Ticket 03 memory state: บัญชีลูกค้า + เซสชัน + LINE (แยกจาก staff โดยสิ้นเชิง) ----
   const customers = new Map<string, Customer>();
   const customersByPhone = new Map<string, string>();
@@ -395,6 +437,24 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
     for (const [id, t] of b.tables) tables.set(id, t);
     audits.length = b.auditsLen;
     auditSeq = b.auditSeq;
+  }
+
+  interface MenuStateBackup extends ShopStateBackup {
+    menu: Map<string, MenuItem>;
+  }
+
+  /** backup รวม shop audit + เมนู (mutation เมนูต้อง rollback audit ด้วยเสมอ) */
+  function backupMenu(): MenuStateBackup {
+    return {
+      ...backupShop(),
+      menu: new Map([...menuItems].map(([id, m]) => [id, { ...m }] as const)),
+    };
+  }
+
+  function restoreMenu(b: MenuStateBackup): void {
+    restoreShop({ shopName: b.shopName, schedule: b.schedule, override: b.override, tables: b.tables, auditsLen: b.auditsLen, auditSeq: b.auditSeq });
+    menuItems.clear();
+    for (const [id, m] of b.menu) menuItems.set(id, m);
   }
 
   async function writeAudit(input: AuditInput): Promise<void> {
@@ -548,6 +608,7 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
         if (prefix === "login_") return a.action.startsWith("login_");
         if (prefix === "shop_") return a.action.startsWith("shop_");
         if (prefix === "customer_") return a.action.startsWith("customer_");
+        if (prefix === "menu_") return a.action.startsWith("menu_");
         return !a.action.startsWith("login_");
       });
       return items.slice(0, limit);
@@ -1050,6 +1111,147 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
         throw err;
       }
     },
+    // ---- Ticket 04 memory: เมนู (all-or-nothing ผ่าน backupShop + menu state) ----
+    async listMenuItems(options) {
+      const includeArchived = options?.includeArchived ?? false;
+      return [...menuItems.values()]
+        .filter((m) => includeArchived || !m.isArchived)
+        .sort(
+          (a, b) =>
+            compareMenuCategory(a.category, b.category) ||
+            a.sortOrder - b.sortOrder ||
+            a.name.localeCompare(b.name, "th"),
+        )
+        .map((m) => ({ ...m }));
+    },
+    async listPublicMenuItems() {
+      return [...menuItems.values()]
+        .filter((m) => m.status === "available" && !m.isArchived)
+        .sort(
+          (a, b) =>
+            compareMenuCategory(a.category, b.category) ||
+            a.sortOrder - b.sortOrder ||
+            a.name.localeCompare(b.name, "th"),
+        )
+        .map((m) => ({ ...m }));
+    },
+    async getMenuItem(id) {
+      const m = menuItems.get(id);
+      return m ? { ...m } : null;
+    },
+    async createMenuItem(input, actor) {
+      const backup = backupMenu();
+      try {
+        const n = normalizeMenuInput(input);
+        for (const other of menuItems.values()) {
+          if (other.category === n.category && other.name === n.name) {
+            throw new ConflictError("ชื่อเมนูนี้มีอยู่ในหมวดหมู่นี้แล้ว");
+          }
+        }
+        const now = nowIso();
+        const item: MenuItem = {
+          id: randomUUID(),
+          category: n.category,
+          name: n.name,
+          description: n.description,
+          imageUrl: n.imageUrl,
+          price: n.price,
+          kind: n.kind,
+          status: n.status,
+          isArchived: false,
+          sortOrder: n.sortOrder,
+          createdAt: now,
+          updatedAt: now,
+        };
+        menuItems.set(item.id, item);
+        await writeAudit(menuCreatedEvent(item, actor));
+        return { ...item };
+      } catch (err) {
+        restoreMenu(backup);
+        throw err;
+      }
+    },
+    async updateMenuItem(id, patch, actor) {
+      const backup = backupMenu();
+      try {
+        const current = menuItems.get(id);
+        if (!current) throw new NotFoundError("ไม่พบเมนู");
+        if (current.isArchived && patch.isArchived !== false) {
+          throw new ConflictError("เมนูนี้ถูก archive แล้ว นำกลับมาก่อนจึงจะแก้ไขได้");
+        }
+        const before: MenuItem = { ...current };
+        // ประกอบร่าง candidate แล้ว normalize ทั้งก้อน (กันค่าบางส่วนไม่ผ่านแล้วค้าง)
+        const candidate: MenuInput = {
+          category: patch.category !== undefined ? patch.category : current.category,
+          name: patch.name !== undefined ? patch.name : current.name,
+          description: patch.description !== undefined ? patch.description : current.description,
+          imageUrl: patch.imageUrl !== undefined ? patch.imageUrl : current.imageUrl,
+          price: patch.price !== undefined ? patch.price : current.price,
+          kind: patch.kind !== undefined ? patch.kind : current.kind,
+          status: patch.status !== undefined ? patch.status : current.status,
+          sortOrder: patch.sortOrder !== undefined ? patch.sortOrder : current.sortOrder,
+        };
+        const n = normalizeMenuInput(candidate);
+        for (const other of menuItems.values()) {
+          if (other.id !== id && other.category === n.category && other.name === n.name) {
+            throw new ConflictError("ชื่อเมนูนี้มีอยู่ในหมวดหมู่นี้แล้ว");
+          }
+        }
+        const keys = Object.keys(patch) as (keyof typeof patch)[];
+        const onlyStatusChanged =
+          keys.length === 1 && keys[0] === "status" && patch.status !== undefined;
+        current.category = n.category;
+        current.name = n.name;
+        current.description = n.description;
+        current.imageUrl = n.imageUrl;
+        current.price = n.price;
+        current.kind = n.kind;
+        current.status = n.status;
+        current.sortOrder = n.sortOrder;
+        if (patch.isArchived !== undefined) current.isArchived = patch.isArchived;
+        current.updatedAt = nowIso();
+        const after: MenuItem = { ...current };
+        await writeAudit(
+          onlyStatusChanged
+            ? menuStatusChangedEvent(before, after, actor)
+            : menuUpdatedEvent(before, after, actor),
+        );
+        return { ...current };
+      } catch (err) {
+        restoreMenu(backup);
+        throw err;
+      }
+    },
+    async archiveMenuItem(id, actor) {
+      const backup = backupMenu();
+      try {
+        const current = menuItems.get(id);
+        if (!current) throw new NotFoundError("ไม่พบเมนู");
+        if (current.isArchived) throw new ConflictError("เมนูนี้ถูก archive แล้ว");
+        current.isArchived = true;
+        current.updatedAt = nowIso();
+        await writeAudit(menuArchivedEvent({ ...current }, actor));
+        return { ...current };
+      } catch (err) {
+        restoreMenu(backup);
+        throw err;
+      }
+    },
+    async restoreMenuItem(id, actor) {
+      const backup = backupMenu();
+      try {
+        const current = menuItems.get(id);
+        if (!current) throw new NotFoundError("ไม่พบเมนู");
+        if (!current.isArchived) throw new ConflictError("เมนูนี้ไม่ได้ถูก archive");
+        current.isArchived = false;
+        current.updatedAt = nowIso();
+        await writeAudit(menuRestoredEvent({ ...current }, actor));
+        return { ...current };
+      } catch (err) {
+        restoreMenu(backup);
+        throw err;
+      }
+    },
   };
 
   return memoryStore;
@@ -1061,6 +1263,7 @@ const MIGRATION_FILES = [
   "002_credential_version.sql",
   "003_shop_status_tables.sql",
   "004_customer_accounts.sql",
+  "005_menu_catalog.sql",
 ];
 
 export function findMigrationFile(name = MIGRATION_FILES[0]!): string {
@@ -1146,6 +1349,42 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
       updatedAt: new Date(r["updated_at"] as string).toISOString(),
     };
   };
+
+  const rowToMenu = (r: Record<string, unknown>): MenuItem => {
+    const price = Number(r["price"]);
+    if (!Number.isFinite(price)) throw new Error("ราคาเมนูในฐานข้อมูลไม่ถูกต้อง");
+    const kind = String(r["kind"]);
+    if (kind !== "food" && kind !== "drink") throw new Error("ประเภทเมนูในฐานข้อมูลไม่ถูกต้อง");
+    const status = String(r["status"]);
+    if (status !== "available" && status !== "unavailable") {
+      throw new Error("สถานะเมนูในฐานข้อมูลไม่ถูกต้อง");
+    }
+    const sortOrder = Number(r["sort_order"]);
+    if (!Number.isInteger(sortOrder)) throw new Error("ลำดับเมนูในฐานข้อมูลไม่ถูกต้อง");
+    return {
+      id: String(r["id"]),
+      category: String(r["category"]),
+      name: String(r["name"]),
+      description: r["description"] == null ? null : String(r["description"]),
+      imageUrl: r["image_url"] == null ? null : String(r["image_url"]),
+      price,
+      kind,
+      status,
+      isArchived: Number(r["is_archived"]) === 1,
+      sortOrder,
+      createdAt: new Date(r["created_at"] as string).toISOString(),
+      updatedAt: new Date(r["updated_at"] as string).toISOString(),
+    };
+  };
+
+  function mapMenuConflict(err: unknown): Error {
+    if (err && typeof err === "object" && "code" in err && (err as { code: string }).code === "ER_DUP_ENTRY") {
+      return new ConflictError("ชื่อเมนูนี้มีอยู่ในหมวดหมู่นี้แล้ว");
+    }
+    throw err;
+  }
+
+  const MENU_ORDER_BY = "ORDER BY category ASC, sort_order ASC, name ASC";
 
   // input เป็น UTC ISO (ลงท้าย Z) ส่วนคอลัมน์ DATETIME ไม่มี offset และ pool ตั้ง
   // timezone Z (ตีความ DATETIME เป็น UTC) จึงต้องใช้ UTC getters เท่านั้น —
@@ -1492,6 +1731,8 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
         sql += " WHERE action LIKE 'shop\\_%'";
       } else if (prefix === "customer_") {
         sql += " WHERE action LIKE 'customer\\_%'";
+      } else if (prefix === "menu_") {
+        sql += " WHERE action LIKE 'menu\\_%'";
       } else if (prefix === "account_") {
         sql += " WHERE action NOT LIKE 'login\\_%'";
       }
@@ -1665,6 +1906,131 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
           unknown,
         ];
         return rowToTable(rows2[0]!);
+      });
+    },
+    // ---- Ticket 04 MySQL: เมนู (transaction เดียวกับ audit เสมอ) ----
+    async listMenuItems(options) {
+      const includeArchived = options?.includeArchived ?? false;
+      const [rows] = includeArchived
+        ? await pool.query(`SELECT * FROM menu_items ${MENU_ORDER_BY}`)
+        : await pool.query(`SELECT * FROM menu_items WHERE is_archived = 0 ${MENU_ORDER_BY}`);
+      return (rows as Record<string, unknown>[]).map(rowToMenu);
+    },
+    async listPublicMenuItems() {
+      const [rows] = await pool.query(
+        `SELECT * FROM menu_items WHERE status = 'available' AND is_archived = 0 ${MENU_ORDER_BY}`,
+      );
+      return (rows as Record<string, unknown>[]).map(rowToMenu);
+    },
+    async getMenuItem(id) {
+      const [rows] = await pool.query("SELECT * FROM menu_items WHERE id = ? LIMIT 1", [id]);
+      const list = rows as Record<string, unknown>[];
+      return list.length === 0 ? null : rowToMenu(list[0]!);
+    },
+    async createMenuItem(input, actor) {
+      return withShopTx(async (conn) => {
+        const n = normalizeMenuInput(input);
+        const id = randomUUID();
+        try {
+          await conn.query(
+            "INSERT INTO menu_items (id, category, name, description, image_url, price, kind, status, is_archived, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+            [id, n.category, n.name, n.description, n.imageUrl, n.price, n.kind, n.status, n.sortOrder],
+          );
+        } catch (err: unknown) {
+          throw mapMenuConflict(err);
+        }
+        const [rows] = (await conn.query("SELECT * FROM menu_items WHERE id = ? LIMIT 1", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new Error("สร้างเมนูไม่สำเร็จ");
+        const created = rowToMenu(rows[0]!);
+        await insertAuditRow(conn, menuCreatedEvent(created, actor));
+        return created;
+      });
+    },
+    async updateMenuItem(id, patch, actor) {
+      return withShopTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM menu_items WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบเมนู");
+        const current = rowToMenu(rows[0]!);
+        if (current.isArchived && patch.isArchived !== false) {
+          throw new ConflictError("เมนูนี้ถูก archive แล้ว นำกลับมาก่อนจึงจะแก้ไขได้");
+        }
+        const before: MenuItem = { ...current };
+        const candidate: MenuInput = {
+          category: patch.category !== undefined ? patch.category : current.category,
+          name: patch.name !== undefined ? patch.name : current.name,
+          description: patch.description !== undefined ? patch.description : current.description,
+          imageUrl: patch.imageUrl !== undefined ? patch.imageUrl : current.imageUrl,
+          price: patch.price !== undefined ? patch.price : current.price,
+          kind: patch.kind !== undefined ? patch.kind : current.kind,
+          status: patch.status !== undefined ? patch.status : current.status,
+          sortOrder: patch.sortOrder !== undefined ? patch.sortOrder : current.sortOrder,
+        };
+        const n = normalizeMenuInput(candidate);
+        const keys = Object.keys(patch) as (keyof typeof patch)[];
+        const onlyStatusChanged = keys.length === 1 && keys[0] === "status" && patch.status !== undefined;
+        const isArchived = patch.isArchived !== undefined ? patch.isArchived : current.isArchived;
+        try {
+          await conn.query(
+            "UPDATE menu_items SET category = ?, name = ?, description = ?, image_url = ?, price = ?, kind = ?, status = ?, is_archived = ?, sort_order = ? WHERE id = ?",
+            [n.category, n.name, n.description, n.imageUrl, n.price, n.kind, n.status, isArchived ? 1 : 0, n.sortOrder, id],
+          );
+        } catch (err: unknown) {
+          throw mapMenuConflict(err);
+        }
+        const [rows2] = (await conn.query("SELECT * FROM menu_items WHERE id = ? LIMIT 1", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const after = rowToMenu(rows2[0]!);
+        await insertAuditRow(
+          conn,
+          onlyStatusChanged ? menuStatusChangedEvent(before, after, actor) : menuUpdatedEvent(before, after, actor),
+        );
+        return after;
+      });
+    },
+    async archiveMenuItem(id, actor) {
+      return withShopTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM menu_items WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบเมนู");
+        const current = rowToMenu(rows[0]!);
+        if (current.isArchived) throw new ConflictError("เมนูนี้ถูก archive แล้ว");
+        await conn.query("UPDATE menu_items SET is_archived = 1 WHERE id = ?", [id]);
+        const [rows2] = (await conn.query("SELECT * FROM menu_items WHERE id = ? LIMIT 1", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const archived = rowToMenu(rows2[0]!);
+        await insertAuditRow(conn, menuArchivedEvent(archived, actor));
+        return archived;
+      });
+    },
+    async restoreMenuItem(id, actor) {
+      return withShopTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM menu_items WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบเมนู");
+        const current = rowToMenu(rows[0]!);
+        if (!current.isArchived) throw new ConflictError("เมนูนี้ไม่ได้ถูก archive");
+        await conn.query("UPDATE menu_items SET is_archived = 0 WHERE id = ?", [id]);
+        const [rows2] = (await conn.query("SELECT * FROM menu_items WHERE id = ? LIMIT 1", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const restored = rowToMenu(rows2[0]!);
+        await insertAuditRow(conn, menuRestoredEvent(restored, actor));
+        return restored;
       });
     },
     // ---- Ticket 03 MySQL: บัญชีลูกค้า + เซสชัน + LINE (transaction เดียวกับ audit เสมอ) ----

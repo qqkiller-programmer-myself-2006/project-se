@@ -118,6 +118,74 @@ export interface AdminCustomerDetail {
   line: LineStatus;
 }
 
+// ---------- Ticket 04: แคตตาล็อกเมนู ----------
+
+export type MenuKind = "food" | "drink";
+export type MenuStatus = "available" | "unavailable";
+
+export const MENU_KIND_LABELS: Record<MenuKind, string> = {
+  food: "อาหาร",
+  drink: "เครื่องดื่ม",
+};
+
+export const MENU_STATUS_LABELS: Record<MenuStatus, string> = {
+  available: "เปิดขาย",
+  unavailable: "ปิดขาย",
+};
+
+export interface PublicMenuItem {
+  id: string;
+  category: string;
+  name: string;
+  description: string | null;
+  imageUrl: string | null;
+  price: number;
+  kind: MenuKind;
+  sortOrder: number;
+}
+
+export interface MenuGroup {
+  category: string;
+  items: PublicMenuItem[];
+}
+
+export interface MenuItem extends PublicMenuItem {
+  status: MenuStatus;
+  isArchived: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MenuInput {
+  category: string;
+  name: string;
+  description?: string | null;
+  imageUrl?: string | null;
+  price: number;
+  kind: MenuKind;
+  status?: MenuStatus;
+  sortOrder?: number;
+}
+
+export interface MenuPatch {
+  category?: string;
+  name?: string;
+  description?: string | null;
+  imageUrl?: string | null;
+  price?: number;
+  kind?: MenuKind;
+  status?: MenuStatus;
+  sortOrder?: number;
+}
+
+export interface MenuListQuery {
+  includeArchived?: boolean;
+  category?: string;
+  kind?: MenuKind;
+  status?: MenuStatus;
+  q?: string;
+}
+
 /** ประวัติร้านใช้ AuditItem ชุดเดียวกับประวัติบัญชี (shape เดียวกัน ไม่ duplicate type) */
 
 const BASE = import.meta.env["VITE_API_URL"] ?? "";
@@ -260,4 +328,24 @@ export const api = {
   adminCustomerActivate: (id: string) =>
     req<{ customer: PublicCustomer }>(`/api/admin/customers/${id}/activate`, { method: "POST" }, true),
   customerAudit: () => req<{ items: AuditItem[] }>("/api/audit/customers?limit=100"),
+  // Ticket 04: เมนู (public ไม่ต้อง login; หลังร้านเฉพาะ Owner/Admin)
+  menuPublic: () => req<{ groups: MenuGroup[] }>("/api/menu/public"),
+  menuList: (q: MenuListQuery = {}) => {
+    const params = new URLSearchParams();
+    if (q.includeArchived) params.set("includeArchived", "1");
+    if (q.category) params.set("category", q.category);
+    if (q.kind) params.set("kind", q.kind);
+    if (q.status) params.set("status", q.status);
+    if (q.q) params.set("q", q.q);
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return req<{ items: MenuItem[] }>(`/api/menu${suffix}`);
+  },
+  menuGet: (id: string) => req<{ item: MenuItem }>(`/api/menu/${id}`),
+  menuCreate: (input: MenuInput) =>
+    req<{ item: MenuItem }>("/api/menu", { method: "POST", body: JSON.stringify(input) }, true),
+  menuUpdate: (id: string, patch: MenuPatch) =>
+    req<{ item: MenuItem }>(`/api/menu/${id}`, { method: "PATCH", body: JSON.stringify(patch) }, true),
+  menuArchive: (id: string) => req<{ item: MenuItem }>(`/api/menu/${id}/archive`, { method: "POST" }, true),
+  menuRestore: (id: string) => req<{ item: MenuItem }>(`/api/menu/${id}/restore`, { method: "POST" }, true),
+  menuAudit: () => req<{ items: AuditItem[] }>("/api/audit/menu?limit=100"),
 };

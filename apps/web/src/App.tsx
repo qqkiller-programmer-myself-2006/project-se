@@ -13,6 +13,8 @@ import CustomerRegisterPage from "./pages/CustomerRegister";
 import CustomerLoginPage from "./pages/CustomerLogin";
 import CustomerProfilePage from "./pages/CustomerProfile";
 import AdminCustomersPage from "./pages/AdminCustomers";
+import MenuPublicPage from "./pages/MenuPublic";
+import MenuAdminPage from "./pages/MenuAdmin";
 
 const NAV_BASE =
   "inline-flex min-h-[44px] items-center rounded-xl border px-4 py-2 text-sm font-semibold transition-colors";
@@ -67,6 +69,7 @@ export default function App() {
     return (
       <Routes>
         <Route path="/status" element={<StatusPage />} />
+        <Route path="/menu" element={<MenuPublicPage />} />
         <Route path="/register" element={<CustomerRegisterPage />} />
         <Route path="/customer/login" element={<CustomerLoginPage />} />
         <Route path="/profile" element={<CustomerProfilePage />} />
@@ -114,9 +117,17 @@ export default function App() {
             <NavLink to="/status" className={({ isActive }) => navClass(isActive)}>
               สถานะร้าน
             </NavLink>
+            <NavLink to="/menu" className={({ isActive }) => navClass(isActive)}>
+              เมนู
+            </NavLink>
             {isManager && (
               <NavLink to="/shop" className={({ isActive }) => navClass(isActive)}>
                 ร้าน
+              </NavLink>
+            )}
+            {isManager && (
+              <NavLink to="/admin/menu" className={({ isActive }) => navClass(isActive)}>
+                จัดการเมนู
               </NavLink>
             )}
             {isManager && (
@@ -157,6 +168,8 @@ export default function App() {
       <main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6">
         <Routes>
           <Route path="/status" element={<StatusPage />} />
+          <Route path="/menu" element={<MenuPublicPage />} />
+          {isManager && <Route path="/admin/menu" element={<MenuAdminPage />} />}
           {isManager && <Route path="/shop" element={<ShopPage />} />}
           {isManager && <Route path="/tables" element={<TablesPage />} />}
           {isManager && <Route path="/admin/customers" element={<AdminCustomersPage />} />}
