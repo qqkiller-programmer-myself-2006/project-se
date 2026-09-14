@@ -90,6 +90,28 @@
   การเงิน/Dashboard/CSV (11), LINE (12), capacity/พยากรณ์ (13),
   backup/security/observability/release E2E (14)
 
+### Ticket 09 — คิวครัว/เครื่องดื่มและการส่งมอบ
+
+- สถานะ: resolved (2026-09-14, implement โดย Muse Spark via opencode)
+- ผลตรวจ: API 193 ผ่าน/27 ข้าม (MySQL integration ไม่มี `TEST_DATABASE_URL`;
+  เดิม 184 + ใหม่ 9: queue.test.ts), Web 153 ผ่าน (เดิม 141 + ใหม่ 12: queue.test.tsx),
+  typecheck ผ่าน (api tsc + web tsc), build ผ่าน (api tsc emit + web vite 71 modules)
+- ไม่แตะไฟล์งานอื่นที่ค้างมาก่อน (excluded จาก commit ตาม ticket):
+  `apps/api/package.json`, `package-lock.json`, `apps/api/.gitignore`, `generated/`,
+  `prisma.config.ts`, `prisma/`, `src/db/`, `experiments/`,
+  `.agents/skills/ui-ux-pro-max/scripts/__pycache__/`; Tickets 01–08 ไม่ regression
+- สิ่งที่สร้าง: types (QueueStation/Status/Job/Capacity/Slot + audit actions queue_*),
+  `apps/api/src/queue/{validation,audit-events}.ts`, Store seams (memory + MySQL),
+  `db/migrations/010_kitchen_drink_queues.sql`, `apps/api/src/routes/queue.ts` + wiring,
+  Web `StationQueue`/`QueueTrack` + api client + nav/routes, tests API/Web
+- งานที่ข้าม (บันทึกตาม ticket — ไม่ทำให้ ticket ล้ม):
+  MySQL runtime จริง (มี migration + seams แล้ว แต่ไม่มี `TEST_DATABASE_URL`),
+  LINE notification, offline เต็มรูปแบบ, external delivery/payment, Docker/MySQL runtime,
+  image/external storage, browser E2E จริง (Playwright/Taste — ไม่มี reference URL ภายนอก)
+- ไม่รวมตาม scope (งาน ticket ถัดไป): คะแนน/รางวัล (10), การเงิน/Dashboard/CSV (11),
+  LINE (12), capacity/พยากรณ์โมเดลเต็ม (13 — ticket นี้ส่ง slot/capacity seam ให้แล้ว),
+  backup/security/observability/release E2E (14)
+
 ## Roadmap หลัง Ticket 06
 
 - Ticket 07: ตัวเลือกเมนู สูตร และสต๊อก

@@ -537,6 +537,73 @@ export interface Refund {
   createdAt: string;
 }
 
+// ---------- Ticket 09: คิวครัว/เครื่องดื่มและการส่งมอบ ----------
+
+export type QueueStation = "kitchen" | "drink";
+
+export type QueueStatus =
+  | "queued"
+  | "claimed"
+  | "preparing"
+  | "ready"
+  | "delivered"
+  | "cancelled";
+
+export const QUEUE_STATION_LABELS: Record<QueueStation, string> = {
+  kitchen: "ครัว",
+  drink: "เครื่องดื่ม",
+};
+
+export const QUEUE_STATUS_LABELS: Record<QueueStatus, string> = {
+  queued: "รอรับงาน",
+  claimed: "รับงานแล้ว",
+  preparing: "กำลังทำ",
+  ready: "พร้อมส่งมอบ",
+  delivered: "ส่งมอบแล้ว",
+  cancelled: "ยกเลิกแล้ว",
+};
+
+export interface QueueJob {
+  id: string;
+  orderId: string;
+  orderNumber: string;
+  paymentId: string;
+  orderItemId: string;
+  menuId: string;
+  menuName: string;
+  station: QueueStation;
+  quantity: number;
+  readyQty: number;
+  deliveredQty: number;
+  status: QueueStatus;
+  readyAt: string;
+  tableId: string | null;
+  roundId: string | null;
+  isRemake: boolean;
+  isPriority: boolean;
+  reason: string | null;
+  claimedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+  tableName: string | null;
+}
+
+export interface StationCapacity {
+  station: QueueStation;
+  perSlot: number;
+  updatedBy: string | null;
+  updatedAt: string;
+}
+
+export interface QueueSlot {
+  station: QueueStation;
+  slotStart: string;
+  slotEnd: string;
+  used: number;
+  capacity: number;
+  available: number;
+}
+
 /** ประวัติร้านใช้ AuditItem ชุดเดียวกับประวัติบัญชี (shape เดียวกัน ไม่ duplicate type) */
 
 const BASE = import.meta.env["VITE_API_URL"] ?? "";
@@ -908,4 +975,55 @@ export const api = {
   },
   refundsList: (limit = 50) => req<{ refunds: Refund[] }>(`/api/refunds?limit=${limit}`),
   paymentAudit: () => req<{ items: AuditItem[] }>("/api/audit/payments?limit=100"),
+  // Ticket 09: คิวครัว/เครื่องดื่ม (พนักงานหลังร้าน) + ติดตามของลูกค้า
+  queueList: (q: { station?: QueueStation; status?: QueueStatus; orderId?: string; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (q.station) params.set("station", q.station);
+    if (q.status) params.set("status", q.status);
+    if (q.orderId) params.set("orderId", q.orderId);
+    params.set("limit", String(q.limit ?? 50));
+    return req<{ jobs: QueueJob[] }>(`/api/queue?${params.toString()}`);
+  },
+  queueOrder: (orderId: string, phone?: string) =>
+    req<{ jobs: QueueJob[]; orderNumber: string }>(
+      `/api/queue/order/${orderId}${phone ? `?phone=${encodeURIComponent(phone)}` : ""}`,
+    ),
+  queueEnsure: (paymentId: string) =>
+    req<{ jobs: QueueJob[]; deduplicated: boolean }>(
+      "/api/queue/ensure",
+      { method: "POST", body: JSON.stringify({ paymentId }) },
+      true,
+    ),
+  queueClaim: (id: string) =>
+    req<{ job: QueueJob }>(`/api/queue/${id}/claim`, { method: "POST", body: JSON.stringify({}) }, true),
+  queueStart: (id: string) =>
+    req<{ job: QueueJob }>(`/api/queue/${id}/start`, { method: "POST", body: JSON.stringify({}) }, true),
+  queueReady: (id: string, qty: number) =>
+    req<{ job: QueueJob }>(`/api/queue/${id}/ready`, { method: "POST", body: JSON.stringify({ qty }) }, true),
+  queueDeliver: (id: string, qty: number) =>
+    req<{ job: QueueJob }>(`/api/queue/${id}/deliver`, { method: "POST", body: JSON.stringify({ qty }) }, true),
+  queuePriority: (id: string, reason: string) =>
+    req<{ job: QueueJob }>(`/api/queue/${id}/priority`, { method: "POST", body: JSON.stringify({ reason }) }, true),
+  queueRemake: (id: string, reason: string, quantity?: number) =>
+    req<{ job: QueueJob }>(
+      `/api/queue/${id}/remake`,
+      { method: "POST", body: JSON.stringify(quantity ? { reason, quantity } : { reason }) },
+      true,
+    ),
+  queueCancel: (id: string, reason: string) =>
+    req<{ job: QueueJob }>(`/api/queue/${id}/cancel`, { method: "POST", body: JSON.stringify({ reason }) }, true),
+  queueCapacities: () => req<{ capacities: StationCapacity[] }>("/api/queue/capacity"),
+  queueSetCapacity: (station: QueueStation, perSlot: number) =>
+    req<{ capacity: StationCapacity }>(
+      "/api/queue/capacity",
+      { method: "PUT", body: JSON.stringify({ station, perSlot }) },
+      true,
+    ),
+  queueSlots: (station: QueueStation, date: string) =>
+    req<{ slots: QueueSlot[] }>(`/api/queue/slots?station=${station}&date=${encodeURIComponent(date)}`),
+  queueNextSlot: (station: QueueStation, after: string) =>
+    req<{ slot: QueueSlot | null }>(
+      `/api/queue/slots/next?station=${station}&after=${encodeURIComponent(after)}`,
+    ),
+  queueAudit: () => req<{ items: AuditItem[] }>("/api/audit/queue?limit=100"),
 };

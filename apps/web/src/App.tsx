@@ -24,6 +24,8 @@ import AdminOrdersPage from "./pages/AdminOrders";
 import ReservationsPage from "./pages/Reservations";
 import CheckinPage from "./pages/Checkin";
 import AdminReservationsPage from "./pages/AdminReservations";
+import StationQueuePage from "./pages/StationQueue";
+import QueueTrackPage from "./pages/QueueTrack";
 
 const NAV_BASE =
   "inline-flex min-h-[44px] items-center rounded-xl border px-4 py-2 text-sm font-semibold transition-colors";
@@ -81,6 +83,7 @@ export default function App() {
         <Route path="/menu" element={<MenuPublicPage />} />
         <Route path="/cart" element={<CartPage />} />
         <Route path="/orders" element={<MyOrdersPage />} />
+        <Route path="/track" element={<QueueTrackPage />} />
         <Route path="/pay/:id" element={<PayOrderPage />} />
         <Route path="/reservations" element={<ReservationsPage />} />
         <Route path="/register" element={<CustomerRegisterPage />} />
@@ -92,6 +95,8 @@ export default function App() {
 
   const isOwner = me.roles.includes("owner");
   const isManager = isOwner || me.roles.includes("admin");
+  const canKitchen = isManager || me.roles.includes("kitchen");
+  const canDrink = isManager || me.roles.includes("drink");
   const homePath = isOwner ? "/staff" : isManager ? "/shop" : "/password";
   // การจัดการพนักงานเป็นของ Owner คนเดียว (ตรงกับ server authorization)
   // การจัดการร้าน/โต๊ะ/สมาชิกเป็นของ Owner และ Admin (kitchen/drink ไม่มีเมนูและถูกปฏิเสธที่ server)
@@ -139,6 +144,19 @@ export default function App() {
             <NavLink to="/orders" className={({ isActive }) => navClass(isActive)}>
               คำสั่งซื้อ
             </NavLink>
+            <NavLink to="/track" className={({ isActive }) => navClass(isActive)}>
+              ติดตามคิว
+            </NavLink>
+            {canKitchen && (
+              <NavLink to="/queue/kitchen" className={({ isActive }) => navClass(isActive)}>
+                คิวครัว
+              </NavLink>
+            )}
+            {canDrink && (
+              <NavLink to="/queue/drink" className={({ isActive }) => navClass(isActive)}>
+                คิวเครื่องดื่ม
+              </NavLink>
+            )}
             <NavLink to="/reservations" className={({ isActive }) => navClass(isActive)}>
               การจอง
             </NavLink>
@@ -218,6 +236,9 @@ export default function App() {
           <Route path="/menu" element={<MenuPublicPage />} />
           <Route path="/cart" element={<CartPage />} />
           <Route path="/orders" element={<MyOrdersPage />} />
+          <Route path="/track" element={<QueueTrackPage />} />
+          {canKitchen && <Route path="/queue/kitchen" element={<StationQueuePage station="kitchen" canManageCapacity={isManager} />} />}
+          {canDrink && <Route path="/queue/drink" element={<StationQueuePage station="drink" canManageCapacity={isManager} />} />}
           <Route path="/pay/:id" element={<PayOrderPage />} />
           <Route path="/reservations" element={<ReservationsPage />} />
           {isManager && <Route path="/checkin" element={<CheckinPage />} />}

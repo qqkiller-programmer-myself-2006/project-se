@@ -28,6 +28,9 @@ import type {
   PaymentStatus,
   PublicMenuItemWithOptions,
   PublicMenuOptionGroup,
+  QueueJobDetail,
+  QueueSlot,
+  QueueStatus,
   Receipt,
   Recipe,
   RecipeLine,
@@ -39,6 +42,7 @@ import type {
   Role,
   Session,
   ShopTable,
+  StationCapacity,
   StockLedgerEntry,
   StockOp,
   TableRound,
@@ -187,10 +191,35 @@ import {
   paymentRefundApprovedEvent,
   paymentStatusChangedEvent,
 } from "./payments/audit-events.js";
+import {
+  queueCapacityUpdatedEvent,
+  queueCreatedEvent,
+  queuePriorityEvent,
+  queueRemadeEvent,
+  queueStatusChangedEvent,
+} from "./queue/audit-events.js";
+import {
+  assertQueueTransition,
+  classifyStation,
+  compareQueueJobs,
+  computeReadyAt,
+  normalizeCapacityPerSlot,
+  normalizeQueueQty,
+  normalizeQueueReason,
+  normalizeQueueStatus,
+  normalizeStation,
+  slotStartOf,
+} from "./queue/validation.js";
 import { FakePromptPayProvider, isFakePaymentMode } from "./payments/provider.js";
 import { PAYMENT_PROMPTPAY_TTL_MINUTES } from "./types.js";
 import { normalizeThaiPhone } from "./customer/phone.js";
 import { ingredientAvailable, isMenuSellable, STOCK_OPS } from "./types.js";
+import {
+  QUEUE_DEFAULT_CAPACITY_PER_SLOT,
+  QUEUE_SLOT_MINUTES,
+  type QueueJob,
+  type QueueStation,
+} from "./types.js";
 
 export interface CreateUserInput {
   username: string;
@@ -319,7 +348,7 @@ export interface Store {
   deleteSessionsForUser(userId: string): Promise<void>;
   audit(input: AuditInput): Promise<void>;
   listAudit(
-    prefix: "login_" | "account_" | "shop_" | "customer_" | "menu_" | "order_" | "reservation_" | "round_" | "inventory_" | "payment_" | "all",
+    prefix: "login_" | "account_" | "shop_" | "customer_" | "menu_" | "order_" | "reservation_" | "round_" | "inventory_" | "payment_" | "queue_" | "all",
     limit: number,
   ): Promise<AuditEntry[]>;
   // ---- Ticket 02: สถานะร้านและโต๊ะ (อ่านเดี่ยว + mutation แบบ atomic พร้อม audit) ----
@@ -668,6 +697,64 @@ export interface Store {
    */
   approveRefund(paymentId: string, input: { reason: string }, actor: ShopActor, now?: Date): Promise<{ payment: Payment; refund: Refund }>;
   listRefunds(limit: number): Promise<Refund[]>;
+  // ---- Ticket 09: คิวครัว/เครื่องดื่มและการส่งมอบ (local-first, สร้างจาก paid เท่านั้น) ----
+  /**
+   * สร้าง queue jobs จาก payment ที่ paid แล้ว (หนึ่ง payment → หนึ่งชุด jobs):
+   * - หนึ่ง OrderItem → หนึ่ง job; แยกฝ่ายจาก menu kind (food → kitchen, drink → drink)
+   * - readyAt: งานทั่วไป = paidAt; preorder = scheduledAt − เวลาทำประมาณการของฝ่าย
+   * - idempotency: payment นี้เคยสร้างแล้ว → คืนชุดเดิม (deduplicated:true ไม่เขียน audit ซ้ำ)
+   * - payment ยังไม่ paid / ออเดอร์ถูกยกเลิก/คืนเงินแล้ว → ConflictError
+   * - ถูกเรียกอัตโนมัติเมื่อชำระสำเร็จ (confirm-cash/webhook/slip/resolve) แบบ no-op guard
+   */
+  ensureQueueJobs(paymentId: string, actor: ShopActor, now?: Date): Promise<{ jobs: QueueJobDetail[]; deduplicated: boolean }>;
+  /** งานคิวของคำสั่งซื้อ (ลูกค้าติดตามของตนเอง — route ตรวจสิทธิ์) */
+  listOrderQueueJobs(orderId: string): Promise<QueueJobDetail[]>;
+  getQueueJob(id: string): Promise<QueueJobDetail | null>;
+  /**
+   * รายการคิวของฝ่าย (เรียง FIFO ตาม readyAt ต่อฝ่าย — route กรองสิทธิ์ข้ามฝ่าย):
+   * station ว่าง = ทุกฝ่าย (เฉพาะ owner/admin); status กรองสถานะได้
+   */
+  listQueueJobs(filter: ListQueueJobsFilter): Promise<QueueJobDetail[]>;
+  /** รับงาน: queued → claimed (ต้องเป็นฝ่ายตน — route ตรวจ) */
+  claimQueueJob(id: string, actor: ShopActor, now?: Date): Promise<QueueJobDetail>;
+  /**
+   * เริ่มทำ: claimed → preparing + ตัดสต๊อกจริงของคำสั่งซื้อครั้งแรก (ครั้งเดียว idempotent —
+   * เรียกซ้ำ/งานอื่นของออเดอร์เดียวกันเป็น no-op ผ่าน consumeOrderStock contract)
+   */
+  startQueueJob(id: string, actor: ShopActor, now?: Date): Promise<QueueJobDetail>;
+  /**
+   * ทำเสร็จ (ทยอยได้): readyQty += qty (ไม่เกินยอดงาน); ครบ → preparing/claimed → ready
+   * (ยังไม่ครบคงสถานะเดิม แต่บันทึกยอด + audit)
+   */
+  completeQueueJob(id: string, input: { qty: number }, actor: ShopActor, now?: Date): Promise<QueueJobDetail>;
+  /**
+   * ส่งมอบ (ทยอยได้): deliveredQty += qty (ไม่เกินทำเสร็จและยอดงาน); ครบ → ready → delivered
+   * (ยังไม่ครบคง ready แต่บันทึกยอด + audit)
+   */
+  deliverQueueJob(id: string, input: { qty: number }, actor: ShopActor, now?: Date): Promise<QueueJobDetail>;
+  /** เร่งงาน: ต้องมีเหตุผล + audit (สิทธิ์เฉพาะฝ่ายตน — route ตรวจ) */
+  prioritizeQueueJob(id: string, input: { reason: string }, actor: ShopActor, now?: Date): Promise<QueueJobDetail>;
+  /**
+   * ทำใหม่: สร้าง job ใหม่จาก job เดิม (จำนวน ≤ คงเหลือที่ยังไม่ส่งมอบ, มีเหตุผล + audit,
+   * ไม่คิดเงินซ้ำ — readyAt = เวลาทำใหม่)
+   */
+  remakeQueueJob(id: string, input: { reason: string; quantity?: number | null }, actor: ShopActor, now?: Date): Promise<QueueJobDetail>;
+  /**
+   * ยกเลิกงานคิวบางรายการ (เฉพาะ queued/claimed + ออเดอร์ยังไม่ตัดสต๊อกจริง):
+   * ต้องมีเหตุผล + audit; คืนเงินแล้ว/ตัดจริงแล้ว → ConflictError (ตาม Ticket 08 contract)
+   */
+  cancelQueueJob(id: string, input: { reason: string }, actor: ShopActor, now?: Date): Promise<QueueJobDetail>;
+  /** กำลังผลิตต่อช่วง 15 นาทีของฝ่าย (default ตาม QUEUE_DEFAULT_CAPACITY_PER_SLOT) */
+  getStationCapacity(station: QueueStation): Promise<StationCapacity>;
+  /** ตั้งกำลังผลิต (Owner/Admin — route ตรวจสิทธิ์) + audit ก่อน/หลัง */
+  setStationCapacity(station: QueueStation, perSlot: number, actor: ShopActor, now?: Date): Promise<StationCapacity>;
+  /**
+   * ภาพสล็อต 15 นาทีของฝ่ายในวันนั้น (Asia/Bangkok) — เต็มเสนอช่วงถัดไป
+   * (contract สำหรับ Ticket 13: preorder slots + capacity)
+   */
+  listQueueSlots(station: QueueStation, date: string, now?: Date): Promise<QueueSlot[]>;
+  /** สล็อตว่างถัดไปของฝ่ายตั้งแต่เวลาที่กำหนด (null เมื่อเต็มทั้งวัน) */
+  suggestNextSlot(station: QueueStation, after: string, now?: Date): Promise<QueueSlot | null>;
   close?(): Promise<void>;
 }
 
@@ -786,6 +873,15 @@ export interface ListReceiptsFilter {
   limit: number;
 }
 
+// ---------- Ticket 09: คิวครัว/เครื่องดื่มและการส่งมอบ ----------
+
+export interface ListQueueJobsFilter {
+  station?: QueueStation;
+  status?: QueueStatus;
+  orderId?: string;
+  limit: number;
+}
+
 const nowIso = () => new Date().toISOString();
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -870,6 +966,12 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
   const receipts = new Map<string, Receipt>();
   const receiptsByNumber = new Map<string, string>();
   const refunds = new Map<string, Refund>();
+  // ---- Ticket 09 memory state: งานคิวครัว/เครื่องดื่ม + กำลังผลิตต่อฝ่าย ----
+  const queueJobs = new Map<string, QueueJob>();
+  /** หนึ่ง payment สร้าง jobs ได้ชุดเดียว (idempotency guard — เรียกซ้ำเป็น no-op) */
+  const queueByPayment = new Map<string, string[]>();
+  const queueByOrder = new Map<string, string[]>();
+  const stationCapacity = new Map<QueueStation, { perSlot: number; updatedBy: string | null; updatedAt: string }>();
   /**
    * คิว serialize สำหรับ mutation คำสั่งซื้อ+สต๊อกฝั่ง memory (กัน concurrent
    * แย่งวัตถุดิบชิ้นสุดท้าย: ตรวจพร้อมขายแล้วจองต้องเกิดทีละรายการ)
@@ -1010,6 +1112,11 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
     ingredients: Map<string, Ingredient>;
     ledger: StockLedgerEntry[];
     usage: Map<string, { ingredientId: string; qty: number }[]>;
+    // Ticket 09: ชำระสำเร็จสร้าง queue jobs ใน seam เดียวกัน — rollback พร้อมกัน
+    queue: Map<string, QueueJob>;
+    queueByPayment: Map<string, string[]>;
+    queueByOrder: Map<string, string[]>;
+    capacity: Map<QueueStation, { perSlot: number; updatedBy: string | null; updatedAt: string }>;
   }
 
   /** backup สำหรับ mutation การชำระเงิน (payment + order status + stock + audit แบบ all-or-nothing) */
@@ -1028,6 +1135,10 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
       ingredients: new Map([...ingredients].map(([id, g]) => [id, { ...g }] as const)),
       ledger: stockLedger.map((e) => ({ ...e })),
       usage: new Map([...orderStockUsage].map(([k, list]) => [k, list.map((u) => ({ ...u }))] as const)),
+      queue: new Map([...queueJobs].map(([id, j]) => [id, { ...j }] as const)),
+      queueByPayment: new Map([...queueByPayment].map(([k, v]) => [k, [...v]] as const)),
+      queueByOrder: new Map([...queueByOrder].map(([k, v]) => [k, [...v]] as const)),
+      capacity: new Map([...stationCapacity].map(([k, v]) => [k, { ...v }] as const)),
     };
   }
 
@@ -1057,6 +1168,14 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
     for (const e of b.ledger) stockLedger.push(e);
     orderStockUsage.clear();
     for (const [k, list] of b.usage) orderStockUsage.set(k, list);
+    queueJobs.clear();
+    for (const [id, j] of b.queue) queueJobs.set(id, j);
+    queueByPayment.clear();
+    for (const [k, v] of b.queueByPayment) queueByPayment.set(k, v);
+    queueByOrder.clear();
+    for (const [k, v] of b.queueByOrder) queueByOrder.set(k, v);
+    stationCapacity.clear();
+    for (const [k, v] of b.capacity) stationCapacity.set(k, v);
   }
 
   /** สถานะ derived ฝั่งคำสั่งซื้อจาก payment ล่าสุด (ไม่เปลี่ยน OrderStatus contract) */
@@ -1169,7 +1288,114 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
     receipts.set(p.id, { ...receipt, items: receipt.items.map((i) => ({ ...i })) });
     receiptsByNumber.set(receiptNumber, p.id);
     await writeAudit(paymentStatusChangedEvent(before, { ...p }, reason, actor));
+    // Ticket 09: ชำระสำเร็จสร้าง queue jobs แบบ exactly-once (payment นี้ชุดเดียว — เรียกซ้ำ no-op)
+    await ensureQueueJobsInternal(p, detail, actor, now);
     return { ...receipt, items: receipt.items.map((i) => ({ ...i })) };
+  }
+
+  // ---- Ticket 09 memory helpers: งานคิวครัว/เครื่องดื่ม (เรียกใน runOrderExclusive เท่านั้น) ----
+
+  function toQueueDetail(id: string): QueueJobDetail | null {
+    const j = queueJobs.get(id);
+    if (!j) return null;
+    const tableName = j.tableId ? (tables.get(j.tableId)?.name ?? null) : null;
+    return { ...j, tableName };
+  }
+
+  function capacityOf(station: QueueStation): { perSlot: number; updatedBy: string | null; updatedAt: string } {
+    const c = stationCapacity.get(station);
+    if (c) return { ...c };
+    return { perSlot: QUEUE_DEFAULT_CAPACITY_PER_SLOT, updatedBy: null, updatedAt: nowIso() };
+  }
+
+  /**
+   * สร้าง jobs จาก payment ที่ paid แล้วแบบ exactly-once (guard ด้วย queueByPayment):
+   * - มีแล้ว → คืนชุดเดิม (ไม่เขียน audit ซ้ำ)
+   * - หนึ่ง OrderItem → หนึ่ง job; ฝ่ายจาก menu kind; readyAt ทั่วไป = paidAt
+   *   preorder = scheduledAt − เวลาทำประมาณการของฝ่าย
+   */
+  async function ensureQueueJobsInternal(
+    p: Payment,
+    detail: OrderDetail,
+    actor: ShopActor,
+    now: Date,
+  ): Promise<QueueJob[]> {
+    const existing = queueByPayment.get(p.id);
+    if (existing) {
+      return existing.map((id) => ({ ...queueJobs.get(id)! }));
+    }
+    const paidAt = p.paidAt ? new Date(p.paidAt) : now;
+    const created: QueueJob[] = [];
+    for (const item of detail.items) {
+      const menu = menuItems.get(item.menuId);
+      const station = classifyStation(menu?.kind ?? "food");
+      const readyAt = computeReadyAt({
+        serviceType: detail.serviceType,
+        scheduledAt: detail.scheduledAt,
+        paidAt,
+        station,
+      });
+      const at = now.toISOString();
+      const job: QueueJob = {
+        id: randomUUID(),
+        orderId: detail.id,
+        orderNumber: detail.orderNumber,
+        paymentId: p.id,
+        orderItemId: item.id,
+        menuId: item.menuId,
+        menuName: item.menuName,
+        station,
+        quantity: item.quantity,
+        readyQty: 0,
+        deliveredQty: 0,
+        status: "queued",
+        readyAt,
+        tableId: detail.tableId,
+        roundId: detail.roundId,
+        isRemake: false,
+        isPriority: false,
+        reason: null,
+        claimedBy: null,
+        createdAt: at,
+        updatedAt: at,
+      };
+      queueJobs.set(job.id, job);
+      created.push(job);
+    }
+    queueByPayment.set(p.id, created.map((j) => j.id));
+    const orderList = queueByOrder.get(detail.id) ?? [];
+    queueByOrder.set(detail.id, [...orderList, ...created.map((j) => j.id)]);
+    for (const job of created) {
+      await writeAudit(queueCreatedEvent({ ...job }, actor));
+    }
+    return created.map((j) => ({ ...j }));
+  }
+
+  /** นับงานในสล็อต 15 นาทีของฝ่าย (ไม่นับงานที่ยกเลิกแล้ว) */
+  function countJobsInSlot(station: QueueStation, slotStart: Date): number {
+    let n = 0;
+    for (const j of queueJobs.values()) {
+      if (j.station !== station || j.status === "cancelled") continue;
+      if (slotStartOf(new Date(j.readyAt)).getTime() === slotStart.getTime()) n += 1;
+    }
+    return n;
+  }
+
+  /** ตรวจว่า payment/order หยุดเดินต่อหรือยัง (คืนเงิน/ยกเลิกแล้ว) */
+  function assertQueueOrderActive(orderId: string): Order {
+    const order = orders.get(orderId);
+    if (!order) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+    if (order.status === "cancelled") {
+      throw new ConflictError("คำสั่งซื้อถูกยกเลิกแล้ว งานคิวหยุดเดินต่อ");
+    }
+    const pid = paymentsByOrder.get(orderId);
+    if (pid) {
+      const pay = payments.get(pid);
+      if (pay && pay.status === "refunded") {
+        throw new ConflictError("คำสั่งซื้อนี้คืนเงินแล้ว งานคิวหยุดเดินต่อ");
+      }
+    }
+    return order;
   }
 
   interface InventoryStateBackup extends ShopStateBackup {
@@ -1827,6 +2053,7 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
           );
         }
         if (prefix === "payment_") return a.action.startsWith("payment_");
+        if (prefix === "queue_") return a.action.startsWith("queue_");
         return !a.action.startsWith("login_");
       });
       return items.slice(0, limit);
@@ -3481,6 +3708,373 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
         .slice(0, n)
         .map((r) => ({ ...r }));
     },
+    // ---- Ticket 09 memory: คิวครัว/เครื่องดื่มและการส่งมอบ ----
+    async ensureQueueJobs(paymentId, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const p = payments.get(paymentId);
+          if (!p) throw new NotFoundError("ไม่พบรายการชำระเงิน");
+          if (p.status !== "paid") {
+            throw new ConflictError("สร้างงานคิวได้เฉพาะคำสั่งซื้อที่ชำระสำเร็จแล้ว");
+          }
+          const detail = toDetail(p.orderId);
+          if (!detail) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+          if (detail.status === "cancelled") {
+            throw new ConflictError("คำสั่งซื้อถูกยกเลิกแล้ว สร้างงานคิวไม่ได้");
+          }
+          const existing = queueByPayment.get(p.id);
+          if (existing) {
+            return { jobs: existing.map((id) => toQueueDetail(id)!), deduplicated: true };
+          }
+          const created = await ensureQueueJobsInternal(p, detail, actor, now);
+          return { jobs: created.map((j) => toQueueDetail(j.id)!), deduplicated: false };
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async listOrderQueueJobs(orderId) {
+      const ids = queueByOrder.get(orderId) ?? [];
+      return ids.map((id) => toQueueDetail(id)!).filter(Boolean);
+    },
+    async getQueueJob(id) {
+      return toQueueDetail(id);
+    },
+    async listQueueJobs(filter) {
+      const limit = Math.min(Math.max(filter.limit || 50, 1), 200);
+      const now = new Date();
+      return [...queueJobs.values()]
+        .filter((j) => (filter.station ? j.station === filter.station : true))
+        .filter((j) => (filter.status ? j.status === filter.status : true))
+        .filter((j) => (filter.orderId ? j.orderId === filter.orderId : true))
+        .sort((a, b) => compareQueueJobs(a, b, now))
+        .slice(0, limit)
+        .map((j) => toQueueDetail(j.id)!);
+    },
+    async claimQueueJob(id, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const job = queueJobs.get(id);
+          if (!job) throw new NotFoundError("ไม่พบงานคิว");
+          assertQueueOrderActive(job.orderId);
+          assertQueueTransition(job.status, "claimed");
+          const before = { status: job.status };
+          job.status = "claimed";
+          job.claimedBy = actor.actorUsername ?? actor.actorId ?? null;
+          job.updatedAt = now.toISOString();
+          await writeAudit(queueStatusChangedEvent(before, { ...job }, "รับงานเข้าทำ", actor));
+          return toQueueDetail(id)!;
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async startQueueJob(id, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const job = queueJobs.get(id);
+          if (!job) throw new NotFoundError("ไม่พบงานคิว");
+          assertQueueOrderActive(job.orderId);
+          assertQueueTransition(job.status, "preparing");
+          const before = { status: job.status };
+          job.status = "preparing";
+          job.claimedBy = actor.actorUsername ?? actor.actorId ?? null;
+          job.updatedAt = now.toISOString();
+          // ตัดสต๊อกจริงครั้งแรกของคำสั่งซื้อ (ครั้งเดียว — เรียกซ้ำ/งานอื่นเป็น no-op)
+          const order = orders.get(job.orderId);
+          if (order && order.stockReserved && !order.stockConsumed) {
+            const usage = orderStockUsage.get(order.id) ?? [];
+            for (const u of usage) {
+              const ing = ingredients.get(u.ingredientId);
+              if (!ing) continue;
+              const beforeOnHand = ing.onHand;
+              const beforeReserved = ing.reserved;
+              ing.reserved = Math.max(0, Math.round((ing.reserved - u.qty) * 1000) / 1000);
+              ing.onHand = Math.round((ing.onHand - u.qty) * 1000) / 1000;
+              ing.updatedAt = nowIso();
+              stockLedger.push({
+                id: randomUUID(),
+                ingredientId: u.ingredientId,
+                op: "consume",
+                deltaOnHand: -u.qty,
+                deltaReserved: -u.qty,
+                beforeOnHand,
+                afterOnHand: ing.onHand,
+                beforeReserved,
+                afterReserved: ing.reserved,
+                reason: `ตัดใช้จริงให้คำสั่งซื้อ ${order.orderNumber} เมื่อเริ่มทำ (งานคิว ${job.id})`,
+                actorId: actor.actorId ?? null,
+                actorUsername: actor.actorUsername ?? null,
+                orderId: order.id,
+                reference: order.orderNumber,
+                createdAt: nowIso(),
+              });
+            }
+            order.stockConsumed = true;
+            order.updatedAt = now.toISOString();
+            await writeAudit(orderStockConsumedEvent(order.orderNumber, order.id, actor));
+          }
+          await writeAudit(queueStatusChangedEvent(before, { ...job }, "เริ่มทำ", actor));
+          return toQueueDetail(id)!;
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async completeQueueJob(id, input, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const job = queueJobs.get(id);
+          if (!job) throw new NotFoundError("ไม่พบงานคิว");
+          assertQueueOrderActive(job.orderId);
+          if (job.status !== "claimed" && job.status !== "preparing") {
+            throw new ConflictError("บันทึกทำเสร็จได้เฉพาะงานที่รับงานหรือกำลังทำอยู่");
+          }
+          const qty = normalizeQueueQty(input.qty);
+          if (job.readyQty + qty > job.quantity) {
+            throw new ConflictError(`จำนวนทำเสร็จเกินยอดงาน (ทำเสร็จแล้ว ${job.readyQty}/${job.quantity})`);
+          }
+          const before = { status: job.status };
+          job.readyQty += qty;
+          job.status = job.readyQty === job.quantity ? "ready" : "preparing";
+          job.updatedAt = now.toISOString();
+          await writeAudit(
+            queueStatusChangedEvent(before, { ...job }, `ทำเสร็จ ${qty} รายการ`, actor),
+          );
+          return toQueueDetail(id)!;
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async deliverQueueJob(id, input, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const job = queueJobs.get(id);
+          if (!job) throw new NotFoundError("ไม่พบงานคิว");
+          assertQueueOrderActive(job.orderId);
+          if (job.status !== "ready") {
+            throw new ConflictError("ส่งมอบได้เฉพาะงานที่พร้อมส่งมอบแล้ว");
+          }
+          const qty = normalizeQueueQty(input.qty);
+          if (job.deliveredQty + qty > job.readyQty) {
+            throw new ConflictError(
+              `จำนวนส่งมอบเกินจำนวนที่ทำเสร็จ (ส่งมอบแล้ว ${job.deliveredQty}/${job.readyQty} ที่ทำเสร็จ)`,
+            );
+          }
+          if (job.deliveredQty + qty > job.quantity) {
+            throw new ConflictError(`จำนวนส่งมอบเกินยอดงาน (${job.quantity})`);
+          }
+          const before = { status: job.status };
+          job.deliveredQty += qty;
+          job.status = job.deliveredQty === job.quantity ? "delivered" : "ready";
+          job.updatedAt = now.toISOString();
+          await writeAudit(
+            queueStatusChangedEvent(before, { ...job }, `ส่งมอบ ${qty} รายการ`, actor),
+          );
+          return toQueueDetail(id)!;
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async prioritizeQueueJob(id, input, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const job = queueJobs.get(id);
+          if (!job) throw new NotFoundError("ไม่พบงานคิว");
+          assertQueueOrderActive(job.orderId);
+          if (job.status === "delivered" || job.status === "cancelled") {
+            throw new ConflictError("งานคิวนี้ปิดงานแล้ว เร่งงานไม่ได้");
+          }
+          const reason = normalizeQueueReason(input.reason);
+          job.isPriority = true;
+          job.reason = reason;
+          job.updatedAt = now.toISOString();
+          await writeAudit(queuePriorityEvent({ ...job }, reason, actor));
+          return toQueueDetail(id)!;
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async remakeQueueJob(id, input, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const original = queueJobs.get(id);
+          if (!original) throw new NotFoundError("ไม่พบงานคิว");
+          assertQueueOrderActive(original.orderId);
+          if (original.status === "cancelled") {
+            throw new ConflictError("งานคิวนี้ถูกยกเลิกแล้ว ทำใหม่ไม่ได้");
+          }
+          const reason = normalizeQueueReason(input.reason);
+          const remaining = original.quantity - original.deliveredQty;
+          if (remaining <= 0) {
+            throw new ConflictError("งานนี้ส่งมอบครบแล้ว ไม่ต้องทำใหม่");
+          }
+          const qty =
+            input.quantity === undefined || input.quantity === null
+              ? remaining
+              : normalizeQueueQty(input.quantity);
+          if (qty > remaining) {
+            throw new ConflictError(`จำนวนทำใหม่เกินคงเหลือที่ยังไม่ส่งมอบ (${remaining})`);
+          }
+          const at = now.toISOString();
+          const remake: QueueJob = {
+            id: randomUUID(),
+            orderId: original.orderId,
+            orderNumber: original.orderNumber,
+            paymentId: original.paymentId,
+            orderItemId: original.orderItemId,
+            menuId: original.menuId,
+            menuName: original.menuName,
+            station: original.station,
+            quantity: qty,
+            readyQty: 0,
+            deliveredQty: 0,
+            status: "queued",
+            readyAt: at,
+            tableId: original.tableId,
+            roundId: original.roundId,
+            isRemake: true,
+            isPriority: false,
+            reason,
+            claimedBy: null,
+            createdAt: at,
+            updatedAt: at,
+          };
+          queueJobs.set(remake.id, remake);
+          const orderList = queueByOrder.get(remake.orderId) ?? [];
+          queueByOrder.set(remake.orderId, [...orderList, remake.id]);
+          await writeAudit(queueRemadeEvent({ ...original }, { ...remake }, reason, actor));
+          return toQueueDetail(remake.id)!;
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async cancelQueueJob(id, input, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const job = queueJobs.get(id);
+          if (!job) throw new NotFoundError("ไม่พบงานคิว");
+          const order = orders.get(job.orderId);
+          if (!order) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+          if (order.stockConsumed) {
+            throw new ConflictError("คำสั่งซื้อเริ่มทำ (ตัดสต๊อกจริง) แล้ว ยกเลิกงานคิวไม่ได้");
+          }
+          const pid = paymentsByOrder.get(order.id);
+          if (pid) {
+            const pay = payments.get(pid);
+            if (pay && pay.status === "refunded") {
+              throw new ConflictError("คำสั่งซื้อนี้คืนเงินแล้ว ยกเลิกงานคิวไม่ได้");
+            }
+          }
+          if (job.status !== "queued" && job.status !== "claimed") {
+            throw new ConflictError("ยกเลิกงานคิวได้เฉพาะก่อนเริ่มทำเท่านั้น");
+          }
+          const reason = normalizeQueueReason(input.reason);
+          const before = { status: job.status };
+          job.status = "cancelled";
+          job.reason = reason;
+          job.updatedAt = now.toISOString();
+          await writeAudit(queueStatusChangedEvent(before, { ...job }, reason, actor));
+          return toQueueDetail(id)!;
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async getStationCapacity(station) {
+      const c = capacityOf(normalizeStation(station));
+      return { station: normalizeStation(station), perSlot: c.perSlot, updatedBy: c.updatedBy, updatedAt: c.updatedAt };
+    },
+    async setStationCapacity(station, perSlot, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const st = normalizeStation(station);
+          const n = normalizeCapacityPerSlot(perSlot);
+          const before = capacityOf(st).perSlot;
+          stationCapacity.set(st, {
+            perSlot: n,
+            updatedBy: actor.actorUsername ?? actor.actorId ?? null,
+            updatedAt: now.toISOString(),
+          });
+          await writeAudit(queueCapacityUpdatedEvent(st, before, n, actor));
+          const c = capacityOf(st);
+          return { station: st, perSlot: c.perSlot, updatedBy: c.updatedBy, updatedAt: c.updatedAt };
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async listQueueSlots(station, date, now = new Date()) {
+      const st = normalizeStation(station);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)");
+      const cap = capacityOf(st).perSlot;
+      // คำนวณขอบวัน Asia/Bangkok: เที่ยงคืนกรุงเทพ = 17:00Z วันก่อนหน้า (ไม่มี DST)
+      const dayStartUtc = new Date(`${date}T00:00:00+07:00`);
+      if (Number.isNaN(dayStartUtc.getTime())) throw new Error("รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)");
+      const slots: QueueSlot[] = [];
+      const slotMs = QUEUE_SLOT_MINUTES * 60 * 1000;
+      void now;
+      for (let i = 0; i < (24 * 60) / QUEUE_SLOT_MINUTES; i += 1) {
+        const start = new Date(dayStartUtc.getTime() + i * slotMs);
+        const end = new Date(start.getTime() + slotMs);
+        const used = countJobsInSlot(st, start);
+        slots.push({
+          station: st,
+          slotStart: start.toISOString(),
+          slotEnd: end.toISOString(),
+          used,
+          capacity: cap,
+          available: Math.max(0, cap - used),
+        });
+      }
+      return slots;
+    },
+    async suggestNextSlot(station, after, now = new Date()) {
+      const st = normalizeStation(station);
+      const afterDate = new Date(after);
+      if (Number.isNaN(afterDate.getTime())) throw new Error("เวลาไม่ถูกต้อง");
+      const cap = capacityOf(st).perSlot;
+      const slotMs = QUEUE_SLOT_MINUTES * 60 * 1000;
+      let cursor = slotStartOf(afterDate);
+      void now;
+      // สแกนไม่เกิน 7 วันข้างหน้า (96 สล็อต/วัน)
+      for (let i = 0; i < 96 * 7; i += 1) {
+        const start = new Date(cursor.getTime() + i * slotMs);
+        if (countJobsInSlot(st, start) < cap) {
+          return {
+            station: st,
+            slotStart: start.toISOString(),
+            slotEnd: new Date(start.getTime() + slotMs).toISOString(),
+            used: countJobsInSlot(st, start),
+            capacity: cap,
+            available: cap - countJobsInSlot(st, start),
+          };
+        }
+      }
+      return null;
+    },
     // ---- Ticket 06 memory: การจอง + รอบการใช้โต๊ะ (all-or-nothing + serialize กันชน) ----
     async createReservation(input, actor, now = new Date()) {
       return runReservationExclusive(async () => {
@@ -4127,6 +4721,49 @@ function rowToRefund(r: Record<string, unknown>): Refund {
   };
 }
 
+// ---- Ticket 09: converter แถว queue_jobs (ใช้ทั้ง seams ใน createMysqlStore) ----
+
+function rowToQueueJob(r: Record<string, unknown>): QueueJob {
+  const station = String(r["station"]);
+  if (station !== "kitchen" && station !== "drink") {
+    throw new Error("ฝ่ายงานคิวในฐานข้อมูลไม่ถูกต้อง");
+  }
+  const status = String(r["status"]);
+  if (
+    status !== "queued" &&
+    status !== "claimed" &&
+    status !== "preparing" &&
+    status !== "ready" &&
+    status !== "delivered" &&
+    status !== "cancelled"
+  ) {
+    throw new Error("สถานะงานคิวในฐานข้อมูลไม่ถูกต้อง");
+  }
+  return {
+    id: String(r["id"]),
+    orderId: String(r["order_id"]),
+    orderNumber: String(r["order_number"]),
+    paymentId: String(r["payment_id"]),
+    orderItemId: String(r["order_item_id"]),
+    menuId: String(r["menu_id"]),
+    menuName: String(r["menu_name"]),
+    station,
+    quantity: Number(r["quantity"]),
+    readyQty: Number(r["ready_qty"] ?? 0),
+    deliveredQty: Number(r["delivered_qty"] ?? 0),
+    status,
+    readyAt: new Date(r["ready_at"] as string).toISOString(),
+    tableId: r["table_id"] == null ? null : String(r["table_id"]),
+    roundId: r["round_id"] == null ? null : String(r["round_id"]),
+    isRemake: Number(r["is_remake"] ?? 0) === 1,
+    isPriority: Number(r["is_priority"] ?? 0) === 1,
+    reason: r["reason"] == null ? null : String(r["reason"]),
+    claimedBy: r["claimed_by"] == null ? null : String(r["claimed_by"]),
+    createdAt: new Date(r["created_at"] as string).toISOString(),
+    updatedAt: new Date(r["updated_at"] as string).toISOString(),
+  };
+}
+
 /** สถานะ derived ฝั่งคำสั่งซื้อจาก payment (ไม่เปลี่ยน OrderStatus contract) */
 function paymentToOrderState(status: PaymentStatus | null): OrderPaymentState {
   if (status === "paid") return "paid";
@@ -4681,9 +5318,183 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
     p.receiptNumber = receiptNumber;
     p.updatedAt = now.toISOString();
     await insertAuditRow(q, paymentStatusChangedEvent(before, { ...p }, reason, actor));
+    // Ticket 09: ชำระสำเร็จสร้าง queue jobs แบบ exactly-once ใน transaction เดียวกัน
+    await ensureQueueJobsTx(q, p, detail, actor, now);
         const receipt = await readReceiptTx(q, p.id);
     if (!receipt) throw new Error("ออกใบเสร็จไม่สำเร็จ");
     return receipt;
+  }
+
+  // ---- Ticket 09 MySQL helpers: งานคิวครัว/เครื่องดื่ม (เรียกใน transaction เดียวกับ caller) ----
+
+  /** อ่านงานคิวพร้อมชื่อโต๊ะ (null เมื่อไม่พบ) */
+  async function readQueueDetailTx(q: QueryRunner, id: string): Promise<QueueJobDetail | null> {
+    const [rows] = (await q.query(
+      "SELECT j.*, t.name AS table_name FROM queue_jobs j LEFT JOIN shop_tables t ON t.id = j.table_id WHERE j.id = ? LIMIT 1",
+      [id],
+    )) as [Record<string, unknown>[], unknown];
+    if (rows.length === 0) return null;
+    const job = rowToQueueJob(rows[0]!);
+    return { ...job, tableName: rows[0]!["table_name"] ? String(rows[0]!["table_name"]) : null };
+  }
+
+  async function listQueueDetailsTx(q: QueryRunner, ids: string[]): Promise<QueueJobDetail[]> {
+    const out: QueueJobDetail[] = [];
+    for (const id of ids) {
+      const d = await readQueueDetailTx(q, id);
+      if (d) out.push(d);
+    }
+    return out;
+  }
+
+  /**
+   * สร้าง jobs จาก payment ที่ paid แล้วแบบ exactly-once:
+   * มีแถวของ payment นี้แล้ว → คืนชุดเดิม (ไม่เขียน audit ซ้ำ)
+   */
+  async function ensureQueueJobsTx(
+    q: QueryRunner,
+    p: Payment,
+    detail: OrderDetail,
+    actor: ShopActor,
+    now: Date,
+  ): Promise<QueueJob[]> {
+    const [existing] = (await q.query("SELECT * FROM queue_jobs WHERE payment_id = ? ORDER BY created_at ASC", [p.id])) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    if (existing.length > 0) return existing.map(rowToQueueJob);
+    const menuIds = [...new Set(detail.items.map((i) => i.menuId))];
+    const kindByMenu = new Map<string, string>();
+    if (menuIds.length > 0) {
+      const [mRows] = (await q.query(`SELECT id, kind FROM menu_items WHERE id IN (${menuIds.map(() => "?").join(",")})`, menuIds)) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      for (const m of mRows as Record<string, unknown>[]) kindByMenu.set(String(m["id"]), String(m["kind"]));
+    }
+    const paidAt = p.paidAt ? new Date(p.paidAt) : now;
+    const created: QueueJob[] = [];
+    for (const item of detail.items) {
+      const station = classifyStation(kindByMenu.get(item.menuId) === "drink" ? "drink" : "food");
+      const readyAt = computeReadyAt({
+        serviceType: detail.serviceType,
+        scheduledAt: detail.scheduledAt,
+        paidAt,
+        station,
+      });
+      const job: QueueJob = {
+        id: randomUUID(),
+        orderId: detail.id,
+        orderNumber: detail.orderNumber,
+        paymentId: p.id,
+        orderItemId: item.id,
+        menuId: item.menuId,
+        menuName: item.menuName,
+        station,
+        quantity: item.quantity,
+        readyQty: 0,
+        deliveredQty: 0,
+        status: "queued",
+        readyAt,
+        tableId: detail.tableId,
+        roundId: detail.roundId,
+        isRemake: false,
+        isPriority: false,
+        reason: null,
+        claimedBy: null,
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+      };
+      await q.query(
+        "INSERT INTO queue_jobs (id, order_id, order_number, payment_id, order_item_id, menu_id, menu_name, station, quantity, ready_qty, delivered_qty, status, ready_at, table_id, round_id, is_remake, is_priority, reason, claimed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'queued', ?, ?, ?, 0, 0, NULL, NULL)",
+        [
+          job.id, job.orderId, job.orderNumber, job.paymentId, job.orderItemId, job.menuId,
+          job.menuName, job.station, job.quantity, toMysqlDatetime(job.readyAt),
+          job.tableId, job.roundId,
+        ],
+      );
+      await insertAuditRow(q, queueCreatedEvent({ ...job }, actor));
+      created.push(job);
+    }
+    return created;
+  }
+
+  /** ตรวจว่า order/payment หยุดเดินต่อหรือยัง (คืนเงิน/ยกเลิกแล้ว → 409) */
+  async function assertQueueOrderActiveTx(q: QueryRunner, orderId: string): Promise<Order> {
+    const [oRows] = (await q.query("SELECT * FROM orders WHERE id = ? LIMIT 1", [orderId])) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    if (oRows.length === 0) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+    const order = rowToOrder(oRows[0]!);
+    if (order.status === "cancelled") {
+      throw new ConflictError("คำสั่งซื้อถูกยกเลิกแล้ว งานคิวหยุดเดินต่อ");
+    }
+    const [pRows] = (await q.query("SELECT status FROM payments WHERE order_id = ? LIMIT 1", [orderId])) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    if (pRows.length > 0 && String(pRows[0]!["status"]) === "refunded") {
+      throw new ConflictError("คำสั่งซื้อนี้คืนเงินแล้ว งานคิวหยุดเดินต่อ");
+    }
+    return order;
+  }
+
+  /** ตัดสต๊อกจริงครั้งแรกของคำสั่งซื้อ (ครั้งเดียว — มี flag แล้วเป็น no-op) */
+  async function consumeStockForQueueStartTx(
+    q: QueryRunner,
+    order: Order,
+    jobId: string,
+    actor: ShopActor,
+  ): Promise<void> {
+    if (!order.stockReserved || order.stockConsumed) return;
+    const [useRows] = (await q.query("SELECT ingredient_id, qty FROM order_stock_usage WHERE order_id = ?", [order.id])) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    for (const u of useRows as Record<string, unknown>[]) {
+      const ingId = String(u["ingredient_id"]);
+      const qty = Number(u["qty"]);
+      const [ingRows] = (await q.query("SELECT * FROM ingredients WHERE id = ? LIMIT 1 FOR UPDATE", [ingId])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      if (ingRows.length === 0) continue;
+      const ing = rowToIngredient(ingRows[0]!);
+      const afterReserved = roundStock(Math.max(0, ing.reserved - qty));
+      const afterOnHand = roundStock(ing.onHand - qty);
+      await q.query("UPDATE ingredients SET on_hand = ?, reserved = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [
+        afterOnHand, afterReserved, ingId,
+      ]);
+      await q.query(
+        "INSERT INTO stock_ledger (id, ingredient_id, op, delta_on_hand, delta_reserved, before_on_hand, after_on_hand, before_reserved, after_reserved, reason, actor_id, actor_username, order_id, reference) VALUES (?, ?, 'consume', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+          randomUUID(), ingId, -qty, -qty, ing.onHand, afterOnHand, ing.reserved, afterReserved,
+          `ตัดใช้จริงให้คำสั่งซื้อ ${order.orderNumber} เมื่อเริ่มทำ (งานคิว ${jobId})`,
+          actor.actorId ?? null, actor.actorUsername ?? null, order.id, order.orderNumber,
+        ],
+      );
+    }
+    await q.query("UPDATE orders SET stock_consumed = 1 WHERE id = ?", [order.id]);
+    await insertAuditRow(q, orderStockConsumedEvent(order.orderNumber, order.id, actor));
+  }
+
+  async function readCapacityTx(q: QueryRunner, station: QueueStation): Promise<number> {
+    const [rows] = (await q.query("SELECT per_slot FROM station_capacity WHERE station = ? LIMIT 1", [station])) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    if (rows.length === 0) return QUEUE_DEFAULT_CAPACITY_PER_SLOT;
+    return Number(rows[0]!["per_slot"]);
+  }
+
+  async function countJobsInSlotTx(q: QueryRunner, station: QueueStation, slotStart: Date): Promise<number> {
+    const slotMs = QUEUE_SLOT_MINUTES * 60 * 1000;
+    const [rows] = (await q.query(
+      "SELECT COUNT(*) AS n FROM queue_jobs WHERE station = ? AND status <> 'cancelled' AND ready_at >= ? AND ready_at < ?",
+      [station, toMysqlDatetime(slotStart.toISOString()), toMysqlDatetime(new Date(slotStart.getTime() + slotMs).toISOString())],
+    )) as [Record<string, unknown>[], unknown];
+    return Number(rows[0]!["n"] ?? 0);
   }
 
   async function readReservationDetail(q: QueryRunner, id: string): Promise<ReservationDetail | null> {    const [rows] = (await q.query(
@@ -4979,6 +5790,8 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
         sql += " WHERE action LIKE 'table\\_round\\_%'";
       } else if (prefix === "payment_") {
         sql += " WHERE action LIKE 'payment\\_%'";
+      } else if (prefix === "queue_") {
+        sql += " WHERE action LIKE 'queue\\_%'";
       } else if (prefix === "account_") {
         sql += " WHERE action NOT LIKE 'login\\_%'";
       }
@@ -7470,6 +8283,387 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
         unknown,
       ];
       return (rows as Record<string, unknown>[]).map(rowToRefund);
+    },
+    // ---- Ticket 09 MySQL: คิวครัว/เครื่องดื่มและการส่งมอบ ----
+    async ensureQueueJobs(paymentId: string, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM payments WHERE id = ? LIMIT 1 FOR UPDATE", [paymentId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบรายการชำระเงิน");
+        const p = rowToPayment(rows[0]!);
+        if (p.status !== "paid") {
+          throw new ConflictError("สร้างงานคิวได้เฉพาะคำสั่งซื้อที่ชำระสำเร็จแล้ว");
+        }
+        const detail = await readOrderDetailTx(conn, p.orderId);
+        if (!detail) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+        if (detail.status === "cancelled") {
+          throw new ConflictError("คำสั่งซื้อถูกยกเลิกแล้ว สร้างงานคิวไม่ได้");
+        }
+        const [existing] = (await conn.query("SELECT id FROM queue_jobs WHERE payment_id = ? LIMIT 1", [p.id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (existing.length > 0) {
+          const [jRows] = (await conn.query("SELECT j.*, t.name AS table_name FROM queue_jobs j LEFT JOIN shop_tables t ON t.id = j.table_id WHERE j.payment_id = ? ORDER BY j.created_at ASC", [p.id])) as [
+            Record<string, unknown>[],
+            unknown,
+          ];
+          return {
+            jobs: (jRows as Record<string, unknown>[]).map((r) => {
+              const job = rowToQueueJob(r);
+              return { ...job, tableName: r["table_name"] ? String(r["table_name"]) : null };
+            }),
+            deduplicated: true,
+          };
+        }
+        const created = await ensureQueueJobsTx(conn, p, detail, actor, now);
+        return { jobs: await listQueueDetailsTx(conn, created.map((j) => j.id)), deduplicated: false };
+      });
+    },
+    async listOrderQueueJobs(orderId: string) {
+      const [rows] = (await pool.query(
+        "SELECT j.*, t.name AS table_name FROM queue_jobs j LEFT JOIN shop_tables t ON t.id = j.table_id WHERE j.order_id = ? ORDER BY j.created_at ASC",
+        [orderId],
+      )) as [Record<string, unknown>[], unknown];
+      return (rows as Record<string, unknown>[]).map((r) => {
+        const job = rowToQueueJob(r);
+        return { ...job, tableName: r["table_name"] ? String(r["table_name"]) : null };
+      });
+    },
+    async getQueueJob(id: string) {
+      const [rows] = (await pool.query(
+        "SELECT j.*, t.name AS table_name FROM queue_jobs j LEFT JOIN shop_tables t ON t.id = j.table_id WHERE j.id = ? LIMIT 1",
+        [id],
+      )) as [Record<string, unknown>[], unknown];
+      if (rows.length === 0) return null;
+      const job = rowToQueueJob(rows[0]!);
+      return { ...job, tableName: rows[0]!["table_name"] ? String(rows[0]!["table_name"]) : null };
+    },
+    async listQueueJobs(filter: ListQueueJobsFilter) {
+      const n = Math.min(Math.max(filter.limit || 50, 1), 200);
+      const params: unknown[] = [];
+      let sql =
+        "SELECT j.*, t.name AS table_name FROM queue_jobs j LEFT JOIN shop_tables t ON t.id = j.table_id";
+      const where: string[] = [];
+      if (filter.station) {
+        where.push("j.station = ?");
+        params.push(normalizeStation(filter.station));
+      }
+      if (filter.status) {
+        where.push("j.status = ?");
+        params.push(normalizeQueueStatus(filter.status));
+      }
+      if (filter.orderId) {
+        where.push("j.order_id = ?");
+        params.push(filter.orderId);
+      }
+      if (where.length > 0) sql += ` WHERE ${where.join(" AND ")}`;
+      sql += " ORDER BY j.ready_at ASC, j.created_at ASC LIMIT ?";
+      params.push(n);
+      const [rows] = (await pool.query(sql, params)) as [Record<string, unknown>[], unknown];
+      const now = new Date();
+      const jobs = (rows as Record<string, unknown>[]).map((r) => {
+        const job = rowToQueueJob(r);
+        return { ...job, tableName: r["table_name"] ? String(r["table_name"]) : null };
+      });
+      // FIFO ต่อฝ่ายตาม readyAt (priority แทรกได้) — เรียงที่โค้ดให้ตรงกับ memory seam
+      return jobs.sort((a, b) => compareQueueJobs(a, b, now)).slice(0, n);
+    },
+    async claimQueueJob(id: string, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM queue_jobs WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบงานคิว");
+        const job = rowToQueueJob(rows[0]!);
+        await assertQueueOrderActiveTx(conn, job.orderId);
+        assertQueueTransition(job.status, "claimed");
+        const before = { status: job.status };
+        await conn.query("UPDATE queue_jobs SET status = 'claimed', claimed_by = ? WHERE id = ?", [
+          actor.actorUsername ?? actor.actorId ?? null, id,
+        ]);
+        const after = { ...job, status: "claimed" as const, claimedBy: actor.actorUsername ?? actor.actorId ?? null, updatedAt: now.toISOString() };
+        await insertAuditRow(conn, queueStatusChangedEvent(before, after, "รับงานเข้าทำ", actor));
+        return (await readQueueDetailTx(conn, id))!;
+      });
+    },
+    async startQueueJob(id: string, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM queue_jobs WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบงานคิว");
+        const job = rowToQueueJob(rows[0]!);
+        const order = await assertQueueOrderActiveTx(conn, job.orderId);
+        assertQueueTransition(job.status, "preparing");
+        const before = { status: job.status };
+        // ตัดสต๊อกจริงครั้งแรกของคำสั่งซื้อ (ครั้งเดียว — มี flag แล้วเป็น no-op)
+        const [oRows] = (await conn.query("SELECT * FROM orders WHERE id = ? LIMIT 1 FOR UPDATE", [order.id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const locked = rowToOrder(oRows[0]!);
+        await consumeStockForQueueStartTx(conn, locked, id, actor);
+        await conn.query("UPDATE queue_jobs SET status = 'preparing', claimed_by = ? WHERE id = ?", [
+          actor.actorUsername ?? actor.actorId ?? null, id,
+        ]);
+        const after = { ...job, status: "preparing" as const, claimedBy: actor.actorUsername ?? actor.actorId ?? null, updatedAt: now.toISOString() };
+        await insertAuditRow(conn, queueStatusChangedEvent(before, after, "เริ่มทำ", actor));
+        return (await readQueueDetailTx(conn, id))!;
+      });
+    },
+    async completeQueueJob(id: string, input: { qty: number }, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM queue_jobs WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบงานคิว");
+        const job = rowToQueueJob(rows[0]!);
+        await assertQueueOrderActiveTx(conn, job.orderId);
+        if (job.status !== "claimed" && job.status !== "preparing") {
+          throw new ConflictError("บันทึกทำเสร็จได้เฉพาะงานที่รับงานหรือกำลังทำอยู่");
+        }
+        const qty = normalizeQueueQty(input.qty);
+        if (job.readyQty + qty > job.quantity) {
+          throw new ConflictError(`จำนวนทำเสร็จเกินยอดงาน (ทำเสร็จแล้ว ${job.readyQty}/${job.quantity})`);
+        }
+        const before = { status: job.status };
+        const readyQty = job.readyQty + qty;
+        const status = readyQty === job.quantity ? "ready" : "preparing";
+        await conn.query("UPDATE queue_jobs SET ready_qty = ?, status = ? WHERE id = ?", [readyQty, status, id]);
+        const after = { ...job, readyQty, status: status as QueueJob["status"], updatedAt: now.toISOString() };
+        await insertAuditRow(conn, queueStatusChangedEvent(before, after, `ทำเสร็จ ${qty} รายการ`, actor));
+        return (await readQueueDetailTx(conn, id))!;
+      });
+    },
+    async deliverQueueJob(id: string, input: { qty: number }, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM queue_jobs WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบงานคิว");
+        const job = rowToQueueJob(rows[0]!);
+        await assertQueueOrderActiveTx(conn, job.orderId);
+        if (job.status !== "ready") {
+          throw new ConflictError("ส่งมอบได้เฉพาะงานที่พร้อมส่งมอบแล้ว");
+        }
+        const qty = normalizeQueueQty(input.qty);
+        if (job.deliveredQty + qty > job.readyQty) {
+          throw new ConflictError(
+            `จำนวนส่งมอบเกินจำนวนที่ทำเสร็จ (ส่งมอบแล้ว ${job.deliveredQty}/${job.readyQty} ที่ทำเสร็จ)`,
+          );
+        }
+        if (job.deliveredQty + qty > job.quantity) {
+          throw new ConflictError(`จำนวนส่งมอบเกินยอดงาน (${job.quantity})`);
+        }
+        const before = { status: job.status };
+        const deliveredQty = job.deliveredQty + qty;
+        const status = deliveredQty === job.quantity ? "delivered" : "ready";
+        await conn.query("UPDATE queue_jobs SET delivered_qty = ?, status = ? WHERE id = ?", [deliveredQty, status, id]);
+        const after = { ...job, deliveredQty, status: status as QueueJob["status"], updatedAt: now.toISOString() };
+        await insertAuditRow(conn, queueStatusChangedEvent(before, after, `ส่งมอบ ${qty} รายการ`, actor));
+        return (await readQueueDetailTx(conn, id))!;
+      });
+    },
+    async prioritizeQueueJob(id: string, input: { reason: string }, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM queue_jobs WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบงานคิว");
+        const job = rowToQueueJob(rows[0]!);
+        await assertQueueOrderActiveTx(conn, job.orderId);
+        if (job.status === "delivered" || job.status === "cancelled") {
+          throw new ConflictError("งานคิวนี้ปิดงานแล้ว เร่งงานไม่ได้");
+        }
+        const reason = normalizeQueueReason(input.reason);
+        await conn.query("UPDATE queue_jobs SET is_priority = 1, reason = ? WHERE id = ?", [reason, id]);
+        const after = { ...job, isPriority: true, reason, updatedAt: now.toISOString() };
+        await insertAuditRow(conn, queuePriorityEvent(after, reason, actor));
+        void now;
+        return (await readQueueDetailTx(conn, id))!;
+      });
+    },
+    async remakeQueueJob(id: string, input: { reason: string; quantity?: number | null }, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM queue_jobs WHERE id = ? LIMIT 1", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบงานคิว");
+        const original = rowToQueueJob(rows[0]!);
+        await assertQueueOrderActiveTx(conn, original.orderId);
+        if (original.status === "cancelled") {
+          throw new ConflictError("งานคิวนี้ถูกยกเลิกแล้ว ทำใหม่ไม่ได้");
+        }
+        const reason = normalizeQueueReason(input.reason);
+        const remaining = original.quantity - original.deliveredQty;
+        if (remaining <= 0) {
+          throw new ConflictError("งานนี้ส่งมอบครบแล้ว ไม่ต้องทำใหม่");
+        }
+        const qty =
+          input.quantity === undefined || input.quantity === null ? remaining : normalizeQueueQty(input.quantity);
+        if (qty > remaining) {
+          throw new ConflictError(`จำนวนทำใหม่เกินคงเหลือที่ยังไม่ส่งมอบ (${remaining})`);
+        }
+        const remakeId = randomUUID();
+        const at = toMysqlDatetime(now.toISOString());
+        await conn.query(
+          "INSERT INTO queue_jobs (id, order_id, order_number, payment_id, order_item_id, menu_id, menu_name, station, quantity, ready_qty, delivered_qty, status, ready_at, table_id, round_id, is_remake, is_priority, reason, claimed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'queued', ?, ?, ?, 1, 0, ?, NULL)",
+          [
+            remakeId, original.orderId, original.orderNumber, original.paymentId, original.orderItemId,
+            original.menuId, original.menuName, original.station, qty, at, original.tableId, original.roundId, reason,
+          ],
+        );
+        const remake = rowToQueueJob({
+          id: remakeId, order_id: original.orderId, order_number: original.orderNumber, payment_id: original.paymentId,
+          order_item_id: original.orderItemId, menu_id: original.menuId, menu_name: original.menuName,
+          station: original.station, quantity: qty, ready_qty: 0, delivered_qty: 0, status: "queued",
+          ready_at: now.toISOString(), table_id: original.tableId, round_id: original.roundId,
+          is_remake: 1, is_priority: 0, reason, claimed_by: null,
+          created_at: now.toISOString(), updated_at: now.toISOString(),
+        });
+        await insertAuditRow(conn, queueRemadeEvent({ ...original }, { ...remake }, reason, actor));
+        return (await readQueueDetailTx(conn, remakeId))!;
+      });
+    },
+    async cancelQueueJob(id: string, input: { reason: string }, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM queue_jobs WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบงานคิว");
+        const job = rowToQueueJob(rows[0]!);
+        const [oRows] = (await conn.query("SELECT * FROM orders WHERE id = ? LIMIT 1", [job.orderId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (oRows.length === 0) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+        const order = rowToOrder(oRows[0]!);
+        if (order.stockConsumed) {
+          throw new ConflictError("คำสั่งซื้อเริ่มทำ (ตัดสต๊อกจริง) แล้ว ยกเลิกงานคิวไม่ได้");
+        }
+        const [pRows] = (await conn.query("SELECT status FROM payments WHERE order_id = ? LIMIT 1", [order.id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (pRows.length > 0 && String(pRows[0]!["status"]) === "refunded") {
+          throw new ConflictError("คำสั่งซื้อนี้คืนเงินแล้ว ยกเลิกงานคิวไม่ได้");
+        }
+        if (job.status !== "queued" && job.status !== "claimed") {
+          throw new ConflictError("ยกเลิกงานคิวได้เฉพาะก่อนเริ่มทำเท่านั้น");
+        }
+        const reason = normalizeQueueReason(input.reason);
+        const before = { status: job.status };
+        await conn.query("UPDATE queue_jobs SET status = 'cancelled', reason = ? WHERE id = ?", [reason, id]);
+        const after = { ...job, status: "cancelled" as const, reason, updatedAt: now.toISOString() };
+        await insertAuditRow(conn, queueStatusChangedEvent(before, after, reason, actor));
+        void now;
+        return (await readQueueDetailTx(conn, id))!;
+      });
+    },
+    async getStationCapacity(station: QueueStation) {
+      const st = normalizeStation(station);
+      const [rows] = (await pool.query("SELECT per_slot, updated_by, updated_at FROM station_capacity WHERE station = ? LIMIT 1", [st])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      if (rows.length === 0) {
+        return { station: st, perSlot: QUEUE_DEFAULT_CAPACITY_PER_SLOT, updatedBy: null, updatedAt: new Date().toISOString() };
+      }
+      return {
+        station: st,
+        perSlot: Number(rows[0]!["per_slot"]),
+        updatedBy: rows[0]!["updated_by"] ? String(rows[0]!["updated_by"]) : null,
+        updatedAt: new Date(rows[0]!["updated_at"] as string).toISOString(),
+      };
+    },
+    async setStationCapacity(station: QueueStation, perSlot: number, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const st = normalizeStation(station);
+        const n = normalizeCapacityPerSlot(perSlot);
+        const before = await readCapacityTx(conn, st);
+        await conn.query(
+          "INSERT INTO station_capacity (station, per_slot, updated_by) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE per_slot = VALUES(per_slot), updated_by = VALUES(updated_by)",
+          [st, n, actor.actorUsername ?? actor.actorId ?? null],
+        );
+        await insertAuditRow(conn, queueCapacityUpdatedEvent(st, before, n, actor));
+        const [rows] = (await conn.query("SELECT per_slot, updated_by, updated_at FROM station_capacity WHERE station = ? LIMIT 1", [st])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        void now;
+        return {
+          station: st,
+          perSlot: Number(rows[0]!["per_slot"]),
+          updatedBy: rows[0]!["updated_by"] ? String(rows[0]!["updated_by"]) : null,
+          updatedAt: new Date(rows[0]!["updated_at"] as string).toISOString(),
+        };
+      });
+    },
+    async listQueueSlots(station: QueueStation, date: string, now: Date = new Date()) {
+      const st = normalizeStation(station);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)");
+      const dayStartUtc = new Date(`${date}T00:00:00+07:00`);
+      if (Number.isNaN(dayStartUtc.getTime())) throw new Error("รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)");
+      const [capRows] = (await pool.query("SELECT per_slot FROM station_capacity WHERE station = ? LIMIT 1", [st])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      const cap = capRows.length === 0 ? QUEUE_DEFAULT_CAPACITY_PER_SLOT : Number(capRows[0]!["per_slot"]);
+      const slots: QueueSlot[] = [];
+      const slotMs = QUEUE_SLOT_MINUTES * 60 * 1000;
+      void now;
+      for (let i = 0; i < (24 * 60) / QUEUE_SLOT_MINUTES; i += 1) {
+        const start = new Date(dayStartUtc.getTime() + i * slotMs);
+        const end = new Date(start.getTime() + slotMs);
+        const used = await countJobsInSlotTx(pool, st, start);
+        slots.push({
+          station: st,
+          slotStart: start.toISOString(),
+          slotEnd: end.toISOString(),
+          used,
+          capacity: cap,
+          available: Math.max(0, cap - used),
+        });
+      }
+      return slots;
+    },
+    async suggestNextSlot(station: QueueStation, after: string, now: Date = new Date()) {
+      const st = normalizeStation(station);
+      const afterDate = new Date(after);
+      if (Number.isNaN(afterDate.getTime())) throw new Error("เวลาไม่ถูกต้อง");
+      const [capRows] = (await pool.query("SELECT per_slot FROM station_capacity WHERE station = ? LIMIT 1", [st])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      const cap = capRows.length === 0 ? QUEUE_DEFAULT_CAPACITY_PER_SLOT : Number(capRows[0]!["per_slot"]);
+      const slotMs = QUEUE_SLOT_MINUTES * 60 * 1000;
+      const cursor = slotStartOf(afterDate);
+      void now;
+      for (let i = 0; i < 96 * 7; i += 1) {
+        const start = new Date(cursor.getTime() + i * slotMs);
+        const used = await countJobsInSlotTx(pool, st, start);
+        if (used < cap) {
+          return {
+            station: st,
+            slotStart: start.toISOString(),
+            slotEnd: new Date(start.getTime() + slotMs).toISOString(),
+            used,
+            capacity: cap,
+            available: cap - used,
+          };
+        }
+      }
+      return null;
     },
     async close() {
       await pool.end();

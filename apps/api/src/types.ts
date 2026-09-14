@@ -94,7 +94,17 @@ export type AuditAction =
   | "payment_manual_review"
   | "payment_failed"
   | "payment_expired"
-  | "payment_refund_approved";
+  | "payment_refund_approved"
+  // ---------- Ticket 09: คิวครัว/เครื่องดื่มและการส่งมอบ ----------
+  | "queue_created"
+  | "queue_claimed"
+  | "queue_started"
+  | "queue_ready"
+  | "queue_delivered"
+  | "queue_priority"
+  | "queue_remade"
+  | "queue_cancelled"
+  | "queue_capacity_updated";
 
 export interface AuditEntry {
   id: number;
@@ -825,4 +835,130 @@ export interface StockLedgerEntry {
   /** เลขอ้างอิงเพิ่มเติม (เช่น เลขบิลซื้อ) */
   reference: string | null;
   createdAt: string;
+}
+
+/** ---------- Ticket 09: คิวครัว/เครื่องดื่มและการส่งมอบ ---------- */
+
+/** ฝ่ายปฏิบัติงาน: อาหาร → kitchen, เครื่องดื่ม → drink (ตัดสินจาก menu kind) */
+export type QueueStation = "kitchen" | "drink";
+
+export const QUEUE_STATIONS: QueueStation[] = ["kitchen", "drink"];
+
+export const QUEUE_STATION_LABELS: Record<QueueStation, string> = {
+  kitchen: "ครัว",
+  drink: "เครื่องดื่ม",
+};
+
+/**
+ * สถานะงานคิวต่อ job:
+ * - `queued` = รอรับงาน (สถานะเริ่มต้นเมื่อชำระสำเร็จ)
+ * - `claimed` = มีผู้รับงานแล้ว
+ * - `preparing` = กำลังทำ (ตัดสต๊อกจริงครั้งแรกตรงนี้ — ครั้งเดียว idempotent)
+ * - `ready` = พร้อมส่งมอบ (ทำเสร็จแล้วรอเสิร์ฟ แยกจากส่งมอบแล้ว)
+ * - `delivered` = ส่งมอบแล้ว (ลูกค้าได้รับ)
+ * - `cancelled` = ยกเลิกงานคิวนี้ (เฉพาะก่อนเริ่มทำ)
+ */
+export type QueueStatus =
+  | "queued"
+  | "claimed"
+  | "preparing"
+  | "ready"
+  | "delivered"
+  | "cancelled";
+
+export const QUEUE_STATUSES: QueueStatus[] = [
+  "queued",
+  "claimed",
+  "preparing",
+  "ready",
+  "delivered",
+  "cancelled",
+];
+
+export const QUEUE_STATUS_LABELS: Record<QueueStatus, string> = {
+  queued: "รอรับงาน",
+  claimed: "รับงานแล้ว",
+  preparing: "กำลังทำ",
+  ready: "พร้อมส่งมอบ",
+  delivered: "ส่งมอบแล้ว",
+  cancelled: "ยกเลิกแล้ว",
+};
+
+/** ขีดจำกัด validation งานคิว */
+export const QUEUE_REASON_MAX = 500;
+/** ช่วงสล็อตนับกำลังผลิต (นาที) — ฝ่ายละ N งานต่อช่วง */
+export const QUEUE_SLOT_MINUTES = 15;
+/** เวลาทำประมาณการมาตรฐาน (นาที) แยกตามฝ่าย — ใช้คำนวณ readyAt preorder + เวลารอโดยประมาณ */
+export const QUEUE_STANDARD_PREP_MINUTES: Record<QueueStation, number> = {
+  kitchen: 15,
+  drink: 5,
+};
+/** กำลังผลิตค่าเริ่มต้นต่อช่วง 15 นาที (Admin ปรับได้) */
+export const QUEUE_DEFAULT_CAPACITY_PER_SLOT = 10;
+
+/**
+ * งานคิว: รายการเมนูชนิดเดียวกันภายในคำสั่งซื้อที่ฝ่ายอาหาร/เครื่องดื่มต้องทำหนึ่งชุด
+ * หนึ่ง OrderItem → หนึ่ง job (ทำใหม่สร้าง job ใหม่ผูก orderItem เดิม ไม่คิดเงินซ้ำ)
+ */
+export interface QueueJob {
+  id: string;
+  /** คำสั่งซื้อต้นทาง (ต้องชำระสำเร็จแล้วจึงมี job) */
+  orderId: string;
+  orderNumber: string;
+  /** payment ที่ทำให้เกิด job ชุดนี้ (idempotency: หนึ่ง payment สร้าง jobs ได้ชุดเดียว) */
+  paymentId: string;
+  /** รายการคำสั่งซื้อต้นทาง */
+  orderItemId: string;
+  menuId: string;
+  menuName: string;
+  station: QueueStation;
+  /** จำนวนทั้งหมดของงานนี้ */
+  quantity: number;
+  /** จำนวนที่ทำเสร็จแล้ว (ทยอยได้ ไม่เกิน quantity) */
+  readyQty: number;
+  /** จำนวนที่ส่งมอบแล้ว (ทยอยได้ ไม่เกิน readyQty และ quantity) */
+  deliveredQty: number;
+  status: QueueStatus;
+  /** เวลาพร้อมทำ: งานทั่วไป = เวลาชำระ; งานล่วงหน้า = เวลานัด − เวลาทำประมาณการ */
+  readyAt: string;
+  /** ผูกโต๊ะ/รอบการใช้โต๊ะ (เฉพาะ dine_in — null ได้) */
+  tableId: string | null;
+  roundId: string | null;
+  /** งานทำใหม่ (ไม่คิดเงินซ้ำ) */
+  isRemake: boolean;
+  /** งานเร่งด่วน (แทรกคิวได้เมื่อมีเหตุผล) */
+  isPriority: boolean;
+  /** เหตุผลล่าสุด (priority/remake/cancel) */
+  reason: string | null;
+  /** ผู้รับงานล่าสุด */
+  claimedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** งานคิวพร้อมข้อมูลแสดงผล (ชื่อโต๊ะ/สถานะรอบ) */
+export interface QueueJobDetail extends QueueJob {
+  tableName: string | null;
+}
+
+/** กำลังผลิตต่อช่วง 15 นาทีของแต่ละฝ่าย (Admin ตั้งได้) */
+export interface StationCapacity {
+  station: QueueStation;
+  /** จำนวนงานสูงสุดที่รับเพิ่มได้ต่อช่วง 15 นาที */
+  perSlot: number;
+  updatedBy: string | null;
+  updatedAt: string;
+}
+
+/** ภาพสล็อต 15 นาทีสำหรับ preorder/capacity (contract สำหรับ Ticket 13) */
+export interface QueueSlot {
+  station: QueueStation;
+  /** จุดเริ่มสล็อต (UTC ISO) */
+  slotStart: string;
+  /** จุดจบสล็อต (UTC ISO) */
+  slotEnd: string;
+  /** จำนวนงานที่จองสล็อตนี้แล้ว */
+  used: number;
+  capacity: number;
+  available: number;
 }
