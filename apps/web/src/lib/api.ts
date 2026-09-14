@@ -447,6 +447,96 @@ export interface RecommendedTable {
   capacity: number;
 }
 
+// ---------- Ticket 08: การชำระเงิน ใบเสร็จ และคืนเงิน ----------
+
+export type PaymentMethod = "cash" | "promptpay";
+export type PaymentStatus =
+  | "pending"
+  | "paid"
+  | "manual_review"
+  | "failed"
+  | "expired"
+  | "refunded"
+  | "cancelled";
+
+export type OrderPaymentState =
+  | "pending_payment"
+  | "paid"
+  | "manual_review"
+  | "failed"
+  | "expired"
+  | "refunded";
+
+export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
+  cash: "เงินสด",
+  promptpay: "พร้อมเพย์",
+};
+
+export const PAYMENT_STATUS_LABELS: Record<PaymentStatus, string> = {
+  pending: "รอชำระ",
+  paid: "ชำระสำเร็จ",
+  manual_review: "รอตรวจสอบการชำระเงิน",
+  failed: "ชำระไม่สำเร็จ",
+  expired: "หมดอายุ",
+  refunded: "คืนเงินแล้ว",
+  cancelled: "ยกเลิก",
+};
+
+export const ORDER_PAYMENT_STATE_LABELS: Record<OrderPaymentState, string> = {
+  pending_payment: "รอชำระเงิน",
+  paid: "ชำระสำเร็จ",
+  manual_review: "รอตรวจสอบการชำระเงิน",
+  failed: "ชำระไม่สำเร็จ",
+  expired: "หมดอายุ",
+  refunded: "คืนเงินแล้ว",
+};
+
+export interface Payment {
+  id: string;
+  orderId: string;
+  orderNumber: string;
+  method: PaymentMethod;
+  amount: number;
+  receivedAmount: number | null;
+  changeAmount: number;
+  status: PaymentStatus;
+  providerRef: string | null;
+  slipRef: string | null;
+  receiptNumber: string | null;
+  idempotencyKey: string;
+  paidAt: string | null;
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Receipt {
+  receiptNumber: string;
+  paymentId: string;
+  orderId: string;
+  orderNumber: string;
+  shopName: string;
+  method: PaymentMethod;
+  amount: number;
+  receivedAmount: number | null;
+  changeAmount: number;
+  paidAt: string;
+  items: { menuName: string; quantity: number; unitPrice: number; lineTotal: number }[];
+  createdAt: string;
+}
+
+export interface Refund {
+  id: string;
+  paymentId: string;
+  orderId: string;
+  orderNumber: string;
+  amount: number;
+  reason: string;
+  approvedBy: string | null;
+  approvedAt: string;
+  createdAt: string;
+}
+
 /** ประวัติร้านใช้ AuditItem ชุดเดียวกับประวัติบัญชี (shape เดียวกัน ไม่ duplicate type) */
 
 const BASE = import.meta.env["VITE_API_URL"] ?? "";
@@ -745,4 +835,77 @@ export const api = {
     ),
   reservationAudit: () => req<{ items: AuditItem[] }>("/api/audit/reservations?limit=100"),
   shopTableRounds: () => req<{ rounds: PublicTableRound[] }>("/api/shop/table-rounds"),
+  // Ticket 08: ชำระเงิน (สร้าง intent public; ยืนยันเงินสด/ตัดสิน/หมดอายุ/คืนเงินหลังร้าน)
+  paymentCreate: (body: { orderId: string; method: PaymentMethod; idempotencyKey: string; receivedAmount?: number | null; slipRef?: string | null; phone?: string }) =>
+    req<{ payment: Payment; qrPayload: string | null; deduplicated: boolean }>(
+      `/api/payments${body.phone ? `?phone=${encodeURIComponent(body.phone)}` : ""}`,
+      {
+        method: "POST",
+        body: JSON.stringify(
+          body.receivedAmount !== undefined && body.receivedAmount !== null
+            ? { orderId: body.orderId, method: body.method, idempotencyKey: body.idempotencyKey, receivedAmount: body.receivedAmount, slipRef: body.slipRef ?? undefined, phone: body.phone ?? undefined }
+            : { orderId: body.orderId, method: body.method, idempotencyKey: body.idempotencyKey, slipRef: body.slipRef ?? undefined, phone: body.phone ?? undefined },
+        ),
+      },
+      true,
+    ),
+  orderPayment: (orderId: string, phone?: string) =>
+    req<{ payment: Payment | null; paymentState: OrderPaymentState }>(
+      `/api/orders/${orderId}/payment${phone ? `?phone=${encodeURIComponent(phone)}` : ""}`,
+    ),
+  paymentGet: (id: string, phone?: string) =>
+    req<{ payment: Payment; receipt: Receipt | null }>(
+      `/api/payments/${id}${phone ? `?phone=${encodeURIComponent(phone)}` : ""}`,
+    ),
+  paymentConfirmCash: (id: string, receivedAmount: number, reason?: string) =>
+    req<{ payment: Payment; receipt: Receipt; deduplicated: boolean }>(
+      `/api/payments/${id}/confirm-cash`,
+      { method: "POST", body: JSON.stringify(reason ? { receivedAmount, reason } : { receivedAmount }) },
+      true,
+    ),
+  paymentSlip: (id: string, slipRef: string, phone?: string) =>
+    req<{ payment: Payment; receipt: Receipt | null; deduplicated: boolean }>(
+      `/api/payments/${id}/slip${phone ? `?phone=${encodeURIComponent(phone)}` : ""}`,
+      { method: "POST", body: JSON.stringify(phone ? { slipRef, phone } : { slipRef }) },
+      true,
+    ),
+  paymentResolve: (id: string, decision: "paid" | "failed" | "cancelled", reason: string) =>
+    req<{ payment: Payment; receipt: Receipt | null }>(
+      `/api/payments/${id}/resolve`,
+      { method: "POST", body: JSON.stringify({ decision, reason }) },
+      true,
+    ),
+  paymentExpire: (id: string) =>
+    req<{ payment: Payment; deduplicated: boolean }>(
+      `/api/payments/${id}/expire`,
+      { method: "POST", body: JSON.stringify({}) },
+      true,
+    ),
+  paymentRefund: (id: string, reason: string) =>
+    req<{ payment: Payment; refund: Refund }>(
+      `/api/payments/${id}/refund`,
+      { method: "POST", body: JSON.stringify({ reason }) },
+      true,
+    ),
+  paymentsList: (q = "", status?: PaymentStatus, method?: PaymentMethod, limit = 50) => {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (status) params.set("status", status);
+    if (method) params.set("method", method);
+    params.set("limit", String(limit));
+    return req<{ payments: Payment[] }>(`/api/payments?${params.toString()}`);
+  },
+  receiptByPayment: (paymentId: string, phone?: string) =>
+    req<{ receipt: Receipt }>(
+      `/api/receipts/by-payment/${paymentId}${phone ? `?phone=${encodeURIComponent(phone)}` : ""}`,
+    ),
+  receiptsList: (q = "", date?: string, limit = 50) => {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (date) params.set("date", date);
+    params.set("limit", String(limit));
+    return req<{ receipts: Receipt[] }>(`/api/receipts?${params.toString()}`);
+  },
+  refundsList: (limit = 50) => req<{ refunds: Refund[] }>(`/api/refunds?limit=${limit}`),
+  paymentAudit: () => req<{ items: AuditItem[] }>("/api/audit/payments?limit=100"),
 };

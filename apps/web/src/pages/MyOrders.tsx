@@ -107,7 +107,7 @@ export default function MyOrdersPage() {
                         พบ {orders.length} คำสั่งซื้อ
                       </p>
                       {orders.map((o) => (
-                        <OrderCard key={o.id} order={o} />
+                        <OrderCard key={o.id} order={o} payTo={`/pay/${o.id}`} />
                       ))}
                     </div>
                   )}
@@ -167,7 +167,7 @@ export default function MyOrdersPage() {
                 >
                   {lookupLoading ? "กำลังค้นหา…" : "ค้นหาคำสั่งซื้อ"}
                 </button>
-                {lookupOrder ? <OrderCard order={lookupOrder} /> : null}
+                {lookupOrder ? <OrderCard order={lookupOrder} payTo={`/pay/${lookupOrder.id}?phone=${encodeURIComponent(lookupPhone.trim())}`} /> : null}
               </div>
             </Panel>
           </>

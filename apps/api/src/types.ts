@@ -86,7 +86,15 @@ export type AuditAction =
   | "stock_updated"
   | "order_stock_reserved"
   | "order_stock_released"
-  | "order_stock_consumed";
+  | "order_stock_consumed"
+  // ---------- Ticket 08: การชำระเงิน ใบเสร็จ และคืนเงิน ----------
+  | "payment_created"
+  | "payment_cash_confirmed"
+  | "payment_paid"
+  | "payment_manual_review"
+  | "payment_failed"
+  | "payment_expired"
+  | "payment_refund_approved";
 
 export interface AuditEntry {
   id: number;
@@ -659,6 +667,142 @@ export const STOCK_OP_LABELS: Record<StockOp, string> = {
   personal_use: "ใช้ส่วนตัว",
   adjust: "ปรับยอดตรวจนับ",
 };
+
+/** ---------- Ticket 08: การชำระเงิน ใบเสร็จ และคืนเงิน ---------- */
+
+/** วิธีชำระเงินรุ่นแรก: เงินสด (หลังร้านยืนยัน) / พร้อมเพย์ (fake provider) */
+export type PaymentMethod = "cash" | "promptpay";
+
+export const PAYMENT_METHODS: PaymentMethod[] = ["cash", "promptpay"];
+
+/**
+ * สถานะการชำระ (state machine ต่อยอดจากคำสั่งซื้อ pending_payment):
+ * - `pending` = สร้าง intent แล้วรอผล (สถานะเริ่มต้น)
+ * - `paid` = ชำระสำเร็จ (ออกใบเสร็จแล้ว)
+ * - `manual_review` = รอตรวจสอบการชำระเงิน (หลักฐานไม่ชัด/ambiguous/timeout — ต้องให้ Admin ตรวจมือ)
+ * - `failed` = ชำระไม่สำเร็จ
+ * - `expired` = intent หมดอายุ (จ่ายต่อไม่ได้ — ต้องสร้าง intent ใหม่)
+ * - `refunded` = คืนเงินแล้ว (Owner อนุมัติ)
+ * - `cancelled` = ยกเลิก intent ที่ยังไม่สำเร็จ (ยังไม่จ่าย)
+ */
+export type PaymentStatus =
+  | "pending"
+  | "paid"
+  | "manual_review"
+  | "failed"
+  | "expired"
+  | "refunded"
+  | "cancelled";
+
+export const PAYMENT_STATUSES: PaymentStatus[] = [
+  "pending",
+  "paid",
+  "manual_review",
+  "failed",
+  "expired",
+  "refunded",
+  "cancelled",
+];
+
+/** ขีดจำกัด validation การชำระเงิน */
+export const PAYMENT_REASON_MAX = 500;
+export const PAYMENT_REFERENCE_MAX = 120;
+/** อายุ intent พร้อมเพย์ (นาที) — เกินแล้วถือว่าหมดอายุ */
+export const PAYMENT_PROMPTPAY_TTL_MINUTES = 15;
+
+export interface Payment {
+  id: string;
+  orderId: string;
+  orderNumber: string;
+  /** วิธีชำระ */
+  method: PaymentMethod;
+  /** ยอดที่ต้องชำระ (ตรึงเท่ายอดคำสั่งซื้อตอนสร้าง — FR-PAY-001) */
+  amount: number;
+  /** เงินที่รับมาจริง (เฉพาะ cash — ใช้คำนวณเงินทอน) */
+  receivedAmount: number | null;
+  /** เงินทอน (เฉพาะ cash) */
+  changeAmount: number;
+  status: PaymentStatus;
+  /** อ้างอิงผู้ให้บริการ (fake payload / slip ref — ไม่มีข้อมูลลับจริง) */
+  providerRef: string | null;
+  slipRef: string | null;
+  /** เลขใบเสร็จ (มีเมื่อ paid แล้วเท่านั้น) */
+  receiptNumber: string | null;
+  /** กันสร้าง intent ซ้ำจาก request เดิม (client สร้าง UUID ต่อการกดชำระหนึ่งครั้ง) */
+  idempotencyKey: string;
+  /** เวลาชำระสำเร็จ (paid) */
+  paidAt: string | null;
+  /** เวลาหมดอายุของ intent */
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * สถานะการชำระฝั่งคำสั่งซื้อ (derived — ไม่เปลี่ยน OrderStatus contract เดิม):
+ * pending_payment (ยังไม่มี payment) → paid/manual_review/failed/expired/refunded
+ */
+export type OrderPaymentState =
+  | "pending_payment"
+  | "paid"
+  | "manual_review"
+  | "failed"
+  | "expired"
+  | "refunded";
+
+export const ORDER_PAYMENT_STATES: OrderPaymentState[] = [
+  "pending_payment",
+  "paid",
+  "manual_review",
+  "failed",
+  "expired",
+  "refunded",
+];
+
+/** เหตุการณ์ webhook/provider (append-only — ใช้ dedupe ด้วย providerEventId) */
+export interface PaymentEvent {
+  id: string;
+  paymentId: string;
+  /** รหัสเหตุการณ์จากผู้ให้บริการ (unique — replay ได้ dedupe) */
+  providerEventId: string;
+  kind: "success" | "ambiguous" | "fail" | "expire";
+  /** สรุปที่ปลอดภัยของ payload (ไม่มีข้อมูลลับ) */
+  summary: string;
+  createdAt: string;
+}
+
+/**
+ * ใบเสร็จอย่างง่าย: หลักฐานการรับเงินของร้าน (เลขเอกสาร วันที่ รายการ
+ * ยอดรวม ช่องทางชำระ ชื่อร้าน) — ไม่ใช่ใบกำกับภาษีเต็มรูปแบบ
+ */
+export interface Receipt {
+  /** เลขเอกสาร เช่น RCP-20260914-AB12 (unique) */
+  receiptNumber: string;
+  paymentId: string;
+  orderId: string;
+  orderNumber: string;
+  shopName: string;
+  method: PaymentMethod;
+  amount: number;
+  receivedAmount: number | null;
+  changeAmount: number;
+  paidAt: string;
+  items: { menuName: string; quantity: number; unitPrice: number; lineTotal: number }[];
+  createdAt: string;
+}
+
+/** คำขอคืนเงิน: ต้องได้รับอนุมัติ (Owner) และมีหลักฐานก่อนถือว่าคืนสำเร็จ */
+export interface Refund {
+  id: string;
+  paymentId: string;
+  orderId: string;
+  orderNumber: string;
+  amount: number;
+  reason: string;
+  approvedBy: string | null;
+  approvedAt: string;
+  createdAt: string;
+}
 
 /** ธุรกรรมสต๊อก: หลักฐานการเปลี่ยนปริมาณทุกครั้ง (append-only ห้ามแก้/ลบ) */
 export interface StockLedgerEntry {

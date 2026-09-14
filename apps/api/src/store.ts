@@ -19,13 +19,20 @@ import type {
   OrderDetail,
   OrderItem,
   OrderItemOptionSnapshot,
+  OrderPaymentState,
   OrderServiceType,
   OrderStatus,
+  Payment,
+  PaymentEvent,
+  PaymentMethod,
+  PaymentStatus,
   PublicMenuItemWithOptions,
   PublicMenuOptionGroup,
+  Receipt,
   Recipe,
   RecipeLine,
   RecipeTargetType,
+  Refund,
   Reservation,
   ReservationDetail,
   ReservationStatus,
@@ -162,6 +169,26 @@ import {
   recipeCreatedEvent,
   stockUpdatedEvent,
 } from "./inventory/audit-events.js";
+import {
+  assertCashTendered,
+  assertPaymentTransition,
+  generateReceiptNumber,
+  normalizePaymentIdempotencyKey,
+  normalizePaymentMethod,
+  normalizePaymentReason,
+  normalizeProviderEventId,
+  normalizeProviderOutcome,
+  outcomeToStatus,
+  paymentPayloadHash,
+  type ProviderOutcome,
+} from "./payments/validation.js";
+import {
+  paymentCreatedEvent,
+  paymentRefundApprovedEvent,
+  paymentStatusChangedEvent,
+} from "./payments/audit-events.js";
+import { FakePromptPayProvider, isFakePaymentMode } from "./payments/provider.js";
+import { PAYMENT_PROMPTPAY_TTL_MINUTES } from "./types.js";
 import { normalizeThaiPhone } from "./customer/phone.js";
 import { ingredientAvailable, isMenuSellable, STOCK_OPS } from "./types.js";
 
@@ -292,7 +319,7 @@ export interface Store {
   deleteSessionsForUser(userId: string): Promise<void>;
   audit(input: AuditInput): Promise<void>;
   listAudit(
-    prefix: "login_" | "account_" | "shop_" | "customer_" | "menu_" | "order_" | "reservation_" | "round_" | "inventory_" | "all",
+    prefix: "login_" | "account_" | "shop_" | "customer_" | "menu_" | "order_" | "reservation_" | "round_" | "inventory_" | "payment_" | "all",
     limit: number,
   ): Promise<AuditEntry[]>;
   // ---- Ticket 02: สถานะร้านและโต๊ะ (อ่านเดี่ยว + mutation แบบ atomic พร้อม audit) ----
@@ -570,6 +597,77 @@ export interface Store {
    * - ยังไม่จอง (ไม่มีสูตรเลย) → ConflictError; ยกเลิกแล้ว → ConflictError
    */
   consumeOrderStock(id: string, actor: ShopActor): Promise<{ order: OrderDetail; deduplicated: boolean }>;
+  // ---- Ticket 08: การชำระเงิน ใบเสร็จ และคืนเงิน (local-first state machine) ----
+  /**
+   * สร้างคำขอชำระ (intent) สำหรับคำสั่งซื้อที่ pending_payment เท่านั้น:
+   * - ยอดชำระตรึงเท่ายอดคำสั่งซื้อ (FR-PAY-001); cash ต้องมี receivedAmount ≥ ยอด (คำนวณเงินทอน)
+   * - promptpay สร้าง QR payload ผ่าน fake provider + expiresAt (default 15 นาที)
+   * - idempotency: key เดิม + payload เดิม → คืน payment เดิม (ไม่เขียน audit ซ้ำ);
+   *   key เดิม + payload ต่างกัน → ConflictError
+   * - มี payment ที่ยังไม่ปิดงาน (pending/manual_review) หรือ paid อยู่แล้ว → ConflictError
+   *   (terminal failed/expired/cancelled สร้างใหม่ได้)
+   */
+  createPayment(
+    input: CreatePaymentInput,
+    actor: ShopActor,
+    now?: Date,
+  ): Promise<{ payment: Payment; qrPayload: string | null; deduplicated: boolean }>;
+  getPayment(id: string): Promise<Payment | null>;
+  /** payment ล่าสุดของคำสั่งซื้อ (null เมื่อยังไม่เคยชำระ) */
+  getOrderPayment(orderId: string): Promise<Payment | null>;
+  /** สถานะการชำระแบบ derived ฝั่งคำสั่งซื้อ (pending_payment เมื่อยังไม่มี payment) */
+  getOrderPaymentState(orderId: string): Promise<OrderPaymentState>;
+  /** ค้นหาหลังร้าน: เลขคำสั่งซื้อ/เลขใบเสร็จ (LIKE) + กรองสถานะ/วิธีชำระ */
+  listPayments(filter: ListPaymentsFilter): Promise<Payment[]>;
+  /**
+   * ยืนยันรับเงินสด (Owner/Admin — route ตรวจสิทธิ์):
+   * pending/manual_review → paid + ออกใบเสร็จ (เลข RCP-*) แบบ all-or-nothing
+   * (ไม่แตะสต๊อกซ้ำ — จองไว้แล้วตอนยืนยันคำสั่งซื้อ; queue/points เป็น no-op มี idempotency guard)
+   */
+  confirmCashPayment(id: string, input: { receivedAmount: number; reason?: string | null }, actor: ShopActor, now?: Date): Promise<{ payment: Payment; receipt: Receipt; deduplicated: boolean }>;
+  /**
+   * รับ webhook จากผู้ให้บริการ (fake signature seam):
+   * - dedupe ด้วย providerEventId (replay → deduplicated:true ไม่เขียน audit/ledger/receipt ซ้ำ)
+   * - success → paid + ใบเสร็จ (payment ที่ paid อยู่แล้วถูกปฏิเสธก่อน — กัน success ซ้ำ)
+   * - ambiguous → manual_review (รอ Admin ตรวจมือ)
+   * - fail → failed; intent หมดอายุแล้ว → expired (จ่ายต่อไม่ได้)
+   * - ไม่แตะสต๊อก/คิว/คะแนนซ้ำ (side effects มี idempotency guard)
+   */
+  handlePaymentWebhook(
+    paymentId: string,
+    input: { providerEventId: string; outcome: ProviderOutcome; summary?: string | null },
+    actor: ShopActor,
+    now?: Date,
+  ): Promise<{ payment: Payment; receipt: Receipt | null; deduplicated: boolean }>;
+  /**
+   * ส่ง slip ให้ fake provider ตรวจ (dev fake mode เท่านั้น):
+   * VALID-* → paid + ใบเสร็จ; AMBIGUOUS-* → manual_review; อื่น → failed
+   */
+  submitPaymentSlip(id: string, input: { slipRef: string }, actor: ShopActor, now?: Date): Promise<{ payment: Payment; receipt: Receipt | null; deduplicated: boolean }>;
+  /**
+   * Admin ตัดสินรายการรอตรวจสอบ (Owner/Admin — route ตรวจสิทธิ์):
+   * manual_review → paid (ออกใบเสร็จ) หรือ failed/cancelled พร้อมเหตุผล
+   */
+  resolveManualReview(id: string, input: { decision: "paid" | "failed" | "cancelled"; reason: string }, actor: ShopActor, now?: Date): Promise<{ payment: Payment; receipt: Receipt | null }>;
+  /**
+   * หมดอายุ intent (Owner/Admin/staff — route ตรวจสิทธิ์):
+   * pending → expired (เรียกซ้ำเป็น no-op); หมดอายุแล้วจ่ายต่อไม่ได้
+   */
+  expirePayment(id: string, actor: ShopActor, now?: Date): Promise<{ payment: Payment; deduplicated: boolean }>;
+  /** ใบเสร็จของ payment (null เมื่อยังไม่ paid) — ลูกค้าเห็นเฉพาะของตนเอง (route ตรวจสิทธิ์) */
+  getReceiptByPayment(paymentId: string): Promise<Receipt | null>;
+  getReceiptByNumber(receiptNumber: string): Promise<Receipt | null>;
+  /** ค้นหาใบเสร็จหลังร้าน (เลขใบเสร็จ/เลขคำสั่งซื้อ LIKE + ช่วงวันที่) */
+  listReceipts(filter: ListReceiptsFilter): Promise<Receipt[]>;
+  /**
+   * อนุมัติคืนเงิน (Owner เท่านั้น — route ตรวจสิทธิ์):
+   * - เฉพาะ payment ที่ paid; ออเดอร์ต้องยังไม่ตัดสต๊อกจริง (ตัดแล้วปฏิเสธ)
+   * - สำเร็จ: payment → refunded + ออเดอร์ → cancelled (คืนยอดจองตาม Ticket 07 contract —
+   *   ทำให้รอบโต๊ะปิดได้ตาม Ticket 06 contract) + audit ทั้งหมดแบบ all-or-nothing
+   * - ซ้ำถูกปฏิเสธ (409)
+   */
+  approveRefund(paymentId: string, input: { reason: string }, actor: ShopActor, now?: Date): Promise<{ payment: Payment; refund: Refund }>;
+  listRefunds(limit: number): Promise<Refund[]>;
   close?(): Promise<void>;
 }
 
@@ -661,6 +759,33 @@ export interface CheckinInput {
   tableId?: string | null;
 }
 
+// ---------- Ticket 08: การชำระเงิน ใบเสร็จ และคืนเงิน ----------
+
+export interface CreatePaymentInput {
+  orderId: string;
+  method: PaymentMethod;
+  /** UUID ต่อการกดชำระหนึ่งครั้ง — กันชำระซ้ำ */
+  idempotencyKey: string;
+  /** เงินที่รับมาจริง (บังคับเฉพาะ cash — ต้อง ≥ ยอดคำสั่งซื้อ) */
+  receivedAmount?: number | null;
+  /** อ้างอิง slip (optional — ใช้ submitPaymentSlip ทีหลังก็ได้) */
+  slipRef?: string | null;
+}
+
+export interface ListPaymentsFilter {
+  q?: string;
+  status?: PaymentStatus;
+  method?: PaymentMethod;
+  limit: number;
+}
+
+export interface ListReceiptsFilter {
+  q?: string;
+  /** กรองวันที่ออกใบเสร็จ (YYYY-MM-DD, Asia/Bangkok) */
+  date?: string;
+  limit: number;
+}
+
 const nowIso = () => new Date().toISOString();
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -736,6 +861,15 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
   const stockLedger: StockLedgerEntry[] = [];
   /** ยอดวัตถุดิบที่จองให้แต่ละคำสั่งซื้อ (คงที่ตอนยืนยัน — ไม่เปลี่ยนตามสูตรภายหลัง) */
   const orderStockUsage = new Map<string, { ingredientId: string; qty: number }[]>();
+  // ---- Ticket 08 memory state: การชำระเงิน/ใบเสร็จ/คืนเงิน (local-first, ไม่มี network) ----
+  const payments = new Map<string, Payment>();
+  const paymentsByOrder = new Map<string, string>();
+  const paymentsByIdemKey = new Map<string, string>();
+  const paymentEvents: PaymentEvent[] = [];
+  const paymentEventsByProviderKey = new Map<string, string>();
+  const receipts = new Map<string, Receipt>();
+  const receiptsByNumber = new Map<string, string>();
+  const refunds = new Map<string, Refund>();
   /**
    * คิว serialize สำหรับ mutation คำสั่งซื้อ+สต๊อกฝั่ง memory (กัน concurrent
    * แย่งวัตถุดิบชิ้นสุดท้าย: ตรวจพร้อมขายแล้วจองต้องเกิดทีละรายการ)
@@ -860,6 +994,182 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
     for (const e of b.ledger) stockLedger.push(e);
     orderStockUsage.clear();
     for (const [k, list] of b.usage) orderStockUsage.set(k, list);
+  }
+
+  interface PaymentStateBackup extends ShopStateBackup {
+    orders: Map<string, Order>;
+    payments: Map<string, Payment>;
+    byOrder: Map<string, string>;
+    byIdemKey: Map<string, string>;
+    events: PaymentEvent[];
+    eventsByKey: Map<string, string>;
+    receipts: Map<string, Receipt>;
+    receiptsByNumber: Map<string, string>;
+    refunds: Map<string, Refund>;
+    // refund แตะสต๊อก (คืนยอดจอง) จึงต้อง rollback พร้อมกัน
+    ingredients: Map<string, Ingredient>;
+    ledger: StockLedgerEntry[];
+    usage: Map<string, { ingredientId: string; qty: number }[]>;
+  }
+
+  /** backup สำหรับ mutation การชำระเงิน (payment + order status + stock + audit แบบ all-or-nothing) */
+  function backupPayments(): PaymentStateBackup {
+    return {
+      ...backupShop(),
+      orders: new Map([...orders].map(([id, o]) => [id, { ...o }] as const)),
+      payments: new Map([...payments].map(([id, p]) => [id, { ...p }] as const)),
+      byOrder: new Map(paymentsByOrder),
+      byIdemKey: new Map(paymentsByIdemKey),
+      events: paymentEvents.map((e) => ({ ...e })),
+      eventsByKey: new Map(paymentEventsByProviderKey),
+      receipts: new Map([...receipts].map(([id, r]) => [id, { ...r, items: r.items.map((i) => ({ ...i })) }] as const)),
+      receiptsByNumber: new Map(receiptsByNumber),
+      refunds: new Map([...refunds].map(([id, r]) => [id, { ...r }] as const)),
+      ingredients: new Map([...ingredients].map(([id, g]) => [id, { ...g }] as const)),
+      ledger: stockLedger.map((e) => ({ ...e })),
+      usage: new Map([...orderStockUsage].map(([k, list]) => [k, list.map((u) => ({ ...u }))] as const)),
+    };
+  }
+
+  function restorePayments(b: PaymentStateBackup): void {
+    restoreShop({ shopName: b.shopName, schedule: b.schedule, override: b.override, tables: b.tables, auditsLen: b.auditsLen, auditSeq: b.auditSeq });
+    orders.clear();
+    for (const [id, o] of b.orders) orders.set(id, o);
+    payments.clear();
+    for (const [id, p] of b.payments) payments.set(id, p);
+    paymentsByOrder.clear();
+    for (const [k, v] of b.byOrder) paymentsByOrder.set(k, v);
+    paymentsByIdemKey.clear();
+    for (const [k, v] of b.byIdemKey) paymentsByIdemKey.set(k, v);
+    paymentEvents.length = 0;
+    for (const e of b.events) paymentEvents.push(e);
+    paymentEventsByProviderKey.clear();
+    for (const [k, v] of b.eventsByKey) paymentEventsByProviderKey.set(k, v);
+    receipts.clear();
+    for (const [id, r] of b.receipts) receipts.set(id, r);
+    receiptsByNumber.clear();
+    for (const [k, v] of b.receiptsByNumber) receiptsByNumber.set(k, v);
+    refunds.clear();
+    for (const [id, r] of b.refunds) refunds.set(id, r);
+    ingredients.clear();
+    for (const [id, g] of b.ingredients) ingredients.set(id, g);
+    stockLedger.length = 0;
+    for (const e of b.ledger) stockLedger.push(e);
+    orderStockUsage.clear();
+    for (const [k, list] of b.usage) orderStockUsage.set(k, list);
+  }
+
+  /** สถานะ derived ฝั่งคำสั่งซื้อจาก payment ล่าสุด (ไม่เปลี่ยน OrderStatus contract) */
+  function orderPaymentStateOf(orderId: string): OrderPaymentState {
+    const pid = paymentsByOrder.get(orderId);
+    if (!pid) return "pending_payment";
+    const p = payments.get(pid);
+    if (!p) return "pending_payment";
+    if (p.status === "paid") return "paid";
+    if (p.status === "manual_review") return "manual_review";
+    if (p.status === "failed" || p.status === "cancelled") return "failed";
+    if (p.status === "expired") return "expired";
+    if (p.status === "refunded") return "refunded";
+    return "pending_payment";
+  }
+
+  /** สร้างใบเสร็จอย่างง่ายจาก payment ที่ paid แล้ว (เลข RCP กันชนด้วยการ retry ที่ caller) */
+  function buildReceipt(p: Payment, detail: OrderDetail, now: Date): Receipt {
+    return {
+      receiptNumber: p.receiptNumber!,
+      paymentId: p.id,
+      orderId: p.orderId,
+      orderNumber: p.orderNumber,
+      shopName,
+      method: p.method,
+      amount: p.amount,
+      receivedAmount: p.receivedAmount,
+      changeAmount: p.changeAmount,
+      paidAt: p.paidAt!,
+      items: detail.items.map((i) => ({
+        menuName: i.menuName,
+        quantity: i.quantity,
+        unitPrice: i.unitPrice,
+        lineTotal: i.lineTotal,
+      })),
+      createdAt: now.toISOString(),
+    };
+  }
+
+  /**
+   * Ticket 08 memory helpers (ใช้ใน seams ชำระเงิน — ห้ามเรียกนอก runOrderExclusive):
+   * - expireIfDue: intent เกินเวลาชำระ → expired + audit (ambiguous timeout ตรวจมือผ่าน manual_review แยกต่างหาก)
+   * - recordPaymentEvent: บันทึก event แบบ append-only (dedupe ด้วย providerEventId)
+   * - markPaymentPaid: pending/manual_review → paid + ออกใบเสร็จ (เลข RCP กันชน)
+   *   ไม่แตะสต๊อกซ้ำ (จองไว้แล้วตอนยืนยัน); queue (Ticket 09) / points (Ticket 10)
+   *   เป็น no-op ที่มี idempotency guard (payment id เป็นคีย์กันซ้ำ)
+   */
+  function expireIfDue(p: Payment, now: Date, actor: ShopActor): void {
+    if (p.status !== "pending") return;
+    if (new Date(p.expiresAt).getTime() >= now.getTime()) return;
+    const input = {
+      actorId: actor.actorId ?? null,
+      actorUsername: actor.actorUsername ?? null,
+      action: "payment_expired",
+      targetId: p.id,
+      targetUsername: null,
+      detail: `คำขอชำระ ${p.orderNumber} หมดอายุ (เกินเวลาชำระ)`,
+      ip: actor.ip ?? null,
+      success: true,
+    };
+    // seam เดียวกับ writeAudit (failAudit ใน tests ต้อง rollback ทั้ง state เช่นกัน)
+    if (failAudit?.(input)) throw new Error("บันทึก audit ล้มเหลว (จำลองสำหรับทดสอบ)");
+    p.status = "expired";
+    p.updatedAt = now.toISOString();
+    audits.push({ id: auditSeq++, at: now.toISOString(), ...input });
+  }
+
+  function recordPaymentEvent(
+    paymentId: string,
+    providerEventId: string,
+    outcome: ProviderOutcome,
+    summary: string | null,
+    now: Date,
+  ): void {
+    const kind = outcome === "success" ? "success" : outcome === "ambiguous" ? "ambiguous" : "fail";
+    const ev: PaymentEvent = {
+      id: randomUUID(),
+      paymentId,
+      providerEventId,
+      kind,
+      summary: summary ?? `ผล ${outcome} จากผู้ให้บริการ`,
+      createdAt: now.toISOString(),
+    };
+    paymentEvents.push(ev);
+    paymentEventsByProviderKey.set(providerEventId, ev.id);
+  }
+
+  async function markPaymentPaid(
+    p: Payment,
+    order: Order,
+    reason: string,
+    actor: ShopActor,
+    now: Date,
+  ): Promise<Receipt> {
+    assertPaymentTransition(p.status, "paid");
+    const before = { status: p.status as PaymentStatus };
+    let receiptNumber = generateReceiptNumber(now);
+    for (let i = 0; i < 5 && receiptsByNumber.has(receiptNumber); i += 1) {
+      receiptNumber = generateReceiptNumber(now);
+    }
+    if (receiptsByNumber.has(receiptNumber)) {
+      throw new ConflictError("สร้างเลขใบเสร็จไม่สำเร็จ กรุณาลองใหม่อีกครั้ง");
+    }
+    p.status = "paid";
+    p.paidAt = now.toISOString();
+    p.receiptNumber = receiptNumber;
+    p.updatedAt = now.toISOString();
+    const detail = toDetail(order.id)!;
+    const receipt = buildReceipt(p, detail, now);
+    receipts.set(p.id, { ...receipt, items: receipt.items.map((i) => ({ ...i })) });
+    receiptsByNumber.set(receiptNumber, p.id);
+    await writeAudit(paymentStatusChangedEvent(before, { ...p }, reason, actor));
+    return { ...receipt, items: receipt.items.map((i) => ({ ...i })) };
   }
 
   interface InventoryStateBackup extends ShopStateBackup {
@@ -1516,6 +1826,7 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
             a.action.startsWith("stock_")
           );
         }
+        if (prefix === "payment_") return a.action.startsWith("payment_");
         return !a.action.startsWith("login_");
       });
       return items.slice(0, limit);
@@ -2765,6 +3076,411 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
         }
       });
     },
+    // ---- Ticket 08 memory: การชำระเงิน ใบเสร็จ และคืนเงิน (local-first state machine) ----
+    async createPayment(input, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const method = normalizePaymentMethod(input.method);
+          const idempotencyKey = normalizePaymentIdempotencyKey(input.idempotencyKey);
+          const order = orders.get(input.orderId);
+          if (!order) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+          if (order.status !== "pending_payment") {
+            throw new ConflictError("คำสั่งซื้อนี้ปิดงานแล้ว ไม่สามารถชำระเงินได้อีก");
+          }
+          const amount = order.total;
+          const hash = paymentPayloadHash({
+            orderId: order.id,
+            method,
+            amount,
+            receivedAmount: input.receivedAmount ?? null,
+          });
+          // idempotency: key เดิม → คืนของเดิม / ขัดแย้ง
+          const existingIdem = paymentsByIdemKey.get(idempotencyKey);
+          if (existingIdem) {
+            const ex = payments.get(existingIdem)!;
+            const exHash = paymentPayloadHash({
+              orderId: ex.orderId,
+              method: ex.method,
+              amount: ex.amount,
+              receivedAmount: ex.receivedAmount,
+            });
+            if (exHash !== hash) throw new ConflictError("คำขอนี้ถูกใช้ชำระไปแล้ว กรุณาสร้างคำขอใหม่");
+            return {
+              payment: { ...ex },
+              qrPayload: ex.method === "promptpay" && ex.status === "pending" ? `PROMPTPAY-FAKE:${ex.id}:${ex.amount}` : null,
+              deduplicated: true,
+            };
+          }
+          // กัน intent ซ้อน: มีรายการค้าง (pending/manual_review) หรือสำเร็จ (paid/refunded) แล้วห้ามสร้างใหม่
+          const activeId = paymentsByOrder.get(order.id);
+          if (activeId) {
+            const active = payments.get(activeId)!;
+            if (active.status === "pending" || active.status === "manual_review") {
+              throw new ConflictError("มีคำขอชำระที่ดำเนินการอยู่แล้ว กรุณารอผลหรือยกเลิกก่อน");
+            }
+            if (active.status === "paid" || active.status === "refunded") {
+              throw new ConflictError("คำสั่งซื้อนี้ชำระสำเร็จแล้ว ไม่รับการชำระซ้ำ");
+            }
+          }
+          let receivedAmount: number | null = null;
+          let changeAmount = 0;
+          let providerRef: string | null = null;
+          let qrPayload: string | null = null;
+          if (method === "cash") {
+            if (input.receivedAmount === undefined || input.receivedAmount === null) {
+              throw new Error("กรุณาระบุจำนวนเงินที่รับมา");
+            }
+            changeAmount = assertCashTendered(amount, input.receivedAmount);
+            receivedAmount = Math.round(input.receivedAmount * 100) / 100;
+          } else {
+            providerRef = null; // ประกอบหลังมี payment id จริงด้านล่าง
+            qrPayload = null;
+          }
+          const at = now.toISOString();
+          const id = randomUUID();
+          if (method === "promptpay") {
+            const provider = new FakePromptPayProvider();
+            const expiresAt = new Date(now.getTime() + PAYMENT_PROMPTPAY_TTL_MINUTES * 60 * 1000);
+            const intent = await provider.createIntent(id, amount, expiresAt);
+            providerRef = intent.providerRef;
+            qrPayload = intent.qrPayload;
+          }
+          const payment: Payment = {
+            id,
+            orderId: order.id,
+            orderNumber: order.orderNumber,
+            method,
+            amount,
+            receivedAmount,
+            changeAmount,
+            status: "pending",
+            providerRef,
+            slipRef: typeof input.slipRef === "string" && input.slipRef.trim() ? input.slipRef.trim() : null,
+            receiptNumber: null,
+            idempotencyKey,
+            paidAt: null,
+            expiresAt: new Date(now.getTime() + PAYMENT_PROMPTPAY_TTL_MINUTES * 60 * 1000).toISOString(),
+            createdAt: at,
+            updatedAt: at,
+          };
+          payments.set(id, { ...payment });
+          paymentsByOrder.set(order.id, id);
+          paymentsByIdemKey.set(idempotencyKey, id);
+          await writeAudit(paymentCreatedEvent({ ...payment }, actor));
+          return { payment: { ...payment }, qrPayload, deduplicated: false };
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async getPayment(id) {
+      const p = payments.get(id);
+      return p ? { ...p } : null;
+    },
+    async getOrderPayment(orderId) {
+      const pid = paymentsByOrder.get(orderId);
+      if (!pid) return null;
+      const p = payments.get(pid);
+      return p ? { ...p } : null;
+    },
+    async getOrderPaymentState(orderId) {
+      return orderPaymentStateOf(orderId);
+    },
+    async listPayments(filter) {
+      const needle = (filter.q ?? "").trim().toLowerCase();
+      const limit = Math.min(Math.max(filter.limit || 50, 1), 200);
+      return [...payments.values()]
+        .filter((p) => (filter.status ? p.status === filter.status : true))
+        .filter((p) => (filter.method ? p.method === filter.method : true))
+        .filter((p) =>
+          needle
+            ? p.orderNumber.toLowerCase().includes(needle) ||
+              (p.receiptNumber ?? "").toLowerCase().includes(needle)
+            : true,
+        )
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, limit)
+        .map((p) => ({ ...p }));
+    },
+    async confirmCashPayment(id, input, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const current = payments.get(id);
+          if (!current) throw new NotFoundError("ไม่พบรายการชำระเงิน");
+          expireIfDue(current, now, actor);
+          // จ่ายแล้วเรียกซ้ำเป็น no-op (คืนใบเสร็จเดิม ไม่เขียน audit ซ้ำ — กัน success ซ้ำ)
+          if (current.status === "paid") {
+            const receipt = receipts.get(id);
+            if (!receipt) throw new Error("ไม่พบใบเสร็จของการชำระนี้");
+            return { payment: { ...current }, receipt: { ...receipt, items: receipt.items.map((i) => ({ ...i })) }, deduplicated: true };
+          }
+          if (current.method !== "cash") throw new ConflictError("รายการนี้ไม่ใช่การชำระด้วยเงินสด");
+          const order = orders.get(current.orderId);
+          if (!order) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+          if (order.status !== "pending_payment") throw new ConflictError("คำสั่งซื้อนี้ปิดงานแล้ว ยืนยันรับเงินไม่ได้");
+          if (current.amount !== order.total) throw new ConflictError("ยอดชำระไม่ตรงกับยอดคำสั่งซื้อปัจจุบัน");
+          const tendered = input.receivedAmount ?? current.receivedAmount;
+          if (tendered === null || tendered === undefined) throw new Error("กรุณาระบุจำนวนเงินที่รับมา");
+          current.changeAmount = assertCashTendered(current.amount, tendered);
+          current.receivedAmount = Math.round(tendered * 100) / 100;
+          const reason = input.reason?.trim() ? normalizePaymentReason(input.reason) : "รับเงินสดหน้าร้าน";
+          const receipt = await markPaymentPaid(current, order, reason, actor, now);
+          return { payment: { ...current }, receipt, deduplicated: false };
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async handlePaymentWebhook(paymentId, input, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const eventId = normalizeProviderEventId(input.providerEventId);
+          const outcome = normalizeProviderOutcome(input.outcome);
+          // dedupe: event นี้เคยประมวลผลแล้ว → คืนผลเดิมโดยไม่ side effect ซ้ำ
+          const seenEvent = paymentEventsByProviderKey.get(eventId);
+          if (seenEvent) {
+            const ev = paymentEvents.find((e) => e.id === seenEvent)!;
+            const p = payments.get(ev.paymentId)!;
+            const receipt = receipts.get(p.id) ?? null;
+            return {
+              payment: { ...p },
+              receipt: receipt ? { ...receipt, items: receipt.items.map((i) => ({ ...i })) } : null,
+              deduplicated: true,
+            };
+          }
+          const current = payments.get(paymentId);
+          if (!current) throw new NotFoundError("ไม่พบรายการชำระเงิน");
+          // ปฏิเสธ success ซ้ำ: จ่ายสำเร็จแล้วไม่รับผล webhook อีก
+          if (current.status === "paid" || current.status === "refunded") {
+            throw new ConflictError("รายการนี้ชำระสำเร็จแล้ว ไม่รับผลการชำระซ้ำ");
+          }
+          expireIfDue(current, now, actor);
+          if (current.status === "expired") {
+            recordPaymentEvent(current.id, eventId, outcome, input.summary ?? null, now);
+            return { payment: { ...current }, receipt: null, deduplicated: false };
+          }
+          const order = orders.get(current.orderId);
+          if (!order) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+          if (order.status !== "pending_payment") throw new ConflictError("คำสั่งซื้อนี้ปิดงานแล้ว รับผลชำระไม่ได้");
+          const target = outcomeToStatus(outcome);
+          assertPaymentTransition(current.status, target);
+          recordPaymentEvent(current.id, eventId, outcome, input.summary ?? null, now);
+          if (target === "paid") {
+            const receipt = await markPaymentPaid(current, order, `ผลยืนยันจากผู้ให้บริการ (${outcome})`, actor, now);
+            return { payment: { ...current }, receipt, deduplicated: false };
+          }
+          const before = { status: current.status as PaymentStatus };
+          current.status = target;
+          current.updatedAt = now.toISOString();
+          await writeAudit(paymentStatusChangedEvent(before, { ...current }, `ผลยืนยันจากผู้ให้บริการ (${outcome})`, actor));
+          return { payment: { ...current }, receipt: null, deduplicated: false };
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async submitPaymentSlip(id, input, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          if (!isFakePaymentMode()) {
+            throw new Error("ผู้ให้บริการตรวจ slip จริงยังไม่เปิดใช้งาน (contract-only)");
+          }
+          const slipRef = input.slipRef.trim();
+          if (!slipRef) throw new Error("กรุณาระบุเลขอ้างอิง slip");
+          if (slipRef.length > 120) throw new Error("เลขอ้างอิง slip ยาวเกินไป");
+          const provider = new FakePromptPayProvider();
+          const outcome = await provider.verifySlip(slipRef);
+          // slip เดิมส่งซ้ำ = event เดิม (dedupe ด้วย slip ref — กัน success ซ้ำ)
+          const eventId = `slip:${slipRef}`;
+          const seenEvent = paymentEventsByProviderKey.get(eventId);
+          if (seenEvent) {
+            const ev = paymentEvents.find((e) => e.id === seenEvent)!;
+            const p = payments.get(ev.paymentId)!;
+            const receipt = receipts.get(p.id) ?? null;
+            return {
+              payment: { ...p },
+              receipt: receipt ? { ...receipt, items: receipt.items.map((i) => ({ ...i })) } : null,
+              deduplicated: true,
+            };
+          }
+          const current = payments.get(id);
+          if (!current) throw new NotFoundError("ไม่พบรายการชำระเงิน");
+          if (current.status === "paid" || current.status === "refunded") {
+            throw new ConflictError("รายการนี้ชำระสำเร็จแล้ว ไม่รับผลการชำระซ้ำ");
+          }
+          expireIfDue(current, now, actor);
+          if (current.status === "expired") {
+            recordPaymentEvent(current.id, eventId, outcome, `ตรวจ slip ${slipRef}`, now);
+            return { payment: { ...current }, receipt: null, deduplicated: false };
+          }
+          const order = orders.get(current.orderId);
+          if (!order) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+          if (order.status !== "pending_payment") throw new ConflictError("คำสั่งซื้อนี้ปิดงานแล้ว รับผลชำระไม่ได้");
+          current.slipRef = slipRef;
+          const target = outcomeToStatus(outcome);
+          assertPaymentTransition(current.status, target);
+          recordPaymentEvent(current.id, eventId, outcome, `ตรวจ slip ${slipRef}`, now);
+          if (target === "paid") {
+            const receipt = await markPaymentPaid(current, order, `ตรวจ slip ผ่าน (${slipRef})`, actor, now);
+            return { payment: { ...current }, receipt, deduplicated: false };
+          }
+          const before = { status: current.status as PaymentStatus };
+          current.status = target;
+          current.updatedAt = now.toISOString();
+          await writeAudit(paymentStatusChangedEvent(before, { ...current }, `ตรวจ slip (${slipRef}) ผล ${outcome}`, actor));
+          return { payment: { ...current }, receipt: null, deduplicated: false };
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async resolveManualReview(id, input, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const current = payments.get(id);
+          if (!current) throw new NotFoundError("ไม่พบรายการชำระเงิน");
+          if (current.status !== "manual_review") throw new ConflictError("รายการนี้ไม่ได้รอตรวจสอบ");
+          const reason = normalizePaymentReason(input.reason);
+          const order = orders.get(current.orderId);
+          if (!order) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+          if (input.decision === "paid") {
+            if (order.status !== "pending_payment") throw new ConflictError("คำสั่งซื้อนี้ปิดงานแล้ว รับผลชำระไม่ได้");
+            const receipt = await markPaymentPaid(current, order, reason, actor, now);
+            return { payment: { ...current }, receipt };
+          }
+          const target: PaymentStatus = input.decision === "failed" ? "failed" : "cancelled";
+          assertPaymentTransition(current.status, target);
+          const before = { status: current.status as PaymentStatus };
+          current.status = target;
+          current.updatedAt = now.toISOString();
+          await writeAudit(paymentStatusChangedEvent(before, { ...current }, reason, actor));
+          return { payment: { ...current }, receipt: null };
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async expirePayment(id, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const current = payments.get(id);
+          if (!current) throw new NotFoundError("ไม่พบรายการชำระเงิน");
+          if (current.status !== "pending") {
+            return { payment: { ...current }, deduplicated: true };
+          }
+          const before = { status: current.status as PaymentStatus };
+          current.status = "expired";
+          current.updatedAt = now.toISOString();
+          await writeAudit(paymentStatusChangedEvent(before, { ...current }, "intent หมดอายุ", actor));
+          return { payment: { ...current }, deduplicated: false };
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async getReceiptByPayment(paymentId) {
+      const r = receipts.get(paymentId);
+      return r ? { ...r, items: r.items.map((i) => ({ ...i })) } : null;
+    },
+    async getReceiptByNumber(receiptNumber) {
+      const pid = receiptsByNumber.get(receiptNumber.trim());
+      if (!pid) return null;
+      const r = receipts.get(pid);
+      return r ? { ...r, items: r.items.map((i) => ({ ...i })) } : null;
+    },
+    async listReceipts(filter) {
+      const needle = (filter.q ?? "").trim().toLowerCase();
+      const limit = Math.min(Math.max(filter.limit || 50, 1), 200);
+      return [...receipts.values()]
+        .filter((r) => {
+          if (filter.date) {
+            const day = new Date(r.paidAt).toLocaleDateString("en-CA", { timeZone: "Asia/Bangkok" });
+            if (day !== filter.date) return false;
+          }
+          if (needle) {
+            return (
+              r.receiptNumber.toLowerCase().includes(needle) ||
+              r.orderNumber.toLowerCase().includes(needle)
+            );
+          }
+          return true;
+        })
+        .sort((a, b) => b.paidAt.localeCompare(a.paidAt))
+        .slice(0, limit)
+        .map((r) => ({ ...r, items: r.items.map((i) => ({ ...i })) }));
+    },
+    async approveRefund(paymentId, input, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const current = payments.get(paymentId);
+          if (!current) throw new NotFoundError("ไม่พบรายการชำระเงิน");
+          if (current.status !== "paid") throw new ConflictError("คืนเงินได้เฉพาะรายการที่ชำระสำเร็จแล้ว");
+          const reason = normalizePaymentReason(input.reason);
+          const order = orders.get(current.orderId);
+          if (!order) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+          if (order.status !== "pending_payment") {
+            throw new ConflictError("คำสั่งซื้อนี้ปิดงาน/เริ่มทำแล้ว คืนเงินไม่ได้");
+          }
+          if (order.stockConsumed) {
+            throw new ConflictError("คำสั่งซื้อเริ่มทำ (ตัดสต๊อกจริง) แล้ว คืนเงินไม่ได้");
+          }
+          // คืนยอดจองตาม Ticket 07 contract (ยกเลิกก่อนเริ่มทำ)
+          if (order.stockReserved) {
+            await releaseStockForOrder(order.id, order.orderNumber, `คืนเงิน: ${reason}`, actor);
+          }
+          const beforeOrder = { status: order.status, total: order.total };
+          order.status = "cancelled";
+          order.updatedAt = now.toISOString();
+          const detail = toDetail(order.id)!;
+          await writeAudit(orderStatusChangedEvent(beforeOrder, detail, `คืนเงิน: ${reason}`, actor));
+          if (order.stockReserved) {
+            await writeAudit(orderStockReleasedEvent(order.orderNumber, order.id, `คืนเงิน: ${reason}`, actor));
+          }
+          const beforePay = { status: current.status as PaymentStatus };
+          current.status = "refunded";
+          current.updatedAt = now.toISOString();
+          void beforePay;
+          const at = now.toISOString();
+          const refund: Refund = {
+            id: randomUUID(),
+            paymentId: current.id,
+            orderId: order.id,
+            orderNumber: order.orderNumber,
+            amount: current.amount,
+            reason,
+            approvedBy: actor.actorUsername ?? actor.actorId ?? null,
+            approvedAt: at,
+            createdAt: at,
+          };
+          refunds.set(refund.id, { ...refund });
+          await writeAudit(paymentRefundApprovedEvent({ ...current }, refund.id, reason, actor));
+          return { payment: { ...current }, refund: { ...refund } };
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async listRefunds(limit) {
+      const n = Math.min(Math.max(limit || 50, 1), 200);
+      return [...refunds.values()]
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, n)
+        .map((r) => ({ ...r }));
+    },
     // ---- Ticket 06 memory: การจอง + รอบการใช้โต๊ะ (all-or-nothing + serialize กันชน) ----
     async createReservation(input, actor, now = new Date()) {
       return runReservationExclusive(async () => {
@@ -3107,6 +3823,7 @@ const MIGRATION_FILES = [
   "006_orders.sql",
   "007_reservations.sql",
   "008_menu_options_recipes_inventory.sql",
+  "009_payments_receipts_refunds.sql",
 ];
 
 export function findMigrationFile(name = MIGRATION_FILES[0]!): string {
@@ -3321,6 +4038,104 @@ function dupOrderKeyName(err: unknown): string {
 }
 
 // ---------- Ticket 07: mappers + helpers ระดับ module (ใช้ทั้ง seams ใน createMysqlStore) ----------
+
+// ---------- Ticket 08: mappers ระดับ module (ใช้ทั้ง seams ชำระเงินใน createMysqlStore) ----------
+
+function rowToPayment(r: Record<string, unknown>): Payment {
+  const method = String(r["method"]);
+  if (method !== "cash" && method !== "promptpay") throw new Error("วิธีชำระเงินในฐานข้อมูลไม่ถูกต้อง");
+  const status = String(r["status"]);
+  if (
+    status !== "pending" && status !== "paid" && status !== "manual_review" &&
+    status !== "failed" && status !== "expired" && status !== "refunded" && status !== "cancelled"
+  ) {
+    throw new Error("สถานะการชำระเงินในฐานข้อมูลไม่ถูกต้อง");
+  }
+  return {
+    id: String(r["id"]),
+    orderId: String(r["order_id"]),
+    orderNumber: String(r["order_number"]),
+    method,
+    amount: Number(r["amount"]),
+    receivedAmount: r["received_amount"] == null ? null : Number(r["received_amount"]),
+    changeAmount: Number(r["change_amount"] ?? 0),
+    status,
+    providerRef: r["provider_ref"] == null ? null : String(r["provider_ref"]),
+    slipRef: r["slip_ref"] == null ? null : String(r["slip_ref"]),
+    receiptNumber: r["receipt_number"] == null ? null : String(r["receipt_number"]),
+    idempotencyKey: String(r["idempotency_key"]),
+    paidAt: r["paid_at"] == null ? null : new Date(r["paid_at"] as string).toISOString(),
+    expiresAt: new Date(r["expires_at"] as string).toISOString(),
+    createdAt: new Date(r["created_at"] as string).toISOString(),
+    updatedAt: new Date(r["updated_at"] as string).toISOString(),
+  };
+}
+
+function parseReceiptItems(value: unknown): Receipt["items"] {
+  if (value === null || value === undefined) return [];
+  let raw: unknown = value;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw) as unknown;
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(raw)) return [];
+  const out: Receipt["items"] = [];
+  for (const row of raw as Record<string, unknown>[]) {
+    if (!row || typeof row !== "object") continue;
+    if (typeof row["menuName"] !== "string") continue;
+    out.push({
+      menuName: String(row["menuName"]),
+      quantity: Number(row["quantity"]),
+      unitPrice: Number(row["unitPrice"]),
+      lineTotal: Number(row["lineTotal"]),
+    });
+  }
+  return out;
+}
+
+function rowToReceipt(r: Record<string, unknown>): Receipt {
+  return {
+    receiptNumber: String(r["receipt_number"]),
+    paymentId: String(r["payment_id"]),
+    orderId: String(r["order_id"]),
+    orderNumber: String(r["order_number"]),
+    shopName: String(r["shop_name"]),
+    method: String(r["method"]) === "cash" ? "cash" : "promptpay",
+    amount: Number(r["amount"]),
+    receivedAmount: r["received_amount"] == null ? null : Number(r["received_amount"]),
+    changeAmount: Number(r["change_amount"] ?? 0),
+    paidAt: new Date(r["paid_at"] as string).toISOString(),
+    items: parseReceiptItems(r["items_snapshot"]),
+    createdAt: new Date(r["created_at"] as string).toISOString(),
+  };
+}
+
+function rowToRefund(r: Record<string, unknown>): Refund {
+  return {
+    id: String(r["id"]),
+    paymentId: String(r["payment_id"]),
+    orderId: String(r["order_id"]),
+    orderNumber: String(r["order_number"]),
+    amount: Number(r["amount"]),
+    reason: String(r["reason"]),
+    approvedBy: r["approved_by"] == null ? null : String(r["approved_by"]),
+    approvedAt: new Date(r["approved_at"] as string).toISOString(),
+    createdAt: new Date(r["created_at"] as string).toISOString(),
+  };
+}
+
+/** สถานะ derived ฝั่งคำสั่งซื้อจาก payment (ไม่เปลี่ยน OrderStatus contract) */
+function paymentToOrderState(status: PaymentStatus | null): OrderPaymentState {
+  if (status === "paid") return "paid";
+  if (status === "manual_review") return "manual_review";
+  if (status === "failed" || status === "cancelled") return "failed";
+  if (status === "expired") return "expired";
+  if (status === "refunded") return "refunded";
+  return "pending_payment";
+}
 
 function rowToOptionGroup(r: Record<string, unknown>): MenuOptionGroup {
   return {
@@ -3741,8 +4556,137 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
     }
   }
 
-  async function readReservationDetail(q: QueryRunner, id: string): Promise<ReservationDetail | null> {
-    const [rows] = (await q.query(
+  /**
+   * transaction สำหรับเขียนการชำระเงิน/ใบเสร็จ/คืนเงิน (Ticket 08):
+   * กัน concurrent ชนกันข้าม process ด้วย named lock ระดับ MySQL
+   * (`paor_payment_write`) ครอบ transaction เดียว — สำเร็จ commit ทั้ง
+   * state+audit, พัง rollback ทั้งหมด แล้ว release lock/connection เสมอ
+   */
+  async function withPaymentTx<T>(fn: (conn: PoolConnection) => Promise<T>): Promise<T> {
+    const conn = await pool.getConnection();
+    try {
+      const [lockRows] = await conn.query("SELECT GET_LOCK('paor_payment_write', 10) AS l");
+      const locked = Number((lockRows as Record<string, unknown>[])[0]!["l"]);
+      if (locked !== 1) throw new Error("ขอ lock สำหรับเขียนการชำระเงินไม่สำเร็จ");
+      try {
+        await conn.beginTransaction();
+        try {
+          const out = await fn(conn);
+          await conn.commit();
+          return out;
+        } catch (err) {
+          try {
+            await conn.rollback();
+          } catch {
+            // เก็บ error ต้นฉบับไว้
+          }
+          throw err;
+        }
+      } finally {
+        try {
+          await conn.query("SELECT RELEASE_LOCK('paor_payment_write')");
+        } catch {
+          // เก็บ error ต้นฉบับไว้
+        }
+      }
+    } finally {
+      conn.release();
+    }
+  }
+
+  /** อ่านชื่อร้านใน transaction เดียวกับใบเสร็จ (snapshot ชื่อร้านตอนออกใบเสร็จ) */
+  async function readShopNameFrom(q: QueryRunner): Promise<string> {
+    const [rows] = (await q.query("SELECT shop_name FROM shop_settings WHERE id = 1 LIMIT 1")) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    if (rows.length === 0) return DEFAULT_SHOP_NAME;
+    return String(rows[0]!["shop_name"]);
+  }
+
+  /** อ่าน payment พร้อมใบเสร็จ (null เมื่อยังไม่ paid) — ใช้ใน seams ชำระเงิน */
+  async function readReceiptTx(q: QueryRunner, paymentId: string): Promise<Receipt | null> {    const [rows] = (await q.query("SELECT * FROM receipts WHERE payment_id = ? LIMIT 1", [paymentId])) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    if (rows.length === 0) return null;
+    return rowToReceipt(rows[0]!);
+  }
+
+  /** เปลี่ยน pending ที่หมดอายุเป็น expired + audit (เรียกต้น seams ชำระเงินเสมอ) */
+  async function expirePaymentRowIfDue(
+    q: QueryRunner,
+    p: Payment,
+    now: Date,
+    actor: ShopActor,
+  ): Promise<Payment> {
+    if (p.status !== "pending") return p;
+    if (new Date(p.expiresAt).getTime() >= now.getTime()) return p;
+    await q.query("UPDATE payments SET status = 'expired' WHERE id = ?", [p.id]);
+    const after: Payment = { ...p, status: "expired", updatedAt: now.toISOString() };
+    await insertAuditRow(q, paymentStatusChangedEvent({ status: "pending" }, after, "intent หมดอายุ (เกินเวลาชำระ)", actor));
+    return after;
+  }
+
+  /**
+   * เปลี่ยนเป็น paid + ออกใบเสร็จ (เลข RCP กันชน) ใน transaction เดียวกับ caller
+   * ไม่แตะสต๊อกซ้ำ; queue (09)/points (10) เป็น no-op มี idempotency guard
+   */
+  async function markPaymentPaidTx(
+    q: QueryRunner,
+    p: Payment,
+    detail: OrderDetail,
+    shopNameValue: string,
+    reason: string,
+    actor: ShopActor,
+    now: Date,
+  ): Promise<Receipt> {
+    assertPaymentTransition(p.status, "paid");
+    const before = { status: p.status };
+    let receiptNumber = generateReceiptNumber(now);
+    for (let i = 0; i < 5; i += 1) {
+      try {
+        const paidAt = toMysqlDatetime(now.toISOString());
+        await q.query(
+          "UPDATE payments SET status = 'paid', paid_at = ?, receipt_number = ? WHERE id = ?",
+          [paidAt, receiptNumber, p.id],
+        );
+        const itemsSnapshot = JSON.stringify(
+          detail.items.map((item) => ({
+            menuName: item.menuName,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            lineTotal: item.lineTotal,
+          })),
+        );
+        await q.query(
+          "INSERT INTO receipts (payment_id, receipt_number, order_id, order_number, shop_name, method, amount, received_amount, change_amount, paid_at, items_snapshot) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          [
+            p.id, receiptNumber, p.orderId, p.orderNumber, shopNameValue, p.method, p.amount,
+            p.receivedAmount, p.changeAmount, paidAt, itemsSnapshot,
+          ],
+        );
+        break;
+      } catch (err: unknown) {
+        const msg = err && typeof err === "object" && "message" in err && typeof err.message === "string" ? err.message : "";
+        if (msg.includes("uq_payments_receipt") || msg.includes("uq_receipts_number")) {
+          receiptNumber = generateReceiptNumber(now);
+          continue;
+        }
+        throw err;
+      }
+    }
+    p.status = "paid";
+    p.paidAt = now.toISOString();
+    p.receiptNumber = receiptNumber;
+    p.updatedAt = now.toISOString();
+    await insertAuditRow(q, paymentStatusChangedEvent(before, { ...p }, reason, actor));
+        const receipt = await readReceiptTx(q, p.id);
+    if (!receipt) throw new Error("ออกใบเสร็จไม่สำเร็จ");
+    return receipt;
+  }
+
+  async function readReservationDetail(q: QueryRunner, id: string): Promise<ReservationDetail | null> {    const [rows] = (await q.query(
       "SELECT r.*, t.name AS table_name FROM reservations r LEFT JOIN shop_tables t ON t.id = r.table_id WHERE r.id = ? LIMIT 1",
       [id],
     )) as [Record<string, unknown>[], unknown];
@@ -4033,6 +4977,8 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
         sql += " WHERE action LIKE 'reservation\\_%'";
       } else if (prefix === "round_") {
         sql += " WHERE action LIKE 'table\\_round\\_%'";
+      } else if (prefix === "payment_") {
+        sql += " WHERE action LIKE 'payment\\_%'";
       } else if (prefix === "account_") {
         sql += " WHERE action NOT LIKE 'login\\_%'";
       }
@@ -6062,6 +7008,468 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
         await insertAuditRow(conn, tableRoundClosedEvent(after, actor));
         return after;
       });
+    },
+    // ---- Ticket 08 MySQL: การชำระเงิน ใบเสร็จ และคืนเงิน (transaction เดียวกับ audit เสมอ) ----
+    async createPayment(input: CreatePaymentInput, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const method = normalizePaymentMethod(input.method);
+        const idempotencyKey = normalizePaymentIdempotencyKey(input.idempotencyKey);
+        const [oRows] = (await conn.query("SELECT * FROM orders WHERE id = ? LIMIT 1 FOR UPDATE", [input.orderId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (oRows.length === 0) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+        const order = rowToOrder(oRows[0]!);
+        if (order.status !== "pending_payment") {
+          throw new ConflictError("คำสั่งซื้อนี้ปิดงานแล้ว ไม่สามารถชำระเงินได้อีก");
+        }
+        const hash = paymentPayloadHash({
+          orderId: order.id,
+          method,
+          amount: order.total,
+          receivedAmount: input.receivedAmount ?? null,
+        });
+        const [idemRows] = (await conn.query("SELECT * FROM payments WHERE idempotency_key = ? LIMIT 1", [idempotencyKey])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (idemRows.length > 0) {
+          const ex = rowToPayment(idemRows[0]!);
+          if (String(idemRows[0]!["payload_hash"]) !== hash) {
+            throw new ConflictError("คำขอนี้ถูกใช้ชำระไปแล้ว กรุณาสร้างคำขอใหม่");
+          }
+          return {
+            payment: ex,
+            qrPayload: ex.method === "promptpay" && ex.status === "pending" ? `PROMPTPAY-FAKE:${ex.id}:${ex.amount}` : null,
+            deduplicated: true,
+          };
+        }
+        const [activeRows] = (await conn.query("SELECT * FROM payments WHERE order_id = ? LIMIT 1 FOR UPDATE", [order.id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (activeRows.length > 0) {
+          const active = rowToPayment(activeRows[0]!);
+          if (active.status === "pending" || active.status === "manual_review") {
+            throw new ConflictError("มีคำขอชำระที่ดำเนินการอยู่แล้ว กรุณารอผลหรือยกเลิกก่อน");
+          }
+          if (active.status === "paid" || active.status === "refunded") {
+            throw new ConflictError("คำสั่งซื้อนี้ชำระสำเร็จแล้ว ไม่รับการชำระซ้ำ");
+          }
+          // terminal failed/expired/cancelled: แทนที่ด้วย intent ใหม่ใน transaction เดียว
+          await conn.query("DELETE FROM payment_events WHERE payment_id = ?", [active.id]);
+          await conn.query("DELETE FROM payments WHERE id = ?", [active.id]);
+        }
+        let receivedAmount: number | null = null;
+        let changeAmount = 0;
+        let providerRef: string | null = null;
+        let qrPayload: string | null = null;
+        const id = randomUUID();
+        if (method === "cash") {
+          if (input.receivedAmount === undefined || input.receivedAmount === null) {
+            throw new Error("กรุณาระบุจำนวนเงินที่รับมา");
+          }
+          changeAmount = assertCashTendered(order.total, input.receivedAmount);
+          receivedAmount = Math.round(input.receivedAmount * 100) / 100;
+        } else {
+          const provider = new FakePromptPayProvider();
+          const expiresAt = new Date(now.getTime() + PAYMENT_PROMPTPAY_TTL_MINUTES * 60 * 1000);
+          const intent = await provider.createIntent(id, order.total, expiresAt);
+          providerRef = intent.providerRef;
+          qrPayload = intent.qrPayload;
+        }
+        const slipRef = typeof input.slipRef === "string" && input.slipRef.trim() ? input.slipRef.trim().slice(0, 120) : null;
+        const expiresAt = toMysqlDatetime(new Date(now.getTime() + PAYMENT_PROMPTPAY_TTL_MINUTES * 60 * 1000).toISOString());
+        try {
+          await conn.query(
+            "INSERT INTO payments (id, order_id, order_number, method, amount, received_amount, change_amount, status, provider_ref, slip_ref, idempotency_key, payload_hash, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)",
+            [id, order.id, order.orderNumber, method, order.total, receivedAmount, changeAmount, providerRef, slipRef, idempotencyKey, hash, expiresAt],
+          );
+        } catch (err: unknown) {
+          const msg = err && typeof err === "object" && "message" in err && typeof err.message === "string" ? err.message : "";
+          if (msg.includes("uq_payments_idempotency") || msg.includes("uq_payments_order")) {
+            const [reread] = (await conn.query("SELECT * FROM payments WHERE idempotency_key = ? LIMIT 1", [idempotencyKey])) as [
+              Record<string, unknown>[],
+              unknown,
+            ];
+            if (reread.length > 0) {
+              if (String(reread[0]!["payload_hash"]) !== hash) {
+                throw new ConflictError("คำขอนี้ถูกใช้ชำระไปแล้ว กรุณาสร้างคำขอใหม่");
+              }
+              const ex = rowToPayment(reread[0]!);
+              return { payment: ex, qrPayload: null, deduplicated: true };
+            }
+          }
+          throw err;
+        }
+        const [pRows] = (await conn.query("SELECT * FROM payments WHERE id = ? LIMIT 1", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const payment = rowToPayment(pRows[0]!);
+        await insertAuditRow(conn, paymentCreatedEvent(payment, actor));
+        return { payment, qrPayload, deduplicated: false };
+      });
+    },
+    async getPayment(id: string) {
+      const [rows] = (await pool.query("SELECT * FROM payments WHERE id = ? LIMIT 1", [id])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      return rows.length === 0 ? null : rowToPayment(rows[0]!);
+    },
+    async getOrderPayment(orderId: string) {
+      const [rows] = (await pool.query("SELECT * FROM payments WHERE order_id = ? LIMIT 1", [orderId])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      return rows.length === 0 ? null : rowToPayment(rows[0]!);
+    },
+    async getOrderPaymentState(orderId: string) {
+      const [rows] = (await pool.query("SELECT status FROM payments WHERE order_id = ? LIMIT 1", [orderId])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      if (rows.length === 0) return "pending_payment";
+      return paymentToOrderState(rowToPayment({ ...rows[0]!, method: "cash", amount: 0 }).status);
+    },
+    async listPayments(filter: ListPaymentsFilter) {
+      const n = Math.min(Math.max(filter.limit || 50, 1), 200);
+      const params: unknown[] = [];
+      let sql = "SELECT * FROM payments";
+      const where: string[] = [];
+      if (filter.status) {
+        where.push("status = ?");
+        params.push(filter.status);
+      }
+      if (filter.method) {
+        where.push("method = ?");
+        params.push(filter.method);
+      }
+      const needle = (filter.q ?? "").trim();
+      if (needle) {
+        where.push("(order_number LIKE ? OR receipt_number LIKE ?)");
+        params.push(`%${needle}%`, `%${needle}%`);
+      }
+      if (where.length > 0) sql += ` WHERE ${where.join(" AND ")}`;
+      sql += " ORDER BY created_at DESC LIMIT ?";
+      params.push(n);
+      const [rows] = (await pool.query(sql, params)) as [Record<string, unknown>[], unknown];
+      return (rows as Record<string, unknown>[]).map(rowToPayment);
+    },
+    async confirmCashPayment(id: string, input: { receivedAmount: number; reason?: string | null }, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM payments WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบรายการชำระเงิน");
+        let current = await expirePaymentRowIfDue(conn, rowToPayment(rows[0]!), now, actor);
+        if (current.status === "paid") {
+          const receipt = await readReceiptTx(conn, current.id);
+          if (!receipt) throw new Error("ไม่พบใบเสร็จของการชำระนี้");
+          return { payment: current, receipt, deduplicated: true };
+        }
+        if (current.method !== "cash") throw new ConflictError("รายการนี้ไม่ใช่การชำระด้วยเงินสด");
+        const detail = await readOrderDetailTx(conn, current.orderId);
+        if (!detail) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+        if (detail.status !== "pending_payment") throw new ConflictError("คำสั่งซื้อนี้ปิดงานแล้ว ยืนยันรับเงินไม่ได้");
+        if (current.amount !== detail.total) throw new ConflictError("ยอดชำระไม่ตรงกับยอดคำสั่งซื้อปัจจุบัน");
+        const tendered = input.receivedAmount ?? current.receivedAmount;
+        if (tendered === null || tendered === undefined) throw new Error("กรุณาระบุจำนวนเงินที่รับมา");
+        const change = assertCashTendered(current.amount, tendered);
+        const received = Math.round(tendered * 100) / 100;
+        await conn.query("UPDATE payments SET received_amount = ?, change_amount = ? WHERE id = ?", [received, change, current.id]);
+        current = { ...current, receivedAmount: received, changeAmount: change };
+        const shopNameValue = await readShopNameFrom(conn);
+        const reason = input.reason?.trim() ? normalizePaymentReason(input.reason) : "รับเงินสดหน้าร้าน";
+        const receipt = await markPaymentPaidTx(conn, current, detail, shopNameValue, reason, actor, now);
+        const [after] = (await conn.query("SELECT * FROM payments WHERE id = ? LIMIT 1", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        return { payment: rowToPayment(after[0]!), receipt, deduplicated: false };
+      });
+    },
+    async handlePaymentWebhook(paymentId: string, input: { providerEventId: string; outcome: ProviderOutcome; summary?: string | null }, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const eventId = normalizeProviderEventId(input.providerEventId);
+        const outcome = normalizeProviderOutcome(input.outcome);
+        const [seen] = (await conn.query("SELECT * FROM payment_events WHERE provider_event_id = ? LIMIT 1", [eventId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (seen.length > 0) {
+          const pid = String(seen[0]!["payment_id"]);
+          const [pRows] = (await conn.query("SELECT * FROM payments WHERE id = ? LIMIT 1", [pid])) as [
+            Record<string, unknown>[],
+            unknown,
+          ];
+          const p = rowToPayment(pRows[0]!);
+          return { payment: p, receipt: await readReceiptTx(conn, pid), deduplicated: true };
+        }
+        const [rows] = (await conn.query("SELECT * FROM payments WHERE id = ? LIMIT 1 FOR UPDATE", [paymentId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบรายการชำระเงิน");
+        let current = rowToPayment(rows[0]!);
+        if (current.status === "paid" || current.status === "refunded") {
+          throw new ConflictError("รายการนี้ชำระสำเร็จแล้ว ไม่รับผลการชำระซ้ำ");
+        }
+        current = await expirePaymentRowIfDue(conn, current, now, actor);
+        if (current.status === "expired") {
+          await conn.query("INSERT INTO payment_events (id, payment_id, provider_event_id, kind, summary) VALUES (?, ?, ?, ?, ?)", [
+            randomUUID(), current.id, eventId, outcome === "success" ? "success" : outcome === "ambiguous" ? "ambiguous" : "fail",
+            input.summary ?? `ผล ${outcome} จากผู้ให้บริการ`,
+          ]);
+          return { payment: current, receipt: null, deduplicated: false };
+        }
+        const detail = await readOrderDetailTx(conn, current.orderId);
+        if (!detail) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+        if (detail.status !== "pending_payment") throw new ConflictError("คำสั่งซื้อนี้ปิดงานแล้ว รับผลชำระไม่ได้");
+        const target = outcomeToStatus(outcome);
+        assertPaymentTransition(current.status, target);
+        await conn.query("INSERT INTO payment_events (id, payment_id, provider_event_id, kind, summary) VALUES (?, ?, ?, ?, ?)", [
+          randomUUID(), current.id, eventId, outcome === "success" ? "success" : outcome === "ambiguous" ? "ambiguous" : "fail",
+          input.summary ?? `ผล ${outcome} จากผู้ให้บริการ`,
+        ]);
+        if (target === "paid") {
+          const shopNameValue = await readShopNameFrom(conn);
+          const receipt = await markPaymentPaidTx(conn, current, detail, shopNameValue, `ผลยืนยันจากผู้ให้บริการ (${outcome})`, actor, now);
+          const [after] = (await conn.query("SELECT * FROM payments WHERE id = ? LIMIT 1", [paymentId])) as [
+            Record<string, unknown>[],
+            unknown,
+          ];
+          return { payment: rowToPayment(after[0]!), receipt, deduplicated: false };
+        }
+        await conn.query("UPDATE payments SET status = ? WHERE id = ?", [target, current.id]);
+        const after: Payment = { ...current, status: target, updatedAt: now.toISOString() };
+        await insertAuditRow(conn, paymentStatusChangedEvent({ status: current.status }, after, `ผลยืนยันจากผู้ให้บริการ (${outcome})`, actor));
+        return { payment: after, receipt: null, deduplicated: false };
+      });
+    },
+    async submitPaymentSlip(id: string, input: { slipRef: string }, actor: ShopActor, now: Date = new Date()) {
+      if (!isFakePaymentMode()) {
+        throw new Error("ผู้ให้บริการตรวจ slip จริงยังไม่เปิดใช้งาน (contract-only)");
+      }
+      const raw = input.slipRef.trim();
+      if (!raw) throw new Error("กรุณาระบุเลขอ้างอิง slip");
+      if (raw.length > 120) throw new Error("เลขอ้างอิง slip ยาวเกินไป");
+      const provider = new FakePromptPayProvider();
+      const outcome = await provider.verifySlip(raw);
+      return withPaymentTx(async (conn) => {
+        const eventId = `slip:${raw}`;
+        const [seen] = (await conn.query("SELECT * FROM payment_events WHERE provider_event_id = ? LIMIT 1", [eventId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (seen.length > 0) {
+          const pid = String(seen[0]!["payment_id"]);
+          const [pRows] = (await conn.query("SELECT * FROM payments WHERE id = ? LIMIT 1", [pid])) as [
+            Record<string, unknown>[],
+            unknown,
+          ];
+          const p = rowToPayment(pRows[0]!);
+          return { payment: p, receipt: await readReceiptTx(conn, pid), deduplicated: true };
+        }
+        const [rows] = (await conn.query("SELECT * FROM payments WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบรายการชำระเงิน");
+        let current = rowToPayment(rows[0]!);
+        if (current.status === "paid" || current.status === "refunded") {
+          throw new ConflictError("รายการนี้ชำระสำเร็จแล้ว ไม่รับผลการชำระซ้ำ");
+        }
+        current = await expirePaymentRowIfDue(conn, current, now, actor);
+        await conn.query("UPDATE payments SET slip_ref = ? WHERE id = ?", [raw, current.id]);
+        current = { ...current, slipRef: raw };
+        if (current.status === "expired") {
+          await conn.query("INSERT INTO payment_events (id, payment_id, provider_event_id, kind, summary) VALUES (?, ?, ?, ?, ?)", [
+            randomUUID(), current.id, eventId, outcome === "success" ? "success" : outcome === "ambiguous" ? "ambiguous" : "fail", `ตรวจ slip ${raw}`,
+          ]);
+          return { payment: current, receipt: null, deduplicated: false };
+        }
+        const detail = await readOrderDetailTx(conn, current.orderId);
+        if (!detail) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+        if (detail.status !== "pending_payment") throw new ConflictError("คำสั่งซื้อนี้ปิดงานแล้ว รับผลชำระไม่ได้");
+        const target = outcomeToStatus(outcome);
+        assertPaymentTransition(current.status, target);
+        await conn.query("INSERT INTO payment_events (id, payment_id, provider_event_id, kind, summary) VALUES (?, ?, ?, ?, ?)", [
+          randomUUID(), current.id, eventId, outcome === "success" ? "success" : outcome === "ambiguous" ? "ambiguous" : "fail", `ตรวจ slip ${raw}`,
+        ]);
+        if (target === "paid") {
+          const shopNameValue = await readShopNameFrom(conn);
+          const receipt = await markPaymentPaidTx(conn, current, detail, shopNameValue, `ตรวจ slip ผ่าน (${raw})`, actor, now);
+          const [after] = (await conn.query("SELECT * FROM payments WHERE id = ? LIMIT 1", [id])) as [
+            Record<string, unknown>[],
+            unknown,
+          ];
+          return { payment: rowToPayment(after[0]!), receipt, deduplicated: false };
+        }
+        await conn.query("UPDATE payments SET status = ? WHERE id = ?", [target, current.id]);
+        const after: Payment = { ...current, status: target, updatedAt: now.toISOString() };
+        await insertAuditRow(conn, paymentStatusChangedEvent({ status: current.status }, after, `ตรวจ slip (${raw}) ผล ${outcome}`, actor));
+        return { payment: after, receipt: null, deduplicated: false };
+      });
+    },
+    async resolveManualReview(id: string, input: { decision: "paid" | "failed" | "cancelled"; reason: string }, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM payments WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบรายการชำระเงิน");
+        const current = rowToPayment(rows[0]!);
+        if (current.status !== "manual_review") throw new ConflictError("รายการนี้ไม่ได้รอตรวจสอบ");
+        const reason = normalizePaymentReason(input.reason);
+        const detail = await readOrderDetailTx(conn, current.orderId);
+        if (!detail) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+        if (input.decision === "paid") {
+          if (detail.status !== "pending_payment") throw new ConflictError("คำสั่งซื้อนี้ปิดงานแล้ว รับผลชำระไม่ได้");
+          const shopNameValue = await readShopNameFrom(conn);
+          const receipt = await markPaymentPaidTx(conn, current, detail, shopNameValue, reason, actor, now);
+          const [after] = (await conn.query("SELECT * FROM payments WHERE id = ? LIMIT 1", [id])) as [
+            Record<string, unknown>[],
+            unknown,
+          ];
+          return { payment: rowToPayment(after[0]!), receipt };
+        }
+        const target: PaymentStatus = input.decision === "failed" ? "failed" : "cancelled";
+        assertPaymentTransition(current.status, target);
+        await conn.query("UPDATE payments SET status = ? WHERE id = ?", [target, current.id]);
+        const after: Payment = { ...current, status: target, updatedAt: now.toISOString() };
+        await insertAuditRow(conn, paymentStatusChangedEvent({ status: current.status }, after, reason, actor));
+        return { payment: after, receipt: null };
+      });
+    },
+    async expirePayment(id: string, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM payments WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบรายการชำระเงิน");
+        const current = rowToPayment(rows[0]!);
+        if (current.status !== "pending") return { payment: current, deduplicated: true };
+        void actor;
+        void now;
+        await conn.query("UPDATE payments SET status = 'expired' WHERE id = ?", [id]);
+        const after: Payment = { ...current, status: "expired", updatedAt: new Date().toISOString() };
+        await insertAuditRow(conn, paymentStatusChangedEvent({ status: "pending" }, after, "intent หมดอายุ", actor));
+        return { payment: after, deduplicated: false };
+      });
+    },
+    async getReceiptByPayment(paymentId: string) {
+      const [rows] = (await pool.query("SELECT * FROM receipts WHERE payment_id = ? LIMIT 1", [paymentId])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      return rows.length === 0 ? null : rowToReceipt(rows[0]!);
+    },
+    async getReceiptByNumber(receiptNumber: string) {
+      const [rows] = (await pool.query("SELECT * FROM receipts WHERE receipt_number = ? LIMIT 1", [receiptNumber.trim()])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      return rows.length === 0 ? null : rowToReceipt(rows[0]!);
+    },
+    async listReceipts(filter: ListReceiptsFilter) {
+      const n = Math.min(Math.max(filter.limit || 50, 1), 200);
+      const params: unknown[] = [];
+      let sql = "SELECT * FROM receipts";
+      const where: string[] = [];
+      const needle = (filter.q ?? "").trim();
+      if (needle) {
+        where.push("(receipt_number LIKE ? OR order_number LIKE ?)");
+        params.push(`%${needle}%`, `%${needle}%`);
+      }
+      if (filter.date) {
+        where.push("DATE(CONVERT_TZ(paid_at, '+00:00', '+07:00')) = ?");
+        params.push(filter.date);
+      }
+      if (where.length > 0) sql += ` WHERE ${where.join(" AND ")}`;
+      sql += " ORDER BY paid_at DESC LIMIT ?";
+      params.push(n);
+      const [rows] = (await pool.query(sql, params)) as [Record<string, unknown>[], unknown];
+      return (rows as Record<string, unknown>[]).map(rowToReceipt);
+    },
+    async approveRefund(paymentId: string, input: { reason: string }, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM payments WHERE id = ? LIMIT 1 FOR UPDATE", [paymentId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบรายการชำระเงิน");
+        const current = rowToPayment(rows[0]!);
+        if (current.status !== "paid") throw new ConflictError("คืนเงินได้เฉพาะรายการที่ชำระสำเร็จแล้ว");
+        const reason = normalizePaymentReason(input.reason);
+        const [oRows] = (await conn.query("SELECT * FROM orders WHERE id = ? LIMIT 1 FOR UPDATE", [current.orderId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (oRows.length === 0) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+        const order = rowToOrder(oRows[0]!);
+        if (order.status !== "pending_payment") {
+          throw new ConflictError("คำสั่งซื้อนี้ปิดงาน/เริ่มทำแล้ว คืนเงินไม่ได้");
+        }
+        if (order.stockConsumed) {
+          throw new ConflictError("คำสั่งซื้อเริ่มทำ (ตัดสต๊อกจริง) แล้ว คืนเงินไม่ได้");
+        }
+        // คืนยอดจองตาม Ticket 07 contract (SELECT ... FOR UPDATE กันแข่ง แล้วคืนทีละวัตถุดิบ)
+        if (order.stockReserved) {
+          const [useRows] = (await conn.query("SELECT ingredient_id, qty FROM order_stock_usage WHERE order_id = ?", [order.id])) as [
+            Record<string, unknown>[],
+            unknown,
+          ];
+          for (const u of useRows as Record<string, unknown>[]) {
+            const ingId = String(u["ingredient_id"]);
+            const qty = Number(u["qty"]);
+            const [ingRows] = (await conn.query("SELECT * FROM ingredients WHERE id = ? LIMIT 1 FOR UPDATE", [ingId])) as [
+              Record<string, unknown>[],
+              unknown,
+            ];
+            if (ingRows.length === 0) continue;
+            const ing = rowToIngredient(ingRows[0]!);
+            const afterReserved = roundStock(Math.max(0, ing.reserved - qty));
+            await conn.query("UPDATE ingredients SET reserved = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [afterReserved, ingId]);
+            await conn.query(
+              "INSERT INTO stock_ledger (id, ingredient_id, op, delta_on_hand, delta_reserved, before_on_hand, after_on_hand, before_reserved, after_reserved, reason, actor_id, actor_username, order_id, reference) VALUES (?, ?, 'release', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              [randomUUID(), ingId, -qty, ing.onHand, ing.onHand, ing.reserved, afterReserved, `คืนยอดจองของคำสั่งซื้อ ${order.orderNumber}: คืนเงิน: ${reason}`, actor.actorId ?? null, actor.actorUsername ?? null, order.id, order.orderNumber],
+            );
+          }
+        }
+        await conn.query("UPDATE orders SET status = 'cancelled' WHERE id = ?", [order.id]);
+        const detail = await readOrderDetailTx(conn, order.id);
+        if (!detail) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+        await insertAuditRow(conn, orderStatusChangedEvent({ status: "pending_payment", total: order.total }, detail, `คืนเงิน: ${reason}`, actor));
+        if (order.stockReserved) {
+          await insertAuditRow(conn, orderStockReleasedEvent(order.orderNumber, order.id, `คืนเงิน: ${reason}`, actor));
+        }
+        await conn.query("UPDATE payments SET status = 'refunded' WHERE id = ?", [current.id]);
+        const at = toMysqlDatetime(now.toISOString());
+        const refundId = randomUUID();
+        await conn.query(
+          "INSERT INTO refunds (id, payment_id, order_id, order_number, amount, reason, approved_by, approved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          [refundId, current.id, order.id, order.orderNumber, current.amount, reason, actor.actorUsername ?? actor.actorId ?? null, at],
+        );
+        const after: Payment = { ...current, status: "refunded", updatedAt: now.toISOString() };
+        await insertAuditRow(conn, paymentRefundApprovedEvent(after, refundId, reason, actor));
+        const [rRows] = (await conn.query("SELECT * FROM refunds WHERE id = ? LIMIT 1", [refundId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        return { payment: after, refund: rowToRefund(rRows[0]!) };
+      });
+    },
+    async listRefunds(limit: number) {
+      const n = Math.min(Math.max(limit || 50, 1), 200);
+      const [rows] = (await pool.query("SELECT * FROM refunds ORDER BY created_at DESC LIMIT ?", [n])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      return (rows as Record<string, unknown>[]).map(rowToRefund);
     },
     async close() {
       await pool.end();

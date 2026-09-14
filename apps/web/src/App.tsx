@@ -18,6 +18,8 @@ import MenuAdminPage from "./pages/MenuAdmin";
 import InventoryPage from "./pages/Inventory";
 import CartPage from "./pages/Cart";
 import MyOrdersPage from "./pages/MyOrders";
+import PayOrderPage from "./pages/PayOrder";
+import AdminPaymentsPage from "./pages/AdminPayments";
 import AdminOrdersPage from "./pages/AdminOrders";
 import ReservationsPage from "./pages/Reservations";
 import CheckinPage from "./pages/Checkin";
@@ -79,6 +81,7 @@ export default function App() {
         <Route path="/menu" element={<MenuPublicPage />} />
         <Route path="/cart" element={<CartPage />} />
         <Route path="/orders" element={<MyOrdersPage />} />
+        <Route path="/pay/:id" element={<PayOrderPage />} />
         <Route path="/reservations" element={<ReservationsPage />} />
         <Route path="/register" element={<CustomerRegisterPage />} />
         <Route path="/customer/login" element={<CustomerLoginPage />} />
@@ -155,6 +158,11 @@ export default function App() {
               </NavLink>
             )}
             {isManager && (
+              <NavLink to="/admin/payments" className={({ isActive }) => navClass(isActive)}>
+                การชำระเงิน
+              </NavLink>
+            )}
+            {isManager && (
               <NavLink to="/shop" className={({ isActive }) => navClass(isActive)}>
                 ร้าน
               </NavLink>
@@ -210,10 +218,12 @@ export default function App() {
           <Route path="/menu" element={<MenuPublicPage />} />
           <Route path="/cart" element={<CartPage />} />
           <Route path="/orders" element={<MyOrdersPage />} />
+          <Route path="/pay/:id" element={<PayOrderPage />} />
           <Route path="/reservations" element={<ReservationsPage />} />
           {isManager && <Route path="/checkin" element={<CheckinPage />} />}
           {isManager && <Route path="/admin/reservations" element={<AdminReservationsPage />} />}
           {isManager && <Route path="/admin/orders" element={<AdminOrdersPage />} />}
+          {isManager && <Route path="/admin/payments" element={<AdminPaymentsPage isOwner={isOwner} />} />}
           {isManager && <Route path="/admin/menu" element={<MenuAdminPage />} />}
           {isManager && <Route path="/admin/inventory" element={<InventoryPage />} />}
           {isManager && <Route path="/shop" element={<ShopPage />} />}

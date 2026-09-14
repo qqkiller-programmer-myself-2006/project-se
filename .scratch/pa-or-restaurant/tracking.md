@@ -74,6 +74,22 @@
   คิวครัว/เครื่องดื่ม (09), คะแนน/รางวัล (10), การเงิน/Dashboard/CSV (11),
   LINE (12), capacity/พยากรณ์ (13), backup/security/E2E (14)
 
+### Ticket 08 — การชำระเงิน ใบเสร็จ และคืนเงิน
+
+- สถานะ: resolved (2026-09-14, implement โดย Muse Spark via opencode)
+- ผลตรวจ: API 184 ผ่าน/27 ข้าม (MySQL integration ไม่มี `TEST_DATABASE_URL`),
+  focused payment API 12 ผ่าน, Web focused 7 ผ่าน พร้อม regression batches 11 และ 15 ผ่าน,
+  typecheck และ build ผ่าน
+- ไม่แตะ Prisma/experiments/package dependencies ที่ค้างมาก่อน
+  (`apps/api/package.json`, `package-lock.json`, `apps/api/.gitignore`, `generated/`,
+  `prisma.config.ts`, `prisma/`, `src/db/`, `experiments/`); Tickets 01–07 ไม่ regression
+- งานที่ข้าม (บันทึกตาม ticket — ไม่ทำให้ ticket ล้ม):
+  MySQL runtime จริง, ผู้ให้บริการ PromptPay/SlipOK และ credentials/network จริง,
+  Docker, image/external storage และ browser E2E จริง (Playwright/Taste ไม่มี reference URL)
+- ไม่รวมตาม scope (งาน ticket ถัดไป): คิวครัว/เครื่องดื่ม (09), คะแนน/รางวัล (10),
+  การเงิน/Dashboard/CSV (11), LINE (12), capacity/พยากรณ์ (13),
+  backup/security/observability/release E2E (14)
+
 ## Roadmap หลัง Ticket 06
 
 - Ticket 07: ตัวเลือกเมนู สูตร และสต๊อก
