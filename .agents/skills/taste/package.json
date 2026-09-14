@@ -1,0 +1,16 @@
+{
+  "name": "taste-skill",
+  "version": "1.0.0",
+  "description": "[![Made for Claude Code](https://img.shields.io/badge/Made%20for-Claude%20Code-blueviolet?style=flat-square&logo=anthropic)](https://docs.anthropic.com/en/docs/claude-code) [![Works with Gemini CLI](https://img.shields.io/badge/Works%20with-Gemini%20CLI-4285F4?style=flat-square&logo=google)](https://ai.google.dev/gemini-api/docs/gemini-cli) [![Playwright MCP](https://img.shields.io/badge/Requires-Playwright%20MCP-1db954?style=flat-square)](https://playwright.dev/docs/api/class-playwright) [![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE) [![Demo](https://img.shields.io/badge/Landing%20Page-→-CF9FFC?style=flat-square)](https://senlindesign.github.io/taste-skill/)",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@playwright/test": "^1.60.0"
+  }
+}
