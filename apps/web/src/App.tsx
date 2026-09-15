@@ -30,6 +30,8 @@ import RewardsPage from "./pages/Rewards";
 import AdminRewardsPage from "./pages/AdminRewards";
 import FinanceDashboardPage from "./pages/FinanceDashboard";
 import FinanceEntriesPage from "./pages/FinanceEntries";
+import AdminNotificationsPage from "./pages/AdminNotifications";
+import MyNotificationsPage from "./pages/MyNotifications";
 
 const NAV_BASE =
   "inline-flex min-h-[44px] items-center rounded-xl border px-4 py-2 text-sm font-semibold transition-colors";
@@ -94,6 +96,7 @@ export default function App() {
         <Route path="/customer/login" element={<CustomerLoginPage />} />
         <Route path="/profile" element={<CustomerProfilePage />} />
         <Route path="/rewards" element={<RewardsPage />} />
+        <Route path="/notifications" element={<MyNotificationsPage />} />
         <Route path="*" element={<LoginPage onLoggedIn={refresh} />} />
       </Routes>
     );
@@ -191,6 +194,11 @@ export default function App() {
               </NavLink>
             )}
             {isManager && (
+              <NavLink to="/admin/notifications" className={({ isActive }) => navClass(isActive)}>
+                แจ้งเตือน LINE
+              </NavLink>
+            )}
+            {isManager && (
               <NavLink to="/finance/dashboard" className={({ isActive }) => navClass(isActive)}>
                 Dashboard การเงิน
               </NavLink>
@@ -266,6 +274,8 @@ export default function App() {
           {isManager && <Route path="/admin/reservations" element={<AdminReservationsPage />} />}
           {isManager && <Route path="/admin/orders" element={<AdminOrdersPage />} />}
           {isManager && <Route path="/admin/payments" element={<AdminPaymentsPage isOwner={isOwner} />} />}
+          {isManager && <Route path="/admin/notifications" element={<AdminNotificationsPage />} />}
+          <Route path="/notifications" element={<MyNotificationsPage />} />
           {isManager && <Route path="/finance/dashboard" element={<FinanceDashboardPage />} />}
           {isManager && <Route path="/finance/entries" element={<FinanceEntriesPage />} />}
           {isManager && <Route path="/admin/menu" element={<MenuAdminPage />} />}

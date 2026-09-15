@@ -15,6 +15,9 @@ import {
 } from "../payments/validation.js";
 import { isFakePaymentMode } from "../payments/provider.js";
 import type { OrderDetail } from "../types.js";
+import { enqueueBestEffort } from "./notifications.js";
+import { paymentManualReviewEvent, paymentPaidEvent } from "../notify/events.js";
+import type { ShopActor } from "../store.js";
 
 export interface PaymentMiddleware {
   requireAuth: (req: Request, res: Response, next: NextFunction) => void;
@@ -139,6 +142,49 @@ export function createPaymentRouter(deps: PaymentRouterDeps): express.Router {
 
   function isOwner(roles: string[]): boolean {
     return roles.includes("owner");
+  }
+
+  /**
+   * Ticket 12: แจ้งเตือนผลชำระแบบ best-effort (ล้มเหลวไม่ rollback การชำระ):
+   * paid → payment_paid, manual_review → payment_manual_review; สถานะอื่นไม่แจ้ง
+   */
+  async function notifyPaymentState(paymentId: string, actor: ShopActor, now: Date): Promise<void> {
+    try {
+      const payment = await store.getPayment(paymentId);
+      if (!payment) return;
+      if (payment.status !== "paid" && payment.status !== "manual_review") return;
+      const order = await store.getOrder(payment.orderId);
+      const customerId = order?.customerId ?? null;
+      if (payment.status === "paid") {
+        await enqueueBestEffort(
+          store,
+          paymentPaidEvent({
+            paymentId: payment.id,
+            orderId: payment.orderId,
+            orderNumber: payment.orderNumber,
+            amount: payment.amount,
+            receiptNumber: payment.receiptNumber,
+            customerId,
+          }),
+          actor,
+          now,
+        );
+      } else {
+        await enqueueBestEffort(
+          store,
+          paymentManualReviewEvent({
+            paymentId: payment.id,
+            orderId: payment.orderId,
+            orderNumber: payment.orderNumber,
+            customerId,
+          }),
+          actor,
+          now,
+        );
+      }
+    } catch {
+      // ตั้งใจกลืน: ความล้มเหลวของ notify ต้องไม่กระทบ response การชำระ
+    }
   }
 
   /** ตรวจว่า caller มีสิทธิ์แตะ payment ของออเดอร์นี้ (เจ้าของ / Guest เจ้าของเบอร์ / Owner/Admin) */
@@ -330,6 +376,11 @@ export function createPaymentRouter(deps: PaymentRouterDeps): express.Router {
           { actorId: actor.id, actorUsername: actor.username, ip: clientIp(req) },
           new Date(),
         );
+        await notifyPaymentState(
+          payment.id,
+          { actorId: actor.id, actorUsername: actor.username, ip: clientIp(req) },
+          new Date(),
+        );
         res.json({ payment, receipt, deduplicated });
       } catch (err) {
         next(err);
@@ -382,6 +433,7 @@ export function createPaymentRouter(deps: PaymentRouterDeps): express.Router {
         actor,
         new Date(),
       );
+      await notifyPaymentState(payment.id, actor, new Date());
       res.json({ payment, receipt, deduplicated });
     } catch (err) {
       next(err);
@@ -432,6 +484,7 @@ export function createPaymentRouter(deps: PaymentRouterDeps): express.Router {
         actor,
         new Date(),
       );
+      await notifyPaymentState(result.payment.id, actor, new Date());
       res.json(result);
     } catch (err) {
       next(err);
@@ -466,6 +519,11 @@ export function createPaymentRouter(deps: PaymentRouterDeps): express.Router {
         const { payment, receipt } = await store.resolveManualReview(
           req.params.id,
           { decision: parsed.data.decision, reason },
+          { actorId: actor.id, actorUsername: actor.username, ip: clientIp(req) },
+          new Date(),
+        );
+        await notifyPaymentState(
+          payment.id,
           { actorId: actor.id, actorUsername: actor.username, ip: clientIp(req) },
           new Date(),
         );

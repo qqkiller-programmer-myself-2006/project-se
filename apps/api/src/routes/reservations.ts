@@ -16,6 +16,8 @@ import {
 } from "../reservations/validation.js";
 import { FakeReservationQrProvider, type ReservationQrProvider } from "../reservations/qr.js";
 import type { ReservationStatus } from "../types.js";
+import { enqueueBestEffort, toBangkokShort } from "./notifications.js";
+import { reservationCancelledEvent, reservationCreatedEvent } from "../notify/events.js";
 
 export interface ReservationMiddleware {
   requireAuth: (req: Request, res: Response, next: NextFunction) => void;
@@ -210,6 +212,20 @@ export function createReservationRouter(deps: ReservationRouterDeps): express.Ro
           { actorId: customerId, ip: clientIp(req) },
           now,
         );
+        // Ticket 12: เข้าคิว LINE แจ้งยืนยัน (best-effort — ล้มเหลวไม่ rollback การจอง)
+        await enqueueBestEffort(
+          store,
+          reservationCreatedEvent({
+            reservationId: reservation.id,
+            code: reservation.code,
+            customerId: reservation.customerId,
+            tableName: reservation.tableName,
+            partySize: reservation.partySize,
+            reservedAtBangkok: toBangkokShort(reservation.reservedAt),
+          }),
+          { actorId: customerId, ip: clientIp(req) },
+          now,
+        );
         res.status(deduplicated ? 200 : 201).json({ reservation: withQr(reservation), deduplicated });
       } catch (err) {
         // domain validation (400) แยกจาก state conflict (409 — โยนให้ middleware จัดการ)
@@ -290,6 +306,17 @@ export function createReservationRouter(deps: ReservationRouterDeps): express.Ro
         { actorId: customerId, ip: clientIp(req) },
         clock(),
       );
+      // Ticket 12: เข้าคิว LINE แจ้งยกเลิก (best-effort)
+      await enqueueBestEffort(
+        store,
+        reservationCancelledEvent({
+          reservationId: cancelled.id,
+          code: cancelled.code,
+          customerId: cancelled.customerId,
+        }),
+        { actorId: customerId, ip: clientIp(req) },
+        clock(),
+      );
       res.json({ reservation: withQr(cancelled) });
     } catch (err) {
       next(err);
@@ -361,6 +388,19 @@ export function createReservationRouter(deps: ReservationRouterDeps): express.Ro
           { status, reason },
           { actorId: actor.id, actorUsername: actor.username, ip: clientIp(req) },
         );
+        // Ticket 12: หลังร้านยกเลิก → เข้าคิว LINE แจ้งยกเลิก (best-effort)
+        if (status === "cancelled") {
+          await enqueueBestEffort(
+            store,
+            reservationCancelledEvent({
+              reservationId: updated.id,
+              code: updated.code,
+              customerId: updated.customerId,
+            }),
+            { actorId: actor.id, actorUsername: actor.username, ip: clientIp(req) },
+            clock(),
+          );
+        }
         res.json({ reservation: withQr(updated) });
       } catch (err) {
         next(err);

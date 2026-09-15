@@ -18,6 +18,8 @@ import { createOrderRouter } from "./routes/orders.js";
 import { createPaymentRouter } from "./routes/payments.js";
 import { createQueueRouter } from "./routes/queue.js";
 import { createLoyaltyRouter } from "./routes/loyalty.js";
+import { createNotificationRouter } from "./routes/notifications.js";
+import type { LineMessagingProvider } from "./notify/messaging.js";
 import { createFinanceRouter } from "./routes/finance.js";
 import { createInventoryRouter } from "./routes/inventory.js";
 import { createReservationRouter } from "./routes/reservations.js";
@@ -40,6 +42,8 @@ export interface AppOptions {
   occupancy?: OccupancyProvider;
   /** LINE provider สำหรับ Ticket 03 (default: disabled → fail-fast 503; tests ฉีด fake) */
   line?: LineProvider;
+  /** LINE Messaging provider สำหรับ Ticket 12 (default: disabled → flush เก็บ failed ไว้ retry) */
+  messaging?: LineMessagingProvider;
   /** callback URL ที่ลงทะเบียนกับ LINE (default: อ่าน LINE_REDIRECT_URI) */
   lineRedirectUri?: string;
   /**
@@ -662,6 +666,17 @@ export function createApp(opts: AppOptions): express.Express {
       middleware: { requireAuth, requireCsrf, requireShopManager },
       clientIp,
       clock,
+    }),
+  );
+
+  // Ticket 12 routes อยู่ใน routes/notifications.ts (กฎธุรกิจอยู่ notify/* + store)
+  app.use(
+    createNotificationRouter({
+      store,
+      middleware: { requireAuth, requireCsrf, requireShopManager },
+      clientIp,
+      clock,
+      messaging: opts.messaging,
     }),
   );
 

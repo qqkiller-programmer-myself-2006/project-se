@@ -5,7 +5,9 @@ import express, {
 } from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
-import type { Store } from "../store.js";
+import type { ShopActor, Store } from "../store.js";
+import { enqueueBestEffort } from "./notifications.js";
+import { loyaltyEarnedEvent, loyaltyRedeemedEvent } from "../notify/events.js";
 import {
   normalizeLoyaltyIdempotencyKey,
   normalizeLoyaltyReason,
@@ -157,6 +159,31 @@ export function createLoyaltyRouter(deps: LoyaltyRouterDeps): express.Router {
   /** drink ทำ redemption ฝ่ายเครื่องดื่มได้; kitchen ทำไม่ได้ (station isolation) */
   function canHandleRedemption(roles: string[]): boolean {
     return roles.includes("drink") || isManager(roles);
+  }
+
+  /**
+   * Ticket 12: แจ้งเตือนคะแนนแบบ best-effort (ล้มเหลวไม่ rollback งานคะแนน):
+   * -walkin/guest-link ที่ได้แต้ม → loyalty_earned; consume รับรางวัล → loyalty_redeemed
+   */
+  async function notifyLoyaltyEarned(
+    customerId: string,
+    refId: string,
+    orderId: string | null,
+    points: number,
+    actor: ShopActor,
+  ): Promise<void> {
+    try {
+      if (points <= 0) return;
+      const balance = await store.getLoyaltyBalance(customerId);
+      await enqueueBestEffort(
+        store,
+        loyaltyEarnedEvent({ refId, orderId, customerId, points, balance }),
+        actor,
+        clock(),
+      );
+    } catch {
+      // ตั้งใจกลืน
+    }
   }
 
   async function requireRedemptionStaff(req: Request, res: Response): Promise<{ id: string; username: string; roles: string[] } | null> {
@@ -389,6 +416,24 @@ export function createLoyaltyRouter(deps: LoyaltyRouterDeps): express.Router {
         { actorId: staff.id, actorUsername: staff.username, ip: clientIp(req) },
         clock(),
       );
+      // Ticket 12: ใช้คะแนนแล้ว → เข้าคิว LINE (best-effort)
+      try {
+        const balance = await store.getLoyaltyBalance(redemption.customerId);
+        await enqueueBestEffort(
+          store,
+          loyaltyRedeemedEvent({
+            redemptionId: redemption.id,
+            customerId: redemption.customerId,
+            points: redemption.pointsCost,
+            balance,
+            rewardName: redemption.rewardName,
+          }),
+          { actorId: staff.id, actorUsername: staff.username, ip: clientIp(req) },
+          clock(),
+        );
+      } catch {
+        // ตั้งใจกลืน
+      }
       res.json({ redemption, job });
     } catch (err) {
       next(err);
@@ -478,6 +523,11 @@ export function createLoyaltyRouter(deps: LoyaltyRouterDeps): express.Router {
         { actorId: customerId, ip: clientIp(req) },
         clock(),
       );
+      // Ticket 12: สแกน QR ได้แต้ม → เข้าคิว LINE (best-effort)
+      await notifyLoyaltyEarned(customerId, token.code, null, earned, {
+        actorId: customerId,
+        ip: clientIp(req),
+      });
       res.json({ token, earned });
     } catch (err) {
       next(err);
@@ -506,6 +556,11 @@ export function createLoyaltyRouter(deps: LoyaltyRouterDeps): express.Router {
         { actorId: customerId, ip: clientIp(req) },
         clock(),
       );
+      // Ticket 12: ผูก Guest ได้แต้ม → เข้าคิว LINE (best-effort)
+      await notifyLoyaltyEarned(customerId, `guest-link:${order.id}`, order.id, earned, {
+        actorId: customerId,
+        ip: clientIp(req),
+      });
       res.json({ order, earned });
     } catch (err) {
       next(err);

@@ -165,6 +165,35 @@
 - ไม่รวมตาม scope (งาน ticket ถัดไป): LINE (12), capacity/พยากรณ์โมเดลเต็ม (13),
   backup/security/observability/release E2E (14)
 
+### Ticket 12 — LINE notifications และ reliability
+
+- สถานะ: resolved (2026-09-15, implement โดย Muse Spark)
+- ผลตรวจ (exact):
+  - API focused notifications 11/11
+  - API full 226 passed/29 skipped (เดิม 215 + ใหม่ 11; MySQL int ข้าม — ไม่มี `TEST_DATABASE_URL`)
+  - Web focused notifications 6/6
+  - Web full 179 passed (เดิม 169+4=173 + ใหม่ 6)
+  - API/Web typecheck passed
+  - API tsc build passed
+  - Vite build passed 74 modules (เดิม 72 + 2 หน้าใหม่)
+- ไม่แตะไฟล์งานอื่นที่ค้างมาก่อน (excluded จาก commit ตาม ticket):
+  `apps/api/package.json`, `package-lock.json`, `apps/api/.gitignore`, `apps/api/generated/`,
+  `apps/api/prisma.config.ts`, `apps/api/prisma/`, `apps/api/src/db/`, `experiments/`,
+  `__pycache__`; Tickets 01–11 ไม่ regression (full suites ข้างบน)
+- สิ่งที่สร้าง: types (NotificationKind/Status/Notification + audit actions),
+  `apps/api/src/notify/{validation,templates,messaging,events,audit-events}.ts`,
+  Store seams (memory + MySQL) + `db/migrations/013_line_notifications.sql`,
+  `apps/api/src/routes/notifications.ts` + wiring app.ts (+ hooks reservations/payments/queue/loyalty),
+  Web `AdminNotifications`/`MyNotifications` + api client + nav/routes, tests API/Web
+- งานที่ข้าม (บันทึกตาม ticket — ไม่ทำให้ ticket ล้ม):
+  MySQL runtime จริง (มี migration + seams แล้ว แต่ไม่มี `TEST_DATABASE_URL`),
+  LINE Messaging API/credentials/sandbox/webhook/LIFF จริง, Docker/MySQL runtime,
+  external payment/storage, browser E2E จริง (Playwright/Taste — ไม่มี reference URL ภายนอก)
+- Deferred: แจ้งเตือน auto-earn จากเครื่องดื่มที่ส่งมอบ (store-internal ไม่มี route seam;
+  ครอบคลุม loyalty_earned ผ่าน walk-in/guest-link และ loyalty_redeemed ผ่าน consume แล้ว)
+- ไม่รวมตาม scope (งาน ticket ถัดไป): capacity/พยากรณ์โมเดลเต็ม (13),
+  backup/security/observability/release E2E (14)
+
 ## Roadmap หลัง Ticket 06
 
 - Ticket 07: ตัวเลือกเมนู สูตร และสต๊อก

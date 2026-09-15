@@ -15,6 +15,9 @@ import {
   normalizeStation,
 } from "../queue/validation.js";
 import type { OrderDetail, QueueStation } from "../types.js";
+import { enqueueBestEffort } from "./notifications.js";
+import { orderDeliveredEvent, orderReadyEvent } from "../notify/events.js";
+import type { ShopActor } from "../store.js";
 
 export interface QueueMiddleware {
   requireAuth: (req: Request, res: Response, next: NextFunction) => void;
@@ -287,6 +290,40 @@ export function createQueueRouter(deps: QueueRouterDeps): express.Router {
     },
   );
 
+  /**
+   * Ticket 12: แจ้งเตือน milestone รวมเป็นเหตุการณ์เดียวต่อคำสั่งซื้อ (best-effort):
+   * งาน active ครบทุกงาน ready/delivered → order_ready; delivered ทั้งหมด → order_delivered
+   */
+  async function notifyOrderMilestone(orderId: string | null, actor: ShopActor, now: Date): Promise<void> {
+    try {
+      if (!orderId) return;
+      const jobs = await store.listOrderQueueJobs(orderId);
+      const active = jobs.filter((j) => j.status !== "cancelled");
+      if (active.length === 0) return;
+      const order = await store.getOrder(orderId);
+      const customerId = order?.customerId ?? null;
+      const orderNumber = active[0]!.orderNumber;
+      const tableName = active[0]!.tableName;
+      if (active.every((j) => j.status === "delivered")) {
+        await enqueueBestEffort(
+          store,
+          orderDeliveredEvent({ orderId, orderNumber, customerId }),
+          actor,
+          now,
+        );
+      } else if (active.every((j) => j.status === "ready" || j.status === "delivered")) {
+        await enqueueBestEffort(
+          store,
+          orderReadyEvent({ orderId, orderNumber, customerId, tableName }),
+          actor,
+          now,
+        );
+      }
+    } catch {
+      // ตั้งใจกลืน: ความล้มเหลวของ notify ต้องไม่กระทบ response งานคิว
+    }
+  }
+
   async function mutateJob(
     req: Request,
     res: Response,
@@ -303,11 +340,11 @@ export function createQueueRouter(deps: QueueRouterDeps): express.Router {
         return;
       }
       if (!assertStationAccess(staff.roles, job.station, res)) return;
-      const out = await fn(
-        req.params.id,
-        { actorId: staff.id, actorUsername: staff.username, ip: clientIp(req) },
-      );
+      const actor = { actorId: staff.id, actorUsername: staff.username, ip: clientIp(req) };
+      const out = await fn(req.params.id, actor);
       res.json({ [okKey]: out });
+      // Ticket 12: ตรวจ milestone หลัง mutation สำเร็จ (best-effort)
+      await notifyOrderMilestone(job.orderId, actor, new Date());
     } catch (err) {
       next(err);
     }

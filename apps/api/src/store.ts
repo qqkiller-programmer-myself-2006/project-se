@@ -22,6 +22,9 @@ import type {
   Ingredient,
   LineLoginTx,
   ManualStockOp,
+  Notification,
+  NotificationKind,
+  NotificationStatus,
   MenuItem,
   MenuOption,
   MenuOptionGroup,
@@ -272,6 +275,23 @@ import {
   normalizeFinanceReason,
 } from "./finance/validation.js";
 import {
+  notificationDeadLetterEvent,
+  notificationFailedEvent,
+  notificationQueuedEvent,
+  notificationRetriedEvent,
+  notificationSentEvent,
+  notificationSkippedEvent,
+} from "./notify/audit-events.js";
+import {
+  computeNotificationBackoff,
+  maxNotificationAttempts,
+  normalizeNotificationEventKey,
+  normalizeNotificationId,
+  normalizeNotificationKind,
+  normalizeNotificationMessage,
+  sanitizeNotificationError,
+} from "./notify/validation.js";
+import {
   assertRedemptionTransition,
   buildWalkinCode,
   generateRedemptionCode,
@@ -414,7 +434,7 @@ export interface Store {
   deleteSessionsForUser(userId: string): Promise<void>;
   audit(input: AuditInput): Promise<void>;
   listAudit(
-    prefix: "login_" | "account_" | "shop_" | "customer_" | "menu_" | "order_" | "reservation_" | "round_" | "inventory_" | "payment_" | "queue_" | "loyalty_" | "finance_" | "all",
+    prefix: "login_" | "account_" | "shop_" | "customer_" | "menu_" | "order_" | "reservation_" | "round_" | "inventory_" | "payment_" | "queue_" | "loyalty_" | "finance_" | "notification_" | "all",
     limit: number,
   ): Promise<AuditEntry[]>;
   // ---- Ticket 02: สถานะร้านและโต๊ะ (อ่านเดี่ยว + mutation แบบ atomic พร้อม audit) ----
@@ -957,7 +977,84 @@ export interface Store {
   getFinanceTopMenus(input: { from: string; to: string; limit: number }): Promise<FinanceTopMenu[]>;
   /** ชั่วโมงหนาแน่นในช่วงวันที่ (0–23 ฝั่งกรุงเทพ) */
   getFinancePeakHours(input: { from: string; to: string }): Promise<FinancePeakHour[]>;
+  // ---- Ticket 12: LINE notifications outbox (local-first, exactly-once ด้วย eventKey) ----
+  /**
+   * เข้าคิวแจ้งเตือน (producer เรียกหลัง business commit เสมอ — ห้าม rollback งานหลัก):
+   * - eventKey เดิม → คืนแถวเดิม (deduplicated:true ไม่เขียน audit ซ้ำ)
+   * - แถวใหม่เริ่ม pending + nextRetryAt=now (รอ flush ส่ง)
+   */
+  queueNotification(
+    input: QueueNotificationInput,
+    actor: ShopActor,
+    now?: Date,
+  ): Promise<{ notification: Notification; deduplicated: boolean }>;
+  getNotification(id: string): Promise<Notification | null>;
+  getNotificationByEventKey(eventKey: string): Promise<Notification | null>;
+  /** รายการ outbox (ใหม่สุดก่อน, กรอง status/kind/customer ได้) */
+  listNotifications(filter: ListNotificationsFilter): Promise<Notification[]>;
+  /**
+   * งานที่ถึงเวลาส่ง (pending ทั้งหมด + failed ที่ nextRetryAt ≤ now) เรียงเก่าสุดก่อน
+   * — flush ใช้ดึงงานรอบละ limit แถว
+   */
+  listDueNotifications(now: Date, limit: number): Promise<Notification[]>;
+  /**
+   * claim งานส่ง (กัน flush ซ้อนส่งซ้ำ): pending หรือ failed ที่ถึงเวลาแล้ว →
+   * sending + attempts+1; สถานะอื่น/ยังไม่ถึงเวลา → null
+   */
+  claimNotification(id: string, now?: Date): Promise<Notification | null>;
+  /** ส่งสำเร็จ: sending → sent + sentAt + audit (สถานะอื่น → ConflictError) */
+  completeNotificationSend(id: string, actor: ShopActor, now?: Date): Promise<Notification>;
+  /**
+   * ส่งล้มเหลว: sending → failed (มี nextRetryAt) หรือ dead_letter (null)
+   * + audit; error ถูก sanitize ก่อนเก็บเสมอ
+   */
+  failNotificationSend(
+    id: string,
+    input: { error: string; nextRetryAt: string | null },
+    actor: ShopActor,
+    now?: Date,
+  ): Promise<Notification>;
+  /** ข้ามการส่ง (ไม่มี consent/LINE link/ลูกค้าไม่ valid): → skipped + audit */
+  skipNotification(id: string, reason: string, actor: ShopActor, now?: Date): Promise<Notification>;
+  /**
+   * สั่งส่งซ้ำด้วยมือ (Owner/Admin — route ตรวจสิทธิ์):
+   * failed/dead_letter/skipped → pending (attempts=0, nextRetryAt=now) + audit;
+   * pending/sending/sent → ConflictError
+   */
+  retryNotification(
+    id: string,
+    input: { reason: string },
+    actor: ShopActor,
+    now?: Date,
+  ): Promise<Notification>;
+  /** ตั้งค่า consent รับแจ้งเตือนของลูกค้า (default เปิดเมื่อไม่มีแถว) */
+  setNotificationConsent(customerId: string, enabled: boolean, actor: ShopActor): Promise<void>;
+  isNotificationEnabled(customerId: string): Promise<boolean>;
+  /**
+   * การจอง pending/confirmed ที่เวลานัดอยู่ใน [fromIso, toIso] (เรียงนัดใกล้สุดก่อน)
+   * — scheduler เตือน 30 นาทีกวาดผ่าน seam นี้
+   */
+  listUpcomingReservations(fromIso: string, toIso: string, limit: number): Promise<ReservationDetail[]>;
   close?(): Promise<void>;
+}
+
+// ---- Ticket 12: input/ตัวกรอง outbox ----
+export interface QueueNotificationInput {
+  eventKey: string;
+  kind: NotificationKind;
+  customerId?: string | null;
+  orderId?: string | null;
+  reservationId?: string | null;
+  paymentId?: string | null;
+  message: string;
+  maxAttempts?: number | null;
+}
+
+export interface ListNotificationsFilter {
+  status?: NotificationStatus;
+  kind?: NotificationKind;
+  customerId?: string;
+  limit: number;
 }
 
 // ---- Ticket 11: ตัวกรองรายการเงินมือ ----
@@ -1468,6 +1565,12 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
   const lineTx = new Map<string, LineLoginTx>();
   // ---- Ticket 11 memory state: รายการเงินมือ (รายรับจาก paid orders  derived ไม่เก็บที่นี่) ----
   const financeEntries = new Map<string, FinanceEntry>();
+  // ---- Ticket 12 memory state: outbox แจ้งเตือน LINE + consent (tests เท่านั้น) ----
+  const notifications = new Map<string, Notification>();
+  /** หนึ่ง eventKey → หนึ่งแถว (exactly-once เชิงตรรกะ) */
+  const notificationsByEventKey = new Map<string, string>();
+  /** opt-out รับแจ้งเตือน (ไม่มีแถว = เปิด) */
+  const notificationConsents = new Map<string, boolean>();
 
   function cloneSchedule(s: WeeklySchedule): WeeklySchedule {
     return normalizeWeeklySchedule(JSON.parse(JSON.stringify(s)) as unknown);
@@ -5969,6 +6072,250 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
         }
       });
     },
+    // ---- Ticket 12 memory: outbox แจ้งเตือน (backup/restore คู่กับ audit เสมอ) ----
+    async queueNotification(input, actor, now = new Date()) {
+      const auditsLen = audits.length;
+      const auditsSeq = auditSeq;
+      const notesBackup = new Map(notifications);
+      const keysBackup = new Map(notificationsByEventKey);
+      try {
+        const eventKey = normalizeNotificationEventKey(input.eventKey);
+        const existingId = notificationsByEventKey.get(eventKey);
+        if (existingId) {
+          const existing = notifications.get(existingId);
+          if (existing) return { notification: { ...existing }, deduplicated: true };
+        }
+        const at = now.toISOString();
+        const n: Notification = {
+          id: randomUUID(),
+          eventKey,
+          kind: normalizeNotificationKind(input.kind),
+          customerId: input.customerId?.trim() ? input.customerId.trim() : null,
+          orderId: input.orderId?.trim() ? input.orderId.trim() : null,
+          reservationId: input.reservationId?.trim() ? input.reservationId.trim() : null,
+          paymentId: input.paymentId?.trim() ? input.paymentId.trim() : null,
+          message: normalizeNotificationMessage(input.message),
+          status: "pending",
+          attempts: 0,
+          maxAttempts: maxNotificationAttempts(input.maxAttempts),
+          nextRetryAt: at,
+          lastError: null,
+          sentAt: null,
+          createdAt: at,
+          updatedAt: at,
+        };
+        notifications.set(n.id, { ...n });
+        notificationsByEventKey.set(eventKey, n.id);
+        await writeAudit(notificationQueuedEvent(n, actor));
+        return { notification: { ...n }, deduplicated: false };
+      } catch (err) {
+        notifications.clear();
+        for (const [id, n] of notesBackup) notifications.set(id, n);
+        notificationsByEventKey.clear();
+        for (const [k, id] of keysBackup) notificationsByEventKey.set(k, id);
+        audits.length = auditsLen;
+        auditSeq = auditsSeq;
+        throw err;
+      }
+    },
+    async getNotification(id) {
+      const key = normalizeNotificationId(id);
+      const n = notifications.get(key);
+      return n ? { ...n } : null;
+    },
+    async getNotificationByEventKey(eventKey) {
+      const key = normalizeNotificationEventKey(eventKey);
+      const id = notificationsByEventKey.get(key);
+      if (!id) return null;
+      const n = notifications.get(id);
+      return n ? { ...n } : null;
+    },
+    async listNotifications(filter) {
+      const limit = Math.min(Math.max(filter.limit || 50, 1), 200);
+      return [...notifications.values()]
+        .filter((n) => (filter.status ? n.status === filter.status : true))
+        .filter((n) => (filter.kind ? n.kind === filter.kind : true))
+        .filter((n) => (filter.customerId ? n.customerId === filter.customerId : true))
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
+        .slice(0, limit)
+        .map((n) => ({ ...n }));
+    },
+    async listDueNotifications(now, limit) {
+      const capped = Math.min(Math.max(limit || 50, 1), 200);
+      const t = now.getTime();
+      return [...notifications.values()]
+        .filter((n) => {
+          if (n.status === "pending") return true;
+          if (n.status !== "failed" || !n.nextRetryAt) return false;
+          return new Date(n.nextRetryAt).getTime() <= t;
+        })
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+        .slice(0, capped)
+        .map((n) => ({ ...n }));
+    },
+    async claimNotification(id, now = new Date()) {
+      const key = normalizeNotificationId(id);
+      const n = notifications.get(key);
+      if (!n) return null;
+      const t = now.getTime();
+      const due =
+        n.status === "pending" ||
+        (n.status === "failed" && n.nextRetryAt !== null && new Date(n.nextRetryAt).getTime() <= t);
+      if (!due) return null;
+      const next: Notification = {
+        ...n,
+        status: "sending",
+        attempts: n.attempts + 1,
+        updatedAt: now.toISOString(),
+      };
+      notifications.set(key, next);
+      return { ...next };
+    },
+    async completeNotificationSend(id, actor, now = new Date()) {
+      const auditsLen = audits.length;
+      const auditsSeq = auditSeq;
+      const notesBackup = new Map(notifications);
+      try {
+        const key = normalizeNotificationId(id);
+        const n = notifications.get(key);
+        if (!n) throw new NotFoundError("ไม่พบการแจ้งเตือน");
+        if (n.status !== "sending") throw new ConflictError("งานนี้ไม่ได้อยู่ในสถานะกำลังส่ง");
+        const at = now.toISOString();
+        const next: Notification = { ...n, status: "sent", sentAt: at, nextRetryAt: null, updatedAt: at };
+        notifications.set(key, { ...next });
+        await writeAudit(notificationSentEvent(next, actor));
+        return { ...next };
+      } catch (err) {
+        notifications.clear();
+        for (const [nid, n] of notesBackup) notifications.set(nid, n);
+        audits.length = auditsLen;
+        auditSeq = auditsSeq;
+        throw err;
+      }
+    },
+    async failNotificationSend(id, input, actor, now = new Date()) {
+      const auditsLen = audits.length;
+      const auditsSeq = auditSeq;
+      const notesBackup = new Map(notifications);
+      try {
+        const key = normalizeNotificationId(id);
+        const n = notifications.get(key);
+        if (!n) throw new NotFoundError("ไม่พบการแจ้งเตือน");
+        if (n.status !== "sending") throw new ConflictError("งานนี้ไม่ได้อยู่ในสถานะกำลังส่ง");
+        const error = sanitizeNotificationError(input.error);
+        const at = now.toISOString();
+        const next: Notification = {
+          ...n,
+          status: input.nextRetryAt ? "failed" : "dead_letter",
+          nextRetryAt: input.nextRetryAt,
+          lastError: error,
+          updatedAt: at,
+        };
+        notifications.set(key, { ...next });
+        await writeAudit(
+          input.nextRetryAt
+            ? notificationFailedEvent(next, error, actor)
+            : notificationDeadLetterEvent(next, actor),
+        );
+        return { ...next };
+      } catch (err) {
+        notifications.clear();
+        for (const [nid, n] of notesBackup) notifications.set(nid, n);
+        audits.length = auditsLen;
+        auditSeq = auditsSeq;
+        throw err;
+      }
+    },
+    async skipNotification(id, reason, actor, now = new Date()) {
+      const auditsLen = audits.length;
+      const auditsSeq = auditSeq;
+      const notesBackup = new Map(notifications);
+      try {
+        const key = normalizeNotificationId(id);
+        const n = notifications.get(key);
+        if (!n) throw new NotFoundError("ไม่พบการแจ้งเตือน");
+        if (n.status === "sent" || n.status === "skipped" || n.status === "dead_letter") {
+          throw new ConflictError("งานนี้ข้ามไม่ได้ (ส่งแล้ว/ข้ามแล้ว/เลิกส่งแล้ว)");
+        }
+        const trimmed = typeof reason === "string" && reason.trim() ? reason.trim().slice(0, 500) : "ข้ามการส่ง";
+        const next: Notification = {
+          ...n,
+          status: "skipped",
+          nextRetryAt: null,
+          lastError: trimmed,
+          updatedAt: now.toISOString(),
+        };
+        notifications.set(key, { ...next });
+        await writeAudit(notificationSkippedEvent(next, trimmed, actor));
+        return { ...next };
+      } catch (err) {
+        notifications.clear();
+        for (const [nid, n] of notesBackup) notifications.set(nid, n);
+        audits.length = auditsLen;
+        auditSeq = auditsSeq;
+        throw err;
+      }
+    },
+    async retryNotification(id, input, actor, now = new Date()) {
+      const auditsLen = audits.length;
+      const auditsSeq = auditSeq;
+      const notesBackup = new Map(notifications);
+      try {
+        const key = normalizeNotificationId(id);
+        const n = notifications.get(key);
+        if (!n) throw new NotFoundError("ไม่พบการแจ้งเตือน");
+        if (n.status !== "failed" && n.status !== "dead_letter" && n.status !== "skipped") {
+          throw new ConflictError("งานนี้ไม่ต้องส่งซ้ำ (ยังรอส่ง/กำลังส่ง/ส่งแล้ว)");
+        }
+        const reason =
+          typeof input.reason === "string" && input.reason.trim()
+            ? input.reason.trim().slice(0, 500)
+            : "สั่งส่งซ้ำด้วยมือ";
+        const at = now.toISOString();
+        const next: Notification = {
+          ...n,
+          status: "pending",
+          attempts: 0,
+          nextRetryAt: at,
+          lastError: null,
+          sentAt: null,
+          updatedAt: at,
+        };
+        notifications.set(key, { ...next });
+        await writeAudit(notificationRetriedEvent(next, reason, actor));
+        return { ...next };
+      } catch (err) {
+        notifications.clear();
+        for (const [nid, n] of notesBackup) notifications.set(nid, n);
+        audits.length = auditsLen;
+        auditSeq = auditsSeq;
+        throw err;
+      }
+    },
+    async setNotificationConsent(customerId, enabled, _actor) {
+      const id = normalizeNotificationId(customerId, "รหัสลูกค้าไม่ถูกต้อง");
+      notificationConsents.set(id, enabled);
+    },
+    async isNotificationEnabled(customerId) {
+      const id = customerId.trim();
+      if (!id) return false;
+      return notificationConsents.get(id) ?? true;
+    },
+    async listUpcomingReservations(fromIso, toIso, limit) {
+      const capped = Math.min(Math.max(limit || 50, 1), 200);
+      const fromT = new Date(fromIso).getTime();
+      const toT = new Date(toIso).getTime();
+      if (Number.isNaN(fromT) || Number.isNaN(toT)) throw new Error("ช่วงเวลานัดไม่ถูกต้อง");
+      return [...reservations.values()]
+        .filter((r) => r.status === "pending" || r.status === "confirmed")
+        .filter((r) => {
+          const t = new Date(r.reservedAt).getTime();
+          return t >= fromT && t <= toT;
+        })
+        .sort((a, b) => a.reservedAt.localeCompare(b.reservedAt))
+        .slice(0, capped)
+        .map(toReservationDetail);
+    },
   };
 
   return memoryStore;
@@ -5988,6 +6335,7 @@ const MIGRATION_FILES = [
   "010_kitchen_drink_queues.sql",
   "011_loyalty_rewards.sql",
   "012_finance_entries.sql",
+  "013_line_notifications.sql",
 ];
 
 export function findMigrationFile(name = MIGRATION_FILES[0]!): string {
@@ -6306,6 +6654,54 @@ function rowToFinanceEntry(r: Record<string, unknown>): FinanceEntry {
     reason: String(r["reason"] ?? ""),
     actorId: r["actor_id"] == null ? null : String(r["actor_id"]),
     actorUsername: r["actor_username"] == null ? null : String(r["actor_username"]),
+    createdAt: new Date(r["created_at"] as string).toISOString(),
+    updatedAt: new Date(r["updated_at"] as string).toISOString(),
+  };
+}
+
+// ---- Ticket 12: converter สำหรับ notifications (ใช้ทั้ง seams ใน createMysqlStore) ----
+
+const NOTIFICATION_KIND_SET = new Set([
+  "reservation_created",
+  "reservation_cancelled",
+  "reservation_reminder",
+  "payment_paid",
+  "payment_manual_review",
+  "order_ready",
+  "order_delivered",
+  "loyalty_earned",
+  "loyalty_redeemed",
+]);
+
+const NOTIFICATION_STATUS_SET = new Set([
+  "pending",
+  "sending",
+  "sent",
+  "failed",
+  "dead_letter",
+  "skipped",
+]);
+
+function rowToNotification(r: Record<string, unknown>): Notification {
+  const kind = String(r["kind"]);
+  if (!NOTIFICATION_KIND_SET.has(kind)) throw new Error("ชนิดการแจ้งเตือนในฐานข้อมูลไม่ถูกต้อง");
+  const status = String(r["status"]);
+  if (!NOTIFICATION_STATUS_SET.has(status)) throw new Error("สถานะการแจ้งเตือนในฐานข้อมูลไม่ถูกต้อง");
+  return {
+    id: String(r["id"]),
+    eventKey: String(r["event_key"]),
+    kind: kind as NotificationKind,
+    customerId: r["customer_id"] == null ? null : String(r["customer_id"]),
+    orderId: r["order_id"] == null ? null : String(r["order_id"]),
+    reservationId: r["reservation_id"] == null ? null : String(r["reservation_id"]),
+    paymentId: r["payment_id"] == null ? null : String(r["payment_id"]),
+    message: String(r["message"]),
+    status: status as NotificationStatus,
+    attempts: Number(r["attempts"] ?? 0),
+    maxAttempts: Number(r["max_attempts"] ?? 5),
+    nextRetryAt: r["next_retry_at"] == null ? null : new Date(r["next_retry_at"] as string).toISOString(),
+    lastError: r["last_error"] == null ? null : String(r["last_error"]),
+    sentAt: r["sent_at"] == null ? null : new Date(r["sent_at"] as string).toISOString(),
     createdAt: new Date(r["created_at"] as string).toISOString(),
     updatedAt: new Date(r["updated_at"] as string).toISOString(),
   };
@@ -7802,6 +8198,8 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
         sql += " WHERE (action LIKE 'loyalty\\_%' OR action LIKE 'reward\\_%')";
       } else if (prefix === "queue_") {
         sql += " WHERE action LIKE 'queue\\_%'";
+      } else if (prefix === "notification_") {
+        sql += " WHERE action LIKE 'notification\\_%'";
       } else if (prefix === "account_") {
         sql += " WHERE action NOT LIKE 'login\\_%'";
       }
@@ -11511,6 +11909,235 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
           amount: Number(r["amount"]),
           paidAt: r["paid_at"] == null ? null : new Date(r["paid_at"] as string).toISOString(),
         })),
+      });
+    },
+    // ---- Ticket 12 MySQL: outbox แจ้งเตือน (mutation เขียนพร้อม audit ใน tx เดียว) ----
+    async queueNotification(input, actor, now: Date = new Date()) {
+      return withShopTx(async (conn) => {
+        const eventKey = normalizeNotificationEventKey(input.eventKey);
+        const [dup] = (await conn.query("SELECT * FROM notifications WHERE event_key = ? LIMIT 1", [
+          eventKey,
+        ])) as [Record<string, unknown>[], unknown];
+        if (dup.length > 0) return { notification: rowToNotification(dup[0]!), deduplicated: true };
+        const kind = normalizeNotificationKind(input.kind);
+        const message = normalizeNotificationMessage(input.message);
+        const maxAttempts = maxNotificationAttempts(input.maxAttempts);
+        const id = randomUUID();
+        const at = toMysqlDatetime(now.toISOString());
+        await conn.query(
+          "INSERT INTO notifications (id, event_key, kind, customer_id, order_id, reservation_id, payment_id, message, status, attempts, max_attempts, next_retry_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)",
+          [
+            id,
+            eventKey,
+            kind,
+            input.customerId?.trim() ? input.customerId.trim() : null,
+            input.orderId?.trim() ? input.orderId.trim() : null,
+            input.reservationId?.trim() ? input.reservationId.trim() : null,
+            input.paymentId?.trim() ? input.paymentId.trim() : null,
+            message,
+            maxAttempts,
+            at,
+          ],
+        );
+        const [rows] = (await conn.query("SELECT * FROM notifications WHERE id = ? LIMIT 1", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const n = rowToNotification(rows[0]!);
+        await insertAuditRow(conn, notificationQueuedEvent(n, actor));
+        return { notification: n, deduplicated: false };
+      });
+    },
+    async getNotification(id: string) {
+      const key = normalizeNotificationId(id);
+      const [rows] = (await pool.query("SELECT * FROM notifications WHERE id = ? LIMIT 1", [key])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      if (rows.length === 0) return null;
+      return rowToNotification(rows[0]!);
+    },
+    async getNotificationByEventKey(eventKey: string) {
+      const key = normalizeNotificationEventKey(eventKey);
+      const [rows] = (await pool.query("SELECT * FROM notifications WHERE event_key = ? LIMIT 1", [key])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      if (rows.length === 0) return null;
+      return rowToNotification(rows[0]!);
+    },
+    async listNotifications(filter) {
+      const limit = Math.min(Math.max(filter.limit || 50, 1), 200);
+      const conds: string[] = [];
+      const params: unknown[] = [];
+      if (filter.status) {
+        conds.push("status = ?");
+        params.push(filter.status);
+      }
+      if (filter.kind) {
+        conds.push("kind = ?");
+        params.push(filter.kind);
+      }
+      if (filter.customerId) {
+        conds.push("customer_id = ?");
+        params.push(filter.customerId);
+      }
+      const where = conds.length > 0 ? `WHERE ${conds.join(" AND ")}` : "";
+      const [rows] = (await pool.query(
+        `SELECT * FROM notifications ${where} ORDER BY created_at DESC, id DESC LIMIT ?`,
+        [...params, limit],
+      )) as [Record<string, unknown>[], unknown];
+      return (rows as Record<string, unknown>[]).map(rowToNotification);
+    },
+    async listDueNotifications(now: Date, limit: number) {
+      const capped = Math.min(Math.max(limit || 50, 1), 200);
+      const [rows] = (await pool.query(
+        "SELECT * FROM notifications WHERE status = 'pending' OR (status = 'failed' AND next_retry_at IS NOT NULL AND next_retry_at <= ?) ORDER BY created_at ASC, id ASC LIMIT ?",
+        [toMysqlDatetime(now.toISOString()), capped],
+      )) as [Record<string, unknown>[], unknown];
+      return (rows as Record<string, unknown>[]).map(rowToNotification);
+    },
+    async claimNotification(id: string, now: Date = new Date()) {
+      const key = normalizeNotificationId(id);
+      // กัน flush ซ้อน: อัปเดตแบบมีเงื่อนไขสถานะใน statement เดียว
+      const at = toMysqlDatetime(now.toISOString());
+      const [res] = (await pool.query(
+        "UPDATE notifications SET status = 'sending', attempts = attempts + 1 WHERE id = ? AND (status = 'pending' OR (status = 'failed' AND next_retry_at IS NOT NULL AND next_retry_at <= ?))",
+        [key, at],
+      )) as [{ affectedRows: number }, unknown];
+      if ((res as { affectedRows: number }).affectedRows === 0) return null;
+      return mysqlStore.getNotification(key);
+    },
+    async completeNotificationSend(id: string, actor: ShopActor, now: Date = new Date()) {
+      return withShopTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM notifications WHERE id = ? LIMIT 1 FOR UPDATE", [
+          normalizeNotificationId(id),
+        ])) as [Record<string, unknown>[], unknown];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบการแจ้งเตือน");
+        const n = rowToNotification(rows[0]!);
+        if (n.status !== "sending") throw new ConflictError("งานนี้ไม่ได้อยู่ในสถานะกำลังส่ง");
+        const at = toMysqlDatetime(now.toISOString());
+        await conn.query("UPDATE notifications SET status = 'sent', sent_at = ?, next_retry_at = NULL WHERE id = ?", [
+          at,
+          n.id,
+        ]);
+        const [after] = (await conn.query("SELECT * FROM notifications WHERE id = ? LIMIT 1", [n.id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const next = rowToNotification(after[0]!);
+        await insertAuditRow(conn, notificationSentEvent(next, actor));
+        return next;
+      });
+    },
+    async failNotificationSend(id: string, input, actor: ShopActor, now: Date = new Date()) {
+      return withShopTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM notifications WHERE id = ? LIMIT 1 FOR UPDATE", [
+          normalizeNotificationId(id),
+        ])) as [Record<string, unknown>[], unknown];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบการแจ้งเตือน");
+        const n = rowToNotification(rows[0]!);
+        if (n.status !== "sending") throw new ConflictError("งานนี้ไม่ได้อยู่ในสถานะกำลังส่ง");
+        const error = sanitizeNotificationError(input.error);
+        const status = input.nextRetryAt ? "failed" : "dead_letter";
+        await conn.query("UPDATE notifications SET status = ?, next_retry_at = ?, last_error = ? WHERE id = ?", [
+          status,
+          input.nextRetryAt ? toMysqlDatetime(input.nextRetryAt) : null,
+          error,
+          n.id,
+        ]);
+        const [after] = (await conn.query("SELECT * FROM notifications WHERE id = ? LIMIT 1", [n.id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const next = rowToNotification(after[0]!);
+        await insertAuditRow(
+          conn,
+          input.nextRetryAt ? notificationFailedEvent(next, error, actor) : notificationDeadLetterEvent(next, actor),
+        );
+        return next;
+      });
+    },
+    async skipNotification(id: string, reason: string, actor: ShopActor, now: Date = new Date()) {
+      return withShopTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM notifications WHERE id = ? LIMIT 1 FOR UPDATE", [
+          normalizeNotificationId(id),
+        ])) as [Record<string, unknown>[], unknown];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบการแจ้งเตือน");
+        const n = rowToNotification(rows[0]!);
+        if (n.status === "sent" || n.status === "skipped" || n.status === "dead_letter") {
+          throw new ConflictError("งานนี้ข้ามไม่ได้ (ส่งแล้ว/ข้ามแล้ว/เลิกส่งแล้ว)");
+        }
+        const trimmed = typeof reason === "string" && reason.trim() ? reason.trim().slice(0, 500) : "ข้ามการส่ง";
+        await conn.query("UPDATE notifications SET status = 'skipped', next_retry_at = NULL, last_error = ? WHERE id = ?", [
+          trimmed,
+          n.id,
+        ]);
+        const [after] = (await conn.query("SELECT * FROM notifications WHERE id = ? LIMIT 1", [n.id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const next = rowToNotification(after[0]!);
+        await insertAuditRow(conn, notificationSkippedEvent(next, trimmed, actor));
+        return next;
+      });
+    },
+    async retryNotification(id: string, input, actor: ShopActor, now: Date = new Date()) {
+      return withShopTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM notifications WHERE id = ? LIMIT 1 FOR UPDATE", [
+          normalizeNotificationId(id),
+        ])) as [Record<string, unknown>[], unknown];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบการแจ้งเตือน");
+        const n = rowToNotification(rows[0]!);
+        if (n.status !== "failed" && n.status !== "dead_letter" && n.status !== "skipped") {
+          throw new ConflictError("งานนี้ไม่ต้องส่งซ้ำ (ยังรอส่ง/กำลังส่ง/ส่งแล้ว)");
+        }
+        const reason =
+          typeof input.reason === "string" && input.reason.trim()
+            ? input.reason.trim().slice(0, 500)
+            : "สั่งส่งซ้ำด้วยมือ";
+        const at = toMysqlDatetime(now.toISOString());
+        await conn.query(
+          "UPDATE notifications SET status = 'pending', attempts = 0, next_retry_at = ?, last_error = NULL, sent_at = NULL WHERE id = ?",
+          [at, n.id],
+        );
+        const [after] = (await conn.query("SELECT * FROM notifications WHERE id = ? LIMIT 1", [n.id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const next = rowToNotification(after[0]!);
+        await insertAuditRow(conn, notificationRetriedEvent(next, reason, actor));
+        return next;
+      });
+    },
+    async setNotificationConsent(customerId: string, enabled: boolean, _actor: ShopActor) {
+      const id = normalizeNotificationId(customerId, "รหัสลูกค้าไม่ถูกต้อง");
+      await pool.query(
+        "INSERT INTO notification_consents (customer_id, enabled) VALUES (?, ?) ON DUPLICATE KEY UPDATE enabled = VALUES(enabled)",
+        [id, enabled ? 1 : 0],
+      );
+    },
+    async isNotificationEnabled(customerId: string) {
+      const id = customerId.trim();
+      if (!id) return false;
+      const [rows] = (await pool.query("SELECT enabled FROM notification_consents WHERE customer_id = ? LIMIT 1", [
+        id,
+      ])) as [Record<string, unknown>[], unknown];
+      if (rows.length === 0) return true;
+      return Number(rows[0]!["enabled"]) === 1;
+    },
+    async listUpcomingReservations(fromIso: string, toIso: string, limit: number) {
+      const capped = Math.min(Math.max(limit || 50, 1), 200);
+      const fromT = new Date(fromIso).getTime();
+      const toT = new Date(toIso).getTime();
+      if (Number.isNaN(fromT) || Number.isNaN(toT)) throw new Error("ช่วงเวลานัดไม่ถูกต้อง");
+      const [rows] = (await pool.query(
+        "SELECT r.*, t.name AS table_name FROM reservations r LEFT JOIN shop_tables t ON t.id = r.table_id WHERE r.status IN ('pending','confirmed') AND r.reserved_at >= ? AND r.reserved_at <= ? ORDER BY r.reserved_at ASC LIMIT ?",
+        [toMysqlDatetime(fromIso), toMysqlDatetime(toIso), capped],
+      )) as [Record<string, unknown>[], unknown];
+      return (rows as Record<string, unknown>[]).map((row) => {
+        const r = rowToReservation(row);
+        return { ...r, tableName: row["table_name"] ? String(row["table_name"]) : "-" };
       });
     },
     async close() {

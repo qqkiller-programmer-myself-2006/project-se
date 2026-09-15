@@ -837,6 +837,81 @@ export interface FinanceDashboard {
 
 export type FinanceCsvKind = "sales" | "orders" | "finance" | "stock" | "queue";
 
+// ---------- Ticket 12: LINE notifications outbox + web fallback ----------
+
+export type NotificationKind =
+  | "reservation_created"
+  | "reservation_cancelled"
+  | "reservation_reminder"
+  | "payment_paid"
+  | "payment_manual_review"
+  | "order_ready"
+  | "order_delivered"
+  | "loyalty_earned"
+  | "loyalty_redeemed";
+
+export type NotificationStatus =
+  | "pending"
+  | "sending"
+  | "sent"
+  | "failed"
+  | "dead_letter"
+  | "skipped";
+
+export interface NotificationItem {
+  id: string;
+  eventKey: string;
+  kind: NotificationKind;
+  customerId: string | null;
+  orderId: string | null;
+  reservationId: string | null;
+  paymentId: string | null;
+  message: string;
+  status: NotificationStatus;
+  attempts: number;
+  maxAttempts: number;
+  nextRetryAt: string | null;
+  lastError: string | null;
+  sentAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NotificationFlushResult {
+  checked: number;
+  sent: number;
+  failed: number;
+  skipped: number;
+  deadLetter: number;
+}
+
+export interface NotificationReminderResult {
+  checked: number;
+  queued: number;
+  deduplicated: number;
+}
+
+export const NOTIFICATION_KIND_LABELS: Record<NotificationKind, string> = {
+  reservation_created: "ยืนยันการจอง",
+  reservation_cancelled: "ยกเลิกการจอง",
+  reservation_reminder: "เตือนก่อนเวลานัด",
+  payment_paid: "รับชำระแล้ว",
+  payment_manual_review: "รอตรวจสอบการชำระ",
+  order_ready: "อาหารพร้อมรับ",
+  order_delivered: "ส่งมอบครบแล้ว",
+  loyalty_earned: "ได้รับคะแนน",
+  loyalty_redeemed: "ใช้คะแนนแล้ว",
+};
+
+export const NOTIFICATION_STATUS_LABELS: Record<NotificationStatus, string> = {
+  pending: "รอส่ง",
+  sending: "กำลังส่ง",
+  sent: "ส่งแล้ว",
+  failed: "รอส่งซ้ำ",
+  dead_letter: "ส่งไม่สำเร็จ",
+  skipped: "ข้าม (ดูในเว็บ)",
+};
+
 /** ประวัติร้านใช้ AuditItem ชุดเดียวกับประวัติบัญชี (shape เดียวกัน ไม่ duplicate type) */
 
 const BASE = import.meta.env["VITE_API_URL"] ?? "";
@@ -1365,4 +1440,56 @@ export const api = {
   financeExportUrl: (kind: FinanceCsvKind, from: string, to: string) =>
     `/api/finance/export?kind=${kind}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
   financeAudit: () => req<{ items: AuditItem[] }>("/api/audit/finance?limit=100"),
+  // Ticket 12: LINE notifications outbox + web fallback
+  notificationsList: (q: { status?: NotificationStatus; kind?: NotificationKind; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (q.status) params.set("status", q.status);
+    if (q.kind) params.set("kind", q.kind);
+    params.set("limit", String(q.limit ?? 50));
+    return req<{ items: NotificationItem[]; kindLabels: Record<string, string>; statusLabels: Record<string, string> }>(
+      `/api/notifications?${params.toString()}`,
+    );
+  },
+  notificationRetry: (id: string, reason?: string) =>
+    req<{ notification: NotificationItem; message: string }>(
+      `/api/notifications/${id}/retry`,
+      { method: "POST", body: JSON.stringify(reason ? { reason } : {}) },
+      true,
+    ),
+  notificationsRunOutbox: (limit = 50) =>
+    req<{ result: NotificationFlushResult; message: string }>(
+      "/api/notifications/run-outbox",
+      { method: "POST", body: JSON.stringify({ limit }) },
+      true,
+    ),
+  notificationsRunReminders: () =>
+    req<{ result: NotificationReminderResult; message: string }>(
+      "/api/notifications/run-reminders",
+      { method: "POST", body: JSON.stringify({}) },
+      true,
+    ),
+  notificationConsentGet: (customerId: string) =>
+    req<{ customerId: string; enabled: boolean }>(`/api/notification-consents/${customerId}`),
+  notificationConsentSet: (customerId: string, enabled: boolean) =>
+    req<{ customerId: string; enabled: boolean; message: string }>(
+      "/api/notification-consents",
+      { method: "POST", body: JSON.stringify({ customerId, enabled }) },
+      true,
+    ),
+  notificationAudit: () => req<{ items: AuditItem[] }>("/api/audit/notifications?limit=100"),
+  // ฝั่งลูกค้า: web fallback — อ่านข้อความของตนเองในเว็บ + เปิด/ปิดรับแจ้งเตือน
+  myNotifications: (limit = 50) =>
+    req<{
+      items: NotificationItem[];
+      consentEnabled: boolean;
+      lineLinked: boolean;
+      kindLabels: Record<string, string>;
+      statusLabels: Record<string, string>;
+    }>(`/api/notifications/mine/list?limit=${limit}`),
+  myNotificationConsent: (enabled: boolean) =>
+    req<{ enabled: boolean; message: string }>(
+      "/api/notifications/mine/consent",
+      { method: "PATCH", body: JSON.stringify({ enabled }) },
+      true,
+    ),
 };

@@ -121,7 +121,14 @@ export type AuditAction =
   // ---------- Ticket 11: การเงิน รายงาน Dashboard และ CSV ----------
   | "finance_entry_created"
   | "finance_entry_updated"
-  | "finance_entry_deleted";
+  | "finance_entry_deleted"
+  // ---------- Ticket 12: LINE notifications และ reliability ----------
+  | "notification_queued"
+  | "notification_sent"
+  | "notification_failed"
+  | "notification_dead_letter"
+  | "notification_retried"
+  | "notification_skipped";
 
 export interface AuditEntry {
   id: number;
@@ -1329,4 +1336,120 @@ export interface LoyaltyReversal {
   /** คะแนนที่ย้อน (ติดลบหรือศูนย์เมื่อไม่มีคะแนนให้ย้อน) */
   points: number;
   createdAt: string;
+}
+
+/** ---------- Ticket 12: LINE notifications และ reliability (outbox local-first) ---------- */
+
+/**
+ * ชนิดข้อความแจ้งเตือน (หนึ่ง business event → หนึ่ง kind):
+ * - reservation_created/cancelled/reminder = การจอง (reminder = เตือนก่อนนัด 30 นาที)
+ * - payment_paid/manual_review = การชำระ (สำเร็จ / รอตรวจมือ)
+ * - order_ready/order_delivered = คำสั่งซื้อพร้อมรับครบทุกงาน / ส่งมอบครบแล้ว
+ *   (รวมเป็นเหตุการณ์เดียวต่อคำสั่งซื้อตาม D08 — ไม่แยกย่อยราย job)
+ * - loyalty_earned/redeemed = ได้รับ/ใช้คะแนน
+ */
+export type NotificationKind =
+  | "reservation_created"
+  | "reservation_cancelled"
+  | "reservation_reminder"
+  | "payment_paid"
+  | "payment_manual_review"
+  | "order_ready"
+  | "order_delivered"
+  | "loyalty_earned"
+  | "loyalty_redeemed";
+
+export const NOTIFICATION_KINDS: NotificationKind[] = [
+  "reservation_created",
+  "reservation_cancelled",
+  "reservation_reminder",
+  "payment_paid",
+  "payment_manual_review",
+  "order_ready",
+  "order_delivered",
+  "loyalty_earned",
+  "loyalty_redeemed",
+];
+
+export const NOTIFICATION_KIND_LABELS: Record<NotificationKind, string> = {
+  reservation_created: "ยืนยันการจอง",
+  reservation_cancelled: "ยกเลิกการจอง",
+  reservation_reminder: "เตือนก่อนเวลานัด",
+  payment_paid: "รับชำระแล้ว",
+  payment_manual_review: "รอตรวจสอบการชำระ",
+  order_ready: "อาหารพร้อมรับ",
+  order_delivered: "ส่งมอบครบแล้ว",
+  loyalty_earned: "ได้รับคะแนน",
+  loyalty_redeemed: "ใช้คะแนนแล้ว",
+};
+
+/**
+ * สถานะ outbox:
+ * - `pending` = รอส่ง (รวม retry ที่ถึงเวลาแล้ว)
+ * - `sending` = กำลังส่ง (claim แล้ว — กัน flush ซ้อนส่งซ้ำ)
+ * - `sent` = ส่งถึง provider แล้ว (terminal)
+ * - `failed` = ส่งไม่สำเร็จแต่ retry ได้ (มี nextRetryAt)
+ * - `dead_letter` = เกิน max attempts (terminal — ต้อง retry ด้วยมือ)
+ * - `skipped` = ข้ามการส่ง (ไม่มี consent/LINE link/ลูกค้าไม่ valid — อ่านในเว็บแทน)
+ */
+export type NotificationStatus =
+  | "pending"
+  | "sending"
+  | "sent"
+  | "failed"
+  | "dead_letter"
+  | "skipped";
+
+export const NOTIFICATION_STATUSES: NotificationStatus[] = [
+  "pending",
+  "sending",
+  "sent",
+  "failed",
+  "dead_letter",
+  "skipped",
+];
+
+export const NOTIFICATION_STATUS_LABELS: Record<NotificationStatus, string> = {
+  pending: "รอส่ง",
+  sending: "กำลังส่ง",
+  sent: "ส่งแล้ว",
+  failed: "รอส่งซ้ำ",
+  dead_letter: "ส่งไม่สำเร็จ",
+  skipped: "ข้าม (ดูในเว็บ)",
+};
+
+/** ขีดจำกัด validation การแจ้งเตือน */
+export const NOTIFICATION_MESSAGE_MAX = 2000;
+export const NOTIFICATION_EVENT_KEY_MAX = 191;
+export const NOTIFICATION_LAST_ERROR_MAX = 500;
+/** จำนวนครั้งสูงสุดก่อนเป็น dead_letter (รวมครั้งแรก) */
+export const NOTIFICATION_MAX_ATTEMPTS = 5;
+/** เตือนการจองก่อนเวลานัด (นาที) */
+export const NOTIFICATION_REMINDER_MINUTES_BEFORE = 30;
+
+/**
+ * แถว outbox: หนึ่ง eventKey → หนึ่งแถวเท่านั้น (exactly-once เชิงตรรกะ)
+ * message เก็บเฉพาะข้อความภาษาไทยที่จะส่ง — ห้ามมี token/secret/PII เกินจำเป็น
+ */
+export interface Notification {
+  id: string;
+  /** คีย์กันซ้ำ เช่น `payment_paid:<paymentId>` (unique) */
+  eventKey: string;
+  kind: NotificationKind;
+  /** ลูกค้าปลายทาง (null = หาผู้รับไม่ได้ตั้งแต่ enqueue — flush จะ skipped) */
+  customerId: string | null;
+  orderId: string | null;
+  reservationId: string | null;
+  paymentId: string | null;
+  message: string;
+  status: NotificationStatus;
+  attempts: number;
+  maxAttempts: number;
+  /** เวลาที่ retry ได้อีกครั้ง (null เมื่อ terminal/skipped) */
+  nextRetryAt: string | null;
+  /** ข้อผิดพลาดย่อที่ sanitize แล้ว (ไม่มี token/secret) */
+  lastError: string | null;
+  sentAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
