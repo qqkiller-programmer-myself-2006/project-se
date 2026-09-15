@@ -26,6 +26,8 @@ import CheckinPage from "./pages/Checkin";
 import AdminReservationsPage from "./pages/AdminReservations";
 import StationQueuePage from "./pages/StationQueue";
 import QueueTrackPage from "./pages/QueueTrack";
+import RewardsPage from "./pages/Rewards";
+import AdminRewardsPage from "./pages/AdminRewards";
 
 const NAV_BASE =
   "inline-flex min-h-[44px] items-center rounded-xl border px-4 py-2 text-sm font-semibold transition-colors";
@@ -89,6 +91,7 @@ export default function App() {
         <Route path="/register" element={<CustomerRegisterPage />} />
         <Route path="/customer/login" element={<CustomerLoginPage />} />
         <Route path="/profile" element={<CustomerProfilePage />} />
+        <Route path="/rewards" element={<RewardsPage />} />
         <Route path="*" element={<LoginPage onLoggedIn={refresh} />} />
       </Routes>
     );
@@ -155,6 +158,11 @@ export default function App() {
             {canDrink && (
               <NavLink to="/queue/drink" className={({ isActive }) => navClass(isActive)}>
                 คิวเครื่องดื่ม
+              </NavLink>
+            )}
+            {canDrink && (
+              <NavLink to="/admin/rewards" className={({ isActive }) => navClass(isActive)}>
+                รางวัล/สะสมแต้ม
               </NavLink>
             )}
             <NavLink to="/reservations" className={({ isActive }) => navClass(isActive)}>
@@ -239,6 +247,7 @@ export default function App() {
           <Route path="/track" element={<QueueTrackPage />} />
           {canKitchen && <Route path="/queue/kitchen" element={<StationQueuePage station="kitchen" canManageCapacity={isManager} />} />}
           {canDrink && <Route path="/queue/drink" element={<StationQueuePage station="drink" canManageCapacity={isManager} />} />}
+          {canDrink && <Route path="/admin/rewards" element={<AdminRewardsPage isManager={isManager} />} />}
           <Route path="/pay/:id" element={<PayOrderPage />} />
           <Route path="/reservations" element={<ReservationsPage />} />
           {isManager && <Route path="/checkin" element={<CheckinPage />} />}

@@ -604,6 +604,119 @@ export interface QueueSlot {
   available: number;
 }
 
+// ---------- Ticket 10: คะแนนสะสมและรางวัล ----------
+
+export type LoyaltySource =
+  | "order"
+  | "walkin"
+  | "guest_link"
+  | "reward_reserve"
+  | "reward_consume"
+  | "reward_release"
+  | "refund"
+  | "merge"
+  | "adjust";
+
+export const LOYALTY_SOURCE_LABELS: Record<LoyaltySource, string> = {
+  order: "คำสั่งซื้อ",
+  walkin: "Walk-in (QR)",
+  guest_link: "ผูกคำสั่งซื้อ Guest",
+  reward_reserve: "กันคะแนนแลก reward",
+  reward_consume: "แลก reward",
+  reward_release: "คืนคะแนนแลก reward",
+  refund: "คืนเงิน/ยกเลิก",
+  merge: "รวมบัญชี",
+  adjust: "ปรับปรุงโดยร้าน",
+};
+
+export interface LoyaltyTransaction {
+  id: string;
+  customerId: string;
+  points: number;
+  source: LoyaltySource;
+  orderId: string | null;
+  paymentId: string | null;
+  orderItemId: string | null;
+  redemptionId: string | null;
+  walkinTokenId: string | null;
+  reason: string;
+  actorId: string | null;
+  actorUsername: string | null;
+  createdAt: string;
+}
+
+export interface Reward {
+  id: string;
+  name: string;
+  imageUrl: string | null;
+  menuId: string;
+  menuName: string;
+  pointsCost: number;
+  quotaTotal: number | null;
+  quotaUsed: number;
+  startsAt: string | null;
+  endsAt: string | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type RedemptionStatus = "reserved" | "consumed" | "released";
+
+export const REDEMPTION_STATUS_LABELS: Record<RedemptionStatus, string> = {
+  reserved: "รอร้านรับรายการ",
+  consumed: "รับรายการแล้ว",
+  released: "คืนคะแนนแล้ว",
+};
+
+export interface RewardRedemption {
+  id: string;
+  code: string;
+  customerId: string;
+  rewardId: string;
+  rewardName: string;
+  menuId: string;
+  menuName: string;
+  pointsCost: number;
+  status: RedemptionStatus;
+  idempotencyKey: string;
+  queueJobId: string | null;
+  reason: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WalkinQrToken {
+  id: string;
+  code: string;
+  createdBy: string | null;
+  createdAt: string;
+  expiresAt: string;
+  redeemedAt: string | null;
+  redeemedBy: string | null;
+}
+
+export interface RewardInput {
+  name: string;
+  imageUrl?: string | null;
+  menuId: string;
+  pointsCost: number;
+  quotaTotal?: number | null;
+  startsAt?: string | null;
+  endsAt?: string | null;
+  isActive?: boolean;
+}
+
+export interface RewardPatch {
+  name?: string;
+  imageUrl?: string | null;
+  pointsCost?: number;
+  quotaTotal?: number | null;
+  startsAt?: string | null;
+  endsAt?: string | null;
+  isActive?: boolean;
+}
+
 /** ประวัติร้านใช้ AuditItem ชุดเดียวกับประวัติบัญชี (shape เดียวกัน ไม่ duplicate type) */
 
 const BASE = import.meta.env["VITE_API_URL"] ?? "";
@@ -1026,4 +1139,74 @@ export const api = {
       `/api/queue/slots/next?station=${station}&after=${encodeURIComponent(after)}`,
     ),
   queueAudit: () => req<{ items: AuditItem[] }>("/api/audit/queue?limit=100"),
+  // Ticket 10: คะแนนสะสมและรางวัล
+  // ฝั่งลูกค้า (session ลูกค้า csid) — ไม่แตะ endpoint หลังร้าน
+  loyaltyBalance: () => req<{ balance: number }>("/api/loyalty/balance"),
+  loyaltyLedger: (limit = 50) =>
+    req<{ entries: LoyaltyTransaction[]; balance: number }>(`/api/loyalty/ledger?limit=${limit}`),
+  rewardsRedeemable: () => req<{ rewards: Reward[] }>("/api/rewards/redeemable"),
+  rewardRedeem: (id: string, idempotencyKey: string, reason?: string) =>
+    req<{ redemption: RewardRedemption; deduplicated: boolean }>(
+      `/api/rewards/${id}/redeem`,
+      { method: "POST", body: JSON.stringify(reason ? { idempotencyKey, reason } : { idempotencyKey }) },
+      true,
+    ),
+  myRedemptions: (limit = 50) => req<{ redemptions: RewardRedemption[] }>(`/api/loyalty/redemptions/mine?limit=${limit}`),
+  redemptionReleaseMine: (id: string, reason: string) =>
+    req<{ redemption: RewardRedemption; deduplicated: boolean }>(
+      `/api/redemptions/${id}/release`,
+      { method: "POST", body: JSON.stringify({ reason }) },
+      true,
+    ),
+  walkinScan: (code: string) =>
+    req<{ token: WalkinQrToken; earned: boolean }>(
+      "/api/loyalty/walkin/scan",
+      { method: "POST", body: JSON.stringify({ code }) },
+      true,
+    ),
+  guestLink: (orderId: string) =>
+    req<{ order: OrderDetail; earned: boolean }>(
+      "/api/loyalty/guest/link",
+      { method: "POST", body: JSON.stringify({ orderId }) },
+      true,
+    ),
+  // ฝั่งหลังร้าน (session พนักงาน sid) — ไม่แตะ endpoint ลูกค้า
+  rewardsList: () => req<{ rewards: Reward[] }>("/api/rewards"),
+  rewardCreate: (input: RewardInput) =>
+    req<{ reward: Reward }>("/api/rewards", { method: "POST", body: JSON.stringify(input) }, true),
+  rewardUpdate: (id: string, patch: RewardPatch) =>
+    req<{ reward: Reward }>(`/api/rewards/${id}`, { method: "PATCH", body: JSON.stringify(patch) }, true),
+  pendingRedemptions: (limit = 50) =>
+    req<{ redemptions: RewardRedemption[] }>(`/api/redemptions/pending?limit=${limit}`),
+  redemptionConsume: (id: string) =>
+    req<{ redemption: RewardRedemption; job: QueueJob }>(
+      `/api/redemptions/${id}/consume`,
+      { method: "POST", body: JSON.stringify({}) },
+      true,
+    ),
+  redemptionRelease: (id: string, reason: string) =>
+    req<{ redemption: RewardRedemption; deduplicated: boolean }>(
+      `/api/redemptions/${id}/release`,
+      { method: "POST", body: JSON.stringify({ reason }) },
+      true,
+    ),
+  walkinIssue: () =>
+    req<{ token: WalkinQrToken }>(
+      "/api/loyalty/walkin/issue",
+      { method: "POST", body: JSON.stringify({}) },
+      true,
+    ),
+  loyaltyMerge: (sourceCustomerId: string, targetCustomerId: string) =>
+    req<{ record: { id: string }; movedPoints: number; deduplicated: boolean }>(
+      "/api/loyalty/merge",
+      { method: "POST", body: JSON.stringify({ sourceCustomerId, targetCustomerId }) },
+      true,
+    ),
+  loyaltyReverse: (orderId: string, refundId: string) =>
+    req<{ reversal: { id: string; points: number }; deduplicated: boolean }>(
+      "/api/loyalty/reverse",
+      { method: "POST", body: JSON.stringify({ orderId, refundId }) },
+      true,
+    ),
+  loyaltyAudit: () => req<{ items: AuditItem[] }>("/api/audit/loyalty?limit=100"),
 };

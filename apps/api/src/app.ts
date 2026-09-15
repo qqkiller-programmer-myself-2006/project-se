@@ -17,6 +17,7 @@ import { createMenuRouter } from "./routes/menu.js";
 import { createOrderRouter } from "./routes/orders.js";
 import { createPaymentRouter } from "./routes/payments.js";
 import { createQueueRouter } from "./routes/queue.js";
+import { createLoyaltyRouter } from "./routes/loyalty.js";
 import { createInventoryRouter } from "./routes/inventory.js";
 import { createReservationRouter } from "./routes/reservations.js";
 import type { OccupancyProvider } from "./shop/occupancy.js";
@@ -650,6 +651,16 @@ export function createApp(opts: AppOptions): express.Express {
       store,
       middleware: { requireAuth, requireCsrf, requireShopManager },
       clientIp,
+    }),
+  );
+
+  // Ticket 10 routes อยู่ใน routes/loyalty.ts (กฎธุรกิจอยู่ loyalty/validation.ts + store)
+  app.use(
+    createLoyaltyRouter({
+      store,
+      middleware: { requireAuth, requireCsrf, requireShopManager },
+      clientIp,
+      clock,
     }),
   );
 

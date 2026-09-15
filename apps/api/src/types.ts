@@ -104,7 +104,20 @@ export type AuditAction =
   | "queue_priority"
   | "queue_remade"
   | "queue_cancelled"
-  | "queue_capacity_updated";
+  | "queue_capacity_updated"
+  // ---------- Ticket 10: คะแนนสะสมและรางวัล ----------
+  | "loyalty_earned"
+  | "loyalty_redeemed_reserved"
+  | "loyalty_redeemed_consumed"
+  | "loyalty_redeemed_released"
+  | "loyalty_walkin_issued"
+  | "loyalty_walkin_redeemed"
+  | "loyalty_guest_linked"
+  | "loyalty_account_merged"
+  | "loyalty_points_reversed"
+  | "reward_created"
+  | "reward_updated"
+  | "reward_status_changed";
 
 export interface AuditEntry {
   id: number;
@@ -899,15 +912,17 @@ export const QUEUE_DEFAULT_CAPACITY_PER_SLOT = 10;
 /**
  * งานคิว: รายการเมนูชนิดเดียวกันภายในคำสั่งซื้อที่ฝ่ายอาหาร/เครื่องดื่มต้องทำหนึ่งชุด
  * หนึ่ง OrderItem → หนึ่ง job (ทำใหม่สร้าง job ใหม่ผูก orderItem เดิม ไม่คิดเงินซ้ำ)
+ * - งานรางวัล (Ticket 10): orderId/paymentId เป็น null (ไม่ผูกคำสั่งซื้อ/ชำระเงิน —
+ *   ไม่สร้างรายรับและไม่ได้คะแนน) อ้างอิง redemption ผ่าน rewardRedemptionId แทน
  */
 export interface QueueJob {
   id: string;
-  /** คำสั่งซื้อต้นทาง (ต้องชำระสำเร็จแล้วจึงมี job) */
-  orderId: string;
+  /** คำสั่งซื้อต้นทาง (ต้องชำระสำเร็จแล้วจึงมี job; null = งานรางวัล) */
+  orderId: string | null;
   orderNumber: string;
-  /** payment ที่ทำให้เกิด job ชุดนี้ (idempotency: หนึ่ง payment สร้าง jobs ได้ชุดเดียว) */
-  paymentId: string;
-  /** รายการคำสั่งซื้อต้นทาง */
+  /** payment ที่ทำให้เกิด job ชุดนี้ (idempotency: หนึ่ง payment สร้าง jobs ได้ชุดเดียว; null = งานรางวัล) */
+  paymentId: string | null;
+  /** รายการคำสั่งซื้อต้นทาง ("" สำหรับงานรางวัล — ไม่มี order item) */
   orderItemId: string;
   menuId: string;
   menuName: string;
@@ -932,6 +947,8 @@ export interface QueueJob {
   reason: string | null;
   /** ผู้รับงานล่าสุด */
   claimedBy: string | null;
+  /** รหัส redemption รางวัลต้นทาง (null = งานจากคำสั่งซื้อปกติ) */
+  rewardRedemptionId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -961,4 +978,181 @@ export interface QueueSlot {
   used: number;
   capacity: number;
   available: number;
+}
+
+/** ---------- Ticket 10: คะแนนสะสมและรางวัล ---------- */
+
+/** ขีดจำกัด validation คะแนน/รางวัล */
+export const REWARD_NAME_MAX = 120;
+export const REWARD_IMAGE_URL_MAX = 2048;
+export const REWARD_POINTS_MIN = 1;
+export const REWARD_POINTS_MAX = 100000;
+export const REWARD_QUOTA_MAX = 1000000;
+export const LOYALTY_REASON_MAX = 500;
+/** อายุ QR Walk-in (นาที) — ใช้ครั้งเดียว */
+export const WALKIN_QR_TTL_MINUTES = 10;
+/** หน้าต่างผูก Guest เข้าบัญชีหลังคำสั่งซื้อยืนยัน (ชั่วโมง) */
+export const GUEST_LINK_WINDOW_HOURS = 24;
+/** คะแนนต่อเครื่องดื่มที่ร่วมรายการ 1 หน่วย */
+export const LOYALTY_POINTS_PER_DRINK_UNIT = 1;
+
+/**
+ * แหล่งที่มาของธุรกรรมคะแนน (ทุกเหตุการณ์มีแหล่งอ้างอิงชัดเจน):
+ * - `order` = ได้คะแนนจากเครื่องดื่มในคำสั่งซื้อที่ชำระ+ส่งมอบแล้ว
+ * - `walkin` = ได้คะแนนจาก QR Walk-in
+ * - `reward_reserve` = กันคะแนนเมื่อยืนยันแลก (hold)
+ * - `reward_consume` = หักคะแนนถาวรเมื่อร้านรับรายการ
+ * - `reward_release` = คืนคะแนนที่กันไว้เมื่อปฏิเสธ/ยกเลิก
+ * - `refund` = ย้อนคะแนนเมื่อคืนเงิน/ยกเลิกคำสั่งซื้อ
+ * - `merge` = ย้ายคะแนนเมื่อรวมบัญชี
+ * - `adjust` = ปรับยอดโดย Owner/Admin พร้อมเหตุผล
+ */
+export type LoyaltySource =
+  | "order"
+  | "walkin"
+  | "reward_reserve"
+  | "reward_consume"
+  | "reward_release"
+  | "refund"
+  | "merge"
+  | "adjust";
+
+export const LOYALTY_SOURCES: LoyaltySource[] = [
+  "order",
+  "walkin",
+  "reward_reserve",
+  "reward_consume",
+  "reward_release",
+  "refund",
+  "merge",
+  "adjust",
+];
+
+/**
+ * ธุรกรรมคะแนน: หลักฐานการเพิ่ม/หักคะแนนแบบ append-only (ห้ามแก้/ลบ)
+ * ยอดคงเหลือ = ผลรวม points ของธุรกรรมทั้งหมดของลูกค้า (derived)
+ */
+export interface LoyaltyTransaction {
+  id: string;
+  customerId: string;
+  /** คะแนน (+ = รับ, − = ใช้/ย้อน) */
+  points: number;
+  source: LoyaltySource;
+  orderId: string | null;
+  paymentId: string | null;
+  orderItemId: string | null;
+  redemptionId: string | null;
+  walkinTokenId: string | null;
+  reason: string;
+  actorId: string | null;
+  actorUsername: string | null;
+  createdAt: string;
+}
+
+/**
+ * รางวัล: เครื่องดื่มที่แลกด้วยคะแนน (Admin/Owner จัดการ)
+ * - quotaTotal null = ไม่จำกัดสิทธิ์; quotaUsed นับเฉพาะที่ consume แล้ว
+ *   (reserve กันวงเงินแยกในหน่วยความจำ/คอลัมน์ชั่วคราวของ seam)
+ * - ช่วงเวลา startsAt/endsAt null = ไม่จำกัด
+ */
+export interface Reward {
+  id: string;
+  name: string;
+  /** URL รูป (absolute http/https) หรือ null — ยังไม่รองรับอัปโหลดไฟล์จริง */
+  imageUrl: string | null;
+  /** เมนูเครื่องดื่มอ้างอิง */
+  menuId: string;
+  menuName: string;
+  /** คะแนนที่ใช้แลก 1 หน่วย */
+  pointsCost: number;
+  /** จำนวนสิทธิ์ทั้งหมด (null = ไม่จำกัด) */
+  quotaTotal: number | null;
+  /** จำนวนสิทธิ์ที่ใช้ไปแล้ว (consume แล้ว) */
+  quotaUsed: number;
+  startsAt: string | null;
+  endsAt: string | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** สถานะการแลกรางวัล: reserved (กันคะแนน) → consumed (ร้านรับ) / released (คืนคะแนน) */
+export type RedemptionStatus = "reserved" | "consumed" | "released";
+
+export const REDEMPTION_STATUSES: RedemptionStatus[] = ["reserved", "consumed", "released"];
+
+export const REDEMPTION_STATUS_LABELS: Record<RedemptionStatus, string> = {
+  reserved: "รอร้านรับรายการ",
+  consumed: "รับรายการแล้ว",
+  released: "คืนคะแนนแล้ว",
+};
+
+/**
+ * รายการแลกรางวัล: คำขอใช้คะแนนแลกเครื่องดื่ม 1 หน่วย
+ * - reserve กันคะแนน+quota ด้วย idempotencyKey (คีย์ซ้ำ + payload เดิม = คืนของเดิม)
+ * - consume (ร้านรับ) หักคะแนนถาวร + สร้างงานคิวเครื่องดื่มราคา 0 ครั้งเดียว
+ * - release (ปฏิเสธ/วัตถุดิบหมด) คืนคะแนน+quota
+ */
+export interface RewardRedemption {
+  id: string;
+  /** รหัสอ้างอิงอ่านได้ เช่น RDM-XXXXXX */
+  code: string;
+  customerId: string;
+  rewardId: string;
+  rewardName: string;
+  menuId: string;
+  menuName: string;
+  pointsCost: number;
+  status: RedemptionStatus;
+  /** กันแลกซ้ำจาก request เดิม (client สร้าง UUID ต่อการกดแลกหนึ่งครั้ง) */
+  idempotencyKey: string;
+  /** งานคิวเครื่องดื่มที่สร้างตอน consume (null จนกว่าร้านจะรับ) */
+  queueJobId: string | null;
+  reason: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * โทเค็น QR Walk-in: ใช้ครั้งเดียว อายุ 10 นาที (fake QR payload แบบ deterministic)
+ * code รูป `WALKIN-<token>` — ลูกค้าสแกนรับคะแนน 1 แต้มต่อ QR
+ */
+export interface WalkinQrToken {
+  id: string;
+  /** payload ที่แสดงเป็น QR (deterministic: `WALKIN-<token>`) */
+  code: string;
+  createdBy: string | null;
+  createdAt: string;
+  expiresAt: string;
+  redeemedAt: string | null;
+  redeemedBy: string | null;
+}
+
+/** หลักฐานผูกคำสั่งซื้อ Guest เข้าบัญชีลูกค้า (กัน double-claim) */
+export interface GuestLinkClaim {
+  id: string;
+  orderId: string;
+  customerId: string;
+  guestPhone: string;
+  claimedAt: string;
+}
+
+/** หลักฐานรวมบัญชี (กันย้ายซ้ำ — คู่ source/target เดิมเป็น no-op) */
+export interface CustomerMergeRecord {
+  id: string;
+  sourceCustomerId: string;
+  targetCustomerId: string;
+  approvedBy: string | null;
+  createdAt: string;
+}
+
+/** หลักฐานกลับรายการคะแนนเมื่อคืนเงิน (กัน double-reversal) */
+export interface LoyaltyReversal {
+  id: string;
+  orderId: string;
+  refundId: string;
+  customerId: string;
+  /** คะแนนที่ย้อน (ติดลบหรือศูนย์เมื่อไม่มีคะแนนให้ย้อน) */
+  points: number;
+  createdAt: string;
 }

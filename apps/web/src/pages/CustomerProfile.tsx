@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, type LineStatus, type PublicCustomer } from "../lib/api";
 import { Alert, Badge, dangerButtonClass, inputClass, PageHeader, Panel, primaryButtonClass, secondaryButtonClass, Spinner, successButtonClass } from "../components/ui";
 
@@ -194,9 +194,14 @@ export default function CustomerProfilePage({ onLoggedOut }: { onLoggedOut?: () 
         title="โปรไฟล์ของฉัน"
         description="จัดการข้อมูลสมาชิก รหัสผ่าน และการเชื่อม LINE"
         actions={
-          <button type="button" onClick={() => void logout()} disabled={logoutBusy} aria-busy={logoutBusy} className={secondaryButtonClass}>
-            {logoutBusy ? "กำลังออก…" : "ออกจากระบบ"}
-          </button>
+          <>
+            <Link to="/rewards" className={secondaryButtonClass}>
+              คะแนนสะสมและรางวัล
+            </Link>
+            <button type="button" onClick={() => void logout()} disabled={logoutBusy} aria-busy={logoutBusy} className={secondaryButtonClass}>
+              {logoutBusy ? "กำลังออก…" : "ออกจากระบบ"}
+            </button>
+          </>
         }
       />
 

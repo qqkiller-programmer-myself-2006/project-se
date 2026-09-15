@@ -112,6 +112,28 @@
   LINE (12), capacity/พยากรณ์โมเดลเต็ม (13 — ticket นี้ส่ง slot/capacity seam ให้แล้ว),
   backup/security/observability/release E2E (14)
 
+### Ticket 10 — คะแนนสะสมและรางวัล
+
+- สถานะ: resolved (2026-09-15, implement โดย Muse Spark via opencode — finalize จาก current working tree, no implementation changes)
+- ผลตรวจ (exact, no re-run):
+  - API loyalty 12/12
+  - API full 205 passed/27 skipped
+  - Web rewards 16/16
+  - Web full 169 passed
+  - API/Web typecheck passed
+  - API tsc build passed
+  - Vite build passed 70 modules
+- ไม่แตะไฟล์งานอื่นที่ค้างมาก่อน (excluded จาก commit ตาม ticket):
+  `apps/api/package.json`, `package-lock.json`, `apps/api/.gitignore`, `apps/api/generated/`,
+  `apps/api/prisma.config.ts`, `apps/api/prisma/`, `apps/api/src/db/`, `experiments/`,
+  `__pycache__`; Tickets 01–09 ไม่ regression (finalize only, no re-run)
+- งานที่ข้าม (บันทึกตาม ticket — ไม่ทำให้ ticket ล้ม):
+  deferred real MySQL/Docker, LINE, payment providers, external storage,
+  browser/Playwright/Taste QA
+- ไม่รวมตาม scope (งาน ticket ถัดไป): การเงิน/Dashboard/CSV (11),
+  LINE (12), capacity/พยากรณ์โมเดลเต็ม (13),
+  backup/security/observability/release E2E (14)
+
 ## Roadmap หลัง Ticket 06
 
 - Ticket 07: ตัวเลือกเมนู สูตร และสต๊อก

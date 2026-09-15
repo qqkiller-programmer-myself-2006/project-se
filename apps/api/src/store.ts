@@ -211,15 +211,58 @@ import {
   slotStartOf,
 } from "./queue/validation.js";
 import { FakePromptPayProvider, isFakePaymentMode } from "./payments/provider.js";
-import { PAYMENT_PROMPTPAY_TTL_MINUTES } from "./types.js";
+import {
+  GUEST_LINK_WINDOW_HOURS,
+  LOYALTY_POINTS_PER_DRINK_UNIT,
+  PAYMENT_PROMPTPAY_TTL_MINUTES,
+  WALKIN_QR_TTL_MINUTES,
+} from "./types.js";
 import { normalizeThaiPhone } from "./customer/phone.js";
 import { ingredientAvailable, isMenuSellable, STOCK_OPS } from "./types.js";
 import {
   QUEUE_DEFAULT_CAPACITY_PER_SLOT,
   QUEUE_SLOT_MINUTES,
+  type CustomerMergeRecord,
+  type GuestLinkClaim,
+  type LoyaltyReversal,
+  type LoyaltySource,
+  type LoyaltyTransaction,
   type QueueJob,
   type QueueStation,
+  type RedemptionStatus,
+  type Reward,
+  type RewardRedemption,
+  type WalkinQrToken,
 } from "./types.js";
+import {
+  accountMergedEvent,
+  guestLinkedEvent,
+  loyaltyEarnedEvent,
+  pointsReversedEvent,
+  redemptionConsumedEvent,
+  redemptionReleasedEvent,
+  redemptionReservedEvent,
+  rewardCreatedEvent,
+  rewardStatusChangedEvent,
+  rewardUpdatedEvent,
+  walkinIssuedEvent,
+  walkinRedeemedEvent,
+} from "./loyalty/audit-events.js";
+import {
+  assertRedemptionTransition,
+  buildWalkinCode,
+  generateRedemptionCode,
+  generateWalkinToken,
+  normalizeLoyaltyIdempotencyKey,
+  normalizeLoyaltyReason,
+  normalizeRewardImageUrl,
+  normalizeRewardName,
+  normalizeRewardPointsCost,
+  normalizeRewardQuotaTotal,
+  normalizeWalkinCode,
+  redemptionPayloadHash,
+  rewardBlockReason,
+} from "./loyalty/validation.js";
 
 export interface CreateUserInput {
   username: string;
@@ -348,7 +391,7 @@ export interface Store {
   deleteSessionsForUser(userId: string): Promise<void>;
   audit(input: AuditInput): Promise<void>;
   listAudit(
-    prefix: "login_" | "account_" | "shop_" | "customer_" | "menu_" | "order_" | "reservation_" | "round_" | "inventory_" | "payment_" | "queue_" | "all",
+    prefix: "login_" | "account_" | "shop_" | "customer_" | "menu_" | "order_" | "reservation_" | "round_" | "inventory_" | "payment_" | "queue_" | "loyalty_" | "all",
     limit: number,
   ): Promise<AuditEntry[]>;
   // ---- Ticket 02: สถานะร้านและโต๊ะ (อ่านเดี่ยว + mutation แบบ atomic พร้อม audit) ----
@@ -755,6 +798,104 @@ export interface Store {
   listQueueSlots(station: QueueStation, date: string, now?: Date): Promise<QueueSlot[]>;
   /** สล็อตว่างถัดไปของฝ่ายตั้งแต่เวลาที่กำหนด (null เมื่อเต็มทั้งวัน) */
   suggestNextSlot(station: QueueStation, after: string, now?: Date): Promise<QueueSlot | null>;
+  // ---- Ticket 10: คะแนนสะสมและรางวัล (immutable ledger + idempotent seams) ----
+  /**
+   * สะสมคะแนนให้คำสั่งซื้อ (exactly-once ต่อ order/payment/job event):
+   * - เครื่องดื่มที่ร่วมรายการ 1 หน่วย = 1 คะแนน เฉพาะเมื่อชำระสำเร็จ (paid)
+   *   และส่งมอบแล้ว (delivered ครบ/ทยอยของ jobs ฝ่าย drink) หรือปิดงาน completed
+   * - รางวัลราคา 0 (unitPrice 0) ไม่ได้คะแนน; เรียกซ้ำเป็น no-op
+   *   (ไม่เขียน ledger/audit ซ้ำ) — ถูกเรียกอัตโนมัติเมื่อชำระสำเร็จ ส่งมอบ
+   *   และปิดคำสั่งซื้อ แบบ no-op guard
+   */
+  earnPointsForOrder(orderId: string, actor: ShopActor, now?: Date): Promise<{ earned: number; deduplicated: boolean }>;
+  /** ยอดคงเหลือของลูกค้า (derived = ผลรวมธุรกรรมที่มีผล) */
+  getLoyaltyBalance(customerId: string): Promise<number>;
+  /** ประวัติธุรกรรมคะแนนของลูกค้า (ใหม่สุดก่อน) */
+  listLoyaltyLedger(customerId: string, limit: number): Promise<LoyaltyTransaction[]>;
+  /**
+   * สร้างรางวัล (Owner/Admin — route ตรวจสิทธิ์):
+   * - menuId ต้องเป็นเมนูเครื่องดื่มที่มีอยู่ (food ถูกปฏิเสธ)
+   */
+  createReward(
+    input: { name: string; imageUrl?: string | null; menuId: string; pointsCost: number; quotaTotal?: number | null; startsAt?: string | null; endsAt?: string | null; isActive?: boolean },
+    actor: ShopActor,
+  ): Promise<Reward>;
+  /** รายการรางวัลทั้งหมด (หลังร้าน — รวมที่ปิดขาย) */
+  listRewards(): Promise<Reward[]>;
+  /** รางวัลพร้อมแลกสำหรับลูกค้า (เปิดขาย + อยู่ในช่วงเวลา; quota/สต๊อกตรวจตอนแลก) */
+  listRedeemableRewards(now?: Date): Promise<Reward[]>;
+  getReward(id: string): Promise<Reward | null>;
+  /**
+   * แก้ไขรางวัล (Owner/Admin): ชื่อ/รูป/คะแนน/quota/ช่วงเวลา/สถานะ
+   * (เปลี่ยน isActive อย่างเดียว → reward_status_changed, อื่น ๆ → reward_updated)
+   */
+  updateReward(
+    id: string,
+    patch: { name?: string; imageUrl?: string | null; pointsCost?: number; quotaTotal?: number | null; startsAt?: string | null; endsAt?: string | null; isActive?: boolean },
+    actor: ShopActor,
+  ): Promise<Reward>;
+  /**
+   * ยืนยันแลก (reserve — กันคะแนน + กัน quota, idempotency key):
+   * - ตรวจยอดคงเหลือพอ, รางวัลพร้อมแลก (quota/ช่วงเวลา/สถานะ),
+   *   สต๊อกพร้อมขายพอสำหรับ 1 หน่วย
+   * - key เดิม + payload เดิม → คืนรายการเดิม (ไม่เขียน audit ซ้ำ);
+   *   key เดิม + payload ต่างกัน → ConflictError
+   * - แลกพร้อมกันต้องไม่ใช้คะแนน/quota เกิน (serialize ผ่าน runOrderExclusive/named lock)
+   */
+  redeemReserve(
+    input: { customerId: string; rewardId: string; idempotencyKey: string; reason?: string | null },
+    actor: ShopActor,
+    now?: Date,
+  ): Promise<{ redemption: RewardRedemption; deduplicated: boolean }>;
+  getRedemption(id: string): Promise<RewardRedemption | null>;
+  /** รายการแลกของลูกค้า (ใหม่สุดก่อน) */
+  listCustomerRedemptions(customerId: string, limit: number): Promise<RewardRedemption[]>;
+  /** รายการแลกที่รอร้านรับ (reserved — drink/admin/owner ดูฝ่ายเครื่องดื่ม) */
+  listPendingRedemptions(limit: number): Promise<RewardRedemption[]>;
+  /**
+   * ร้านรับรายการ (consume — drink/admin/owner):
+   * reserved → consumed: หักคะแนนถาวร + สร้างงานคิวเครื่องดื่มราคา 0
+   * ครั้งเดียว (idempotent — เรียกซ้ำคืนงานเดิม) + ตัดสต๊อกจริง 1 หน่วย
+   * สต๊อกหมดตอนรับ → ConflictError (ให้ใช้ release คืนคะแนนแทน)
+   */
+  redeemConsume(id: string, actor: ShopActor, now?: Date): Promise<{ redemption: RewardRedemption; job: QueueJobDetail }>;
+  /**
+   * ปฏิเสธ/ยกเลิก (release — drink/admin/owner หรือเจ้าของแต้ม):
+   * reserved → released: คืนคะแนนที่กันไว้ + คืน quota (เรียกซ้ำ no-op)
+   */
+  redeemRelease(id: string, input: { reason: string }, actor: ShopActor, now?: Date): Promise<{ redemption: RewardRedemption; deduplicated: boolean }>;
+  /**
+   * ออก QR Walk-in (drink/admin/owner):
+   * payload แบบ deterministic `WALKIN-<token>` อายุ 10 นาที ใช้ครั้งเดียว
+   */
+  issueWalkinQr(actor: ShopActor, now?: Date): Promise<WalkinQrToken>;
+  /**
+   * สแกนรับคะแนน Walk-in (ลูกค้า):
+   * 1 แต้มต่อ QR; ใช้ซ้ำ/หมดอายุ/ข้ามลูกค้าถูกปฏิเสธ (409/404)
+   */
+  redeemWalkinQr(input: { code: string; customerId: string }, actor: ShopActor, now?: Date): Promise<{ token: WalkinQrToken; earned: number }>;
+  /**
+   * ผูกคำสั่งซื้อ Guest เข้าบัญชีลูกค้า (ลูกค้าเจ้าของเบอร์):
+   * - ภายใน 24 ชม. หลังคำสั่งซื้อยืนยัน + เบอร์ Guest ตรงกับบัญชี (normalize แล้ว)
+   * - รับได้เฉพาะคะแนนที่ยังไม่มีผู้รับ (กัน double-earn); ผูกซ้ำ/เบอร์คนอื่น → 409
+   */
+  linkGuestOrder(input: { orderId: string; customerId: string }, actor: ShopActor, now?: Date): Promise<{ order: OrderDetail; earned: number }>;
+  /**
+   * รวมบัญชี (Owner/Admin อนุมัติ — route ตรวจสิทธิ์):
+   * ย้าย ledger/redemption/claims ไปบัญชีปลายทางแบบ atomic + audit;
+   * บัญชีต้นทางถูกปิด; คู่เดิมเรียกซ้ำเป็น no-op (idempotent)
+   */
+  mergeCustomerAccounts(
+    input: { sourceCustomerId: string; targetCustomerId: string },
+    actor: ShopActor,
+    now?: Date,
+  ): Promise<{ record: CustomerMergeRecord; movedPoints: number; deduplicated: boolean }>;
+  /**
+   * กลับรายการคะแนนเมื่อคืนเงิน/ยกเลิก (Owner/Admin — route ตรวจสิทธิ์):
+   * ย้อนคะแนน earn ที่เกี่ยวข้อง (append-only รักษาประวัติ) + audit;
+   * refund เดิมเรียกซ้ำเป็น no-op (กัน double-reversal)
+   */
+  reversePointsOnRefund(orderId: string, refundId: string, actor: ShopActor, now?: Date): Promise<{ reversal: LoyaltyReversal; deduplicated: boolean }>;
   close?(): Promise<void>;
 }
 
@@ -972,6 +1113,22 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
   const queueByPayment = new Map<string, string[]>();
   const queueByOrder = new Map<string, string[]>();
   const stationCapacity = new Map<QueueStation, { perSlot: number; updatedBy: string | null; updatedAt: string }>();
+  // ---- Ticket 10 memory state: คะแนนสะสม + รางวัล (ledger append-only) ----
+  const loyaltyLedger: LoyaltyTransaction[] = [];
+  const rewards = new Map<string, Reward>();
+  const redemptions = new Map<string, RewardRedemption>();
+  const redemptionsByIdem = new Map<string, string>();
+  const redemptionsByCode = new Map<string, string>();
+  const walkinTokens = new Map<string, WalkinQrToken>();
+  const walkinsByCode = new Map<string, string>();
+  const guestClaims = new Map<string, GuestLinkClaim>();
+  const guestClaimsByOrder = new Map<string, string>();
+  const merges = new Map<string, CustomerMergeRecord>();
+  const mergesByPair = new Map<string, string>();
+  const reversals = new Map<string, LoyaltyReversal>();
+  const reversalsByRefund = new Map<string, string>();
+  /** งานคิวรางวัลผูก redemption (consume ครั้งเดียว — เรียกซ้ำคืนงานเดิม) */
+  const rewardJobsByRedemption = new Map<string, string>();
   /**
    * คิว serialize สำหรับ mutation คำสั่งซื้อ+สต๊อกฝั่ง memory (กัน concurrent
    * แย่งวัตถุดิบชิ้นสุดท้าย: ตรวจพร้อมขายแล้วจองต้องเกิดทีละรายการ)
@@ -1117,6 +1274,26 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
     queueByPayment: Map<string, string[]>;
     queueByOrder: Map<string, string[]>;
     capacity: Map<QueueStation, { perSlot: number; updatedBy: string | null; updatedAt: string }>;
+    // Ticket 10: hooks สะสม/ย้อนคะแนนเขียน ledger ใน seam เดียวกัน — rollback พร้อมกัน
+    customers: Map<string, Customer>;
+    customersByPhone: Map<string, string>;
+    customersByEmail: Map<string, string>;
+    lineLinks: Map<string, CustomerLineLink>;
+    lineLinksBySubject: Map<string, string>;
+    loyalty: LoyaltyTransaction[];
+    rewardMap: Map<string, Reward>;
+    redemptionMap: Map<string, RewardRedemption>;
+    redemptionByIdem: Map<string, string>;
+    redemptionByCode: Map<string, string>;
+    walkinMap: Map<string, WalkinQrToken>;
+    walkinByCode: Map<string, string>;
+    guestClaimMap: Map<string, GuestLinkClaim>;
+    guestClaimByOrder: Map<string, string>;
+    mergeMap: Map<string, CustomerMergeRecord>;
+    mergeByPair: Map<string, string>;
+    reversalMap: Map<string, LoyaltyReversal>;
+    reversalByRefund: Map<string, string>;
+    rewardJobs: Map<string, string>;
   }
 
   /** backup สำหรับ mutation การชำระเงิน (payment + order status + stock + audit แบบ all-or-nothing) */
@@ -1139,6 +1316,25 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
       queueByPayment: new Map([...queueByPayment].map(([k, v]) => [k, [...v]] as const)),
       queueByOrder: new Map([...queueByOrder].map(([k, v]) => [k, [...v]] as const)),
       capacity: new Map([...stationCapacity].map(([k, v]) => [k, { ...v }] as const)),
+      customers: new Map([...customers].map(([id, c]) => [id, { ...c }] as const)),
+      customersByPhone: new Map(customersByPhone),
+      customersByEmail: new Map(customersByEmail),
+      lineLinks: new Map([...lineLinks].map(([k, v]) => [k, { ...v }] as const)),
+      lineLinksBySubject: new Map(lineLinksBySubject),
+      loyalty: loyaltyLedger.map((e) => ({ ...e })),
+      rewardMap: new Map([...rewards].map(([id, r]) => [id, { ...r }] as const)),
+      redemptionMap: new Map([...redemptions].map(([id, r]) => [id, { ...r }] as const)),
+      redemptionByIdem: new Map(redemptionsByIdem),
+      redemptionByCode: new Map(redemptionsByCode),
+      walkinMap: new Map([...walkinTokens].map(([id, t]) => [id, { ...t }] as const)),
+      walkinByCode: new Map(walkinsByCode),
+      guestClaimMap: new Map([...guestClaims].map(([id, c]) => [id, { ...c }] as const)),
+      guestClaimByOrder: new Map(guestClaimsByOrder),
+      mergeMap: new Map([...merges].map(([id, m]) => [id, { ...m }] as const)),
+      mergeByPair: new Map(mergesByPair),
+      reversalMap: new Map([...reversals].map(([id, r]) => [id, { ...r }] as const)),
+      reversalByRefund: new Map(reversalsByRefund),
+      rewardJobs: new Map(rewardJobsByRedemption),
     };
   }
 
@@ -1176,6 +1372,44 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
     for (const [k, v] of b.queueByOrder) queueByOrder.set(k, v);
     stationCapacity.clear();
     for (const [k, v] of b.capacity) stationCapacity.set(k, v);
+    customers.clear();
+    for (const [id, c] of b.customers) customers.set(id, c);
+    customersByPhone.clear();
+    for (const [k, v] of b.customersByPhone) customersByPhone.set(k, v);
+    customersByEmail.clear();
+    for (const [k, v] of b.customersByEmail) customersByEmail.set(k, v);
+    lineLinks.clear();
+    for (const [k, v] of b.lineLinks) lineLinks.set(k, v);
+    lineLinksBySubject.clear();
+    for (const [k, v] of b.lineLinksBySubject) lineLinksBySubject.set(k, v);
+    loyaltyLedger.length = 0;
+    for (const e of b.loyalty) loyaltyLedger.push(e);
+    rewards.clear();
+    for (const [id, r] of b.rewardMap) rewards.set(id, r);
+    redemptions.clear();
+    for (const [id, r] of b.redemptionMap) redemptions.set(id, r);
+    redemptionsByIdem.clear();
+    for (const [k, v] of b.redemptionByIdem) redemptionsByIdem.set(k, v);
+    redemptionsByCode.clear();
+    for (const [k, v] of b.redemptionByCode) redemptionsByCode.set(k, v);
+    walkinTokens.clear();
+    for (const [id, t] of b.walkinMap) walkinTokens.set(id, t);
+    walkinsByCode.clear();
+    for (const [k, v] of b.walkinByCode) walkinsByCode.set(k, v);
+    guestClaims.clear();
+    for (const [id, c] of b.guestClaimMap) guestClaims.set(id, c);
+    guestClaimsByOrder.clear();
+    for (const [k, v] of b.guestClaimByOrder) guestClaimsByOrder.set(k, v);
+    merges.clear();
+    for (const [id, m] of b.mergeMap) merges.set(id, m);
+    mergesByPair.clear();
+    for (const [k, v] of b.mergeByPair) mergesByPair.set(k, v);
+    reversals.clear();
+    for (const [id, r] of b.reversalMap) reversals.set(id, r);
+    reversalsByRefund.clear();
+    for (const [k, v] of b.reversalByRefund) reversalsByRefund.set(k, v);
+    rewardJobsByRedemption.clear();
+    for (const [k, v] of b.rewardJobs) rewardJobsByRedemption.set(k, v);
   }
 
   /** สถานะ derived ฝั่งคำสั่งซื้อจาก payment ล่าสุด (ไม่เปลี่ยน OrderStatus contract) */
@@ -1290,6 +1524,8 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
     await writeAudit(paymentStatusChangedEvent(before, { ...p }, reason, actor));
     // Ticket 09: ชำระสำเร็จสร้าง queue jobs แบบ exactly-once (payment นี้ชุดเดียว — เรียกซ้ำ no-op)
     await ensureQueueJobsInternal(p, detail, actor, now);
+    // Ticket 10: สะสมคะแนนอัตโนมัติแบบ no-op (ยังไม่ส่งมอบ = ไม่เข้าเงื่อนไข ยังไม่เขียน ledger)
+    await tryAutoEarnForOrderInternal(order.id, actor, now);
     return { ...receipt, items: receipt.items.map((i) => ({ ...i })) };
   }
 
@@ -1356,6 +1592,7 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
         isPriority: false,
         reason: null,
         claimedBy: null,
+        rewardRedemptionId: null,
         createdAt: at,
         updatedAt: at,
       };
@@ -1381,8 +1618,12 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
     return n;
   }
 
-  /** ตรวจว่า payment/order หยุดเดินต่อหรือยัง (คืนเงิน/ยกเลิกแล้ว) */
-  function assertQueueOrderActive(orderId: string): Order {
+  /**
+   * ตรวจว่า payment/order หยุดเดินต่อหรือยัง (คืนเงิน/ยกเลิกแล้ว)
+   * orderId null = งานรางวัล (ไม่ผูกคำสั่งซื้อ — ข้ามการตรวจ)
+   */
+  function assertQueueOrderActive(orderId: string | null): Order | null {
+    if (orderId === null) return null;
     const order = orders.get(orderId);
     if (!order) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
     if (order.status === "cancelled") {
@@ -1396,6 +1637,181 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
       }
     }
     return order;
+  }
+
+  // ---- Ticket 10 memory helpers: คะแนน/รางวัล (เรียกใน runOrderExclusive เท่านั้น) ----
+
+  /** ยอดคงเหลือ derived = ผลรวมธุรกรรม (reserve กันวงเงินแยก ไม่หักจนกว่า consume) */
+  function loyaltyBalanceOf(customerId: string): number {
+    let sum = 0;
+    for (const e of loyaltyLedger) {
+      if (e.customerId === customerId) sum += e.points;
+    }
+    return sum;
+  }
+
+  /** คะแนนที่กันไว้จากรายการแลกสถานะ reserved (ยังไม่หักถาวร) */
+  function loyaltyHeldOf(customerId: string): number {
+    let sum = 0;
+    for (const r of redemptions.values()) {
+      if (r.customerId === customerId && r.status === "reserved") sum += r.pointsCost;
+    }
+    return sum;
+  }
+
+  /** จำนวนสิทธิ์ที่กันไว้ของรางวัล (reserved ยังไม่นับใน quotaUsed) */
+  function rewardHeldCount(rewardId: string): number {
+    let n = 0;
+    for (const r of redemptions.values()) {
+      if (r.rewardId === rewardId && r.status === "reserved") n += 1;
+    }
+    return n;
+  }
+
+  /** คะแนนที่สะสมแล้วของ order item นี้ (source order เท่านั้น — ไม่นับ reversal) */
+  function earnedForOrderItem(orderItemId: string): number {
+    let sum = 0;
+    for (const e of loyaltyLedger) {
+      if (e.orderItemId === orderItemId && e.source === "order") sum += e.points;
+    }
+    return sum;
+  }
+
+  function appendLoyaltyTx(
+    tx: Omit<LoyaltyTransaction, "id" | "createdAt">,
+    now: Date,
+  ): LoyaltyTransaction {
+    const row: LoyaltyTransaction = { ...tx, id: randomUUID(), createdAt: now.toISOString() };
+    loyaltyLedger.push(row);
+    return { ...row };
+  }
+
+  /**
+   * สะสมคะแนนให้คำสั่งซื้อแบบ exactly-once (no-op เมื่อยังไม่เข้าเงื่อนไขหรือสะสมครบแล้ว):
+   * - ต้องมี payment paid + ไม่ถูกยกเลิก + ผูกบัญชีลูกค้าที่ใช้งานได้
+   * - นับเฉพาะรายการเครื่องดื่ม (kind drink) ที่ราคา > 0 (รางวัลราคา 0 ไม่ได้คะแนน)
+   * - ต่อหน่วย: ส่งมอบแล้ว (deliveredQty ของ jobs ฝ่าย drink) หรือปิดงาน completed
+   *   ก็นับเต็มจำนวน; จำกัดไม่เกินจำนวนรายการ (กัน remake นับซ้ำ)
+   */
+  async function tryAutoEarnForOrderInternal(
+    orderId: string,
+    actor: ShopActor,
+    now: Date,
+  ): Promise<number> {
+    const order = orders.get(orderId);
+    if (!order || order.status === "cancelled") return 0;
+    if (!order.customerId) return 0;
+    const customer = customers.get(order.customerId);
+    if (!customer || customer.isDeleted || !customer.isActive) return 0;
+    const pid = paymentsByOrder.get(order.id);
+    const pay = pid ? payments.get(pid) : undefined;
+    if (!pay || pay.status !== "paid") return 0;
+    const items = orderItems.get(order.id) ?? [];
+    let earned = 0;
+    for (const item of items) {
+      const menu = menuItems.get(item.menuId);
+      if (!menu || menu.kind !== "drink") continue;
+      if (item.unitPrice <= 0) continue;
+      let eligible: number;
+      if (order.status === "completed") {
+        eligible = item.quantity;
+      } else {
+        let delivered = 0;
+        for (const j of queueJobs.values()) {
+          if (
+            j.orderId === order.id &&
+            j.orderItemId === item.id &&
+            j.station === "drink" &&
+            j.rewardRedemptionId === null &&
+            j.status !== "cancelled"
+          ) {
+            delivered += j.deliveredQty;
+          }
+        }
+        eligible = Math.min(item.quantity, delivered);
+      }
+      const todo = eligible - earnedForOrderItem(item.id);
+      if (todo <= 0) continue;
+      const points = todo * LOYALTY_POINTS_PER_DRINK_UNIT;
+      const tx = appendLoyaltyTx(
+        {
+          customerId: customer.id,
+          points,
+          source: "order",
+          orderId: order.id,
+          paymentId: pay.id,
+          orderItemId: item.id,
+          redemptionId: null,
+          walkinTokenId: null,
+          reason: `สะสมจากคำสั่งซื้อ ${order.orderNumber} (${item.menuName} ×${todo})`,
+          actorId: actor.actorId ?? null,
+          actorUsername: actor.actorUsername ?? null,
+        },
+        now,
+      );
+      await writeAudit(loyaltyEarnedEvent(tx, actor));
+      earned += points;
+    }
+    return earned;
+  }
+
+  /**
+   * ย้อนคะแนนเมื่อคืนเงินแบบ idempotent (refund เดิมเรียกซ้ำ = คืนของเดิม):
+   * - ย้อนเฉพาะคะแนน earn (source order) ที่สะสมไปแล้วของคำสั่งซื้อนี้
+   * - append-only (ติดลบได้) รักษาประวัติเดิม ไม่ลบธุรกรรม
+   */
+  async function reversePointsOnRefundInternal(
+    orderId: string,
+    refundId: string,
+    actor: ShopActor,
+    now: Date,
+  ): Promise<{ reversal: LoyaltyReversal; deduplicated: boolean }> {
+    const existingId = reversalsByRefund.get(refundId);
+    if (existingId) {
+      return { reversal: { ...reversals.get(existingId)! }, deduplicated: true };
+    }
+    const order = orders.get(orderId);
+    if (!order) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+    const customerId = order.customerId ?? "";
+    let earned = 0;
+    if (customerId) {
+      for (const e of loyaltyLedger) {
+        if (e.orderId === orderId && e.source === "order" && e.customerId === customerId) {
+          earned += e.points;
+        }
+      }
+    }
+    if (earned > 0 && customerId) {
+      appendLoyaltyTx(
+        {
+          customerId,
+          points: -earned,
+          source: "refund",
+          orderId,
+          paymentId: null,
+          orderItemId: null,
+          redemptionId: null,
+          walkinTokenId: null,
+          reason: `ย้อนคะแนนจากคำสั่งซื้อ ${order.orderNumber} ที่คืนเงิน`,
+          actorId: actor.actorId ?? null,
+          actorUsername: actor.actorUsername ?? null,
+        },
+        now,
+      );
+    }
+    const at = now.toISOString();
+    const reversal: LoyaltyReversal = {
+      id: randomUUID(),
+      orderId,
+      refundId,
+      customerId,
+      points: earned,
+      createdAt: at,
+    };
+    reversals.set(reversal.id, { ...reversal });
+    reversalsByRefund.set(refundId, reversal.id);
+    await writeAudit(pointsReversedEvent(orderId, customerId || "-", earned, refundId, actor));
+    return { reversal: { ...reversal }, deduplicated: false };
   }
 
   interface InventoryStateBackup extends ShopStateBackup {
@@ -2054,6 +2470,9 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
         }
         if (prefix === "payment_") return a.action.startsWith("payment_");
         if (prefix === "queue_") return a.action.startsWith("queue_");
+        if (prefix === "loyalty_") {
+          return a.action.startsWith("loyalty_") || a.action.startsWith("reward_");
+        }
         return !a.action.startsWith("login_");
       });
       return items.slice(0, limit);
@@ -2844,7 +3263,9 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
     },
     async updateOrderStatus(id, patch, actor) {
       return runOrderExclusive(async () => {
-        const backup = backupOrders();
+        // ใช้ backupPayments (superset ของ backupOrders) เพราะ hook สะสมคะแนน
+        // ตอน completed เขียน loyalty ledger ใน seam เดียวกัน
+        const backup = backupPayments();
         try {
           const current = orders.get(id);
           if (!current) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
@@ -2865,9 +3286,13 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
           if (to === "cancelled" && before.status === "pending_payment" && current.stockReserved && !current.stockConsumed) {
             await writeAudit(orderStockReleasedEvent(after.orderNumber, after.id, reason, actor));
           }
+          // Ticket 10: ปิดงาน completed เข้าเงื่อนไขสะสมคะแนนส่วนที่เหลือ (exactly-once)
+          if (to === "completed") {
+            await tryAutoEarnForOrderInternal(current.id, actor, new Date());
+          }
           return after;
         } catch (err) {
-          restoreOrders(backup);
+          restorePayments(backup);
           throw err;
         }
       });
@@ -3694,6 +4119,8 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
           };
           refunds.set(refund.id, { ...refund });
           await writeAudit(paymentRefundApprovedEvent({ ...current }, refund.id, reason, actor));
+          // Ticket 10: คืนเงินต้องย้อนคะแนน earn ที่เกี่ยวข้อง (กัน double-reversal)
+          await reversePointsOnRefundInternal(order.id, refund.id, actor, now);
           return { payment: { ...current }, refund: { ...refund } };
         } catch (err) {
           restorePayments(backup);
@@ -3786,7 +4213,8 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
           job.claimedBy = actor.actorUsername ?? actor.actorId ?? null;
           job.updatedAt = now.toISOString();
           // ตัดสต๊อกจริงครั้งแรกของคำสั่งซื้อ (ครั้งเดียว — เรียกซ้ำ/งานอื่นเป็น no-op)
-          const order = orders.get(job.orderId);
+          // งานรางวัล (orderId null) ตัดสต๊อกแล้วตอนร้านรับแลก จึงข้ามขั้นนี้
+          const order = job.orderId ? orders.get(job.orderId) : undefined;
           if (order && order.stockReserved && !order.stockConsumed) {
             const usage = orderStockUsage.get(order.id) ?? [];
             for (const u of usage) {
@@ -3881,6 +4309,11 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
           await writeAudit(
             queueStatusChangedEvent(before, { ...job }, `ส่งมอบ ${qty} รายการ`, actor),
           );
+          // Ticket 10: ส่งมอบแล้วเข้าเงื่อนไขสะสมคะแนน (exactly-once — ซ้ำเป็น no-op)
+          // งานรางวัล (orderId null) ไม่ได้คะแนน — helper ข้ามเอง
+          if (job.orderId !== null) {
+            await tryAutoEarnForOrderInternal(job.orderId, actor, now);
+          }
           return toQueueDetail(id)!;
         } catch (err) {
           restorePayments(backup);
@@ -3953,12 +4386,16 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
             isPriority: false,
             reason,
             claimedBy: null,
+            rewardRedemptionId: original.rewardRedemptionId,
             createdAt: at,
             updatedAt: at,
           };
           queueJobs.set(remake.id, remake);
-          const orderList = queueByOrder.get(remake.orderId) ?? [];
-          queueByOrder.set(remake.orderId, [...orderList, remake.id]);
+          // งานรางวัล (orderId null) ไม่ผูกคำสั่งซื้อ — ข้ามดัชนีรายคำสั่งซื้อ
+          if (remake.orderId !== null) {
+            const orderList = queueByOrder.get(remake.orderId) ?? [];
+            queueByOrder.set(remake.orderId, [...orderList, remake.id]);
+          }
           await writeAudit(queueRemadeEvent({ ...original }, { ...remake }, reason, actor));
           return toQueueDetail(remake.id)!;
         } catch (err) {
@@ -3973,6 +4410,10 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
         try {
           const job = queueJobs.get(id);
           if (!job) throw new NotFoundError("ไม่พบงานคิว");
+          // งานรางวัล (ไม่ผูกคำสั่งซื้อ) ยกเลิกผ่านการคืนคะแนนแลก ไม่ใช่ช่องทางนี้
+          if (job.orderId === null || job.rewardRedemptionId !== null) {
+            throw new ConflictError("งานรางวัลยกเลิกได้ผ่านการคืนคะแนนแลกเท่านั้น");
+          }
           const order = orders.get(job.orderId);
           if (!order) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
           if (order.stockConsumed) {
@@ -4074,6 +4515,601 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
         }
       }
       return null;
+    },
+    // ---- Ticket 10 memory: คะแนนสะสมและรางวัล (immutable ledger + idempotent) ----
+    async earnPointsForOrder(orderId, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const earned = await tryAutoEarnForOrderInternal(orderId, actor, now);
+          return { earned, deduplicated: earned === 0 };
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async getLoyaltyBalance(customerId) {
+      if (!customers.has(customerId)) throw new NotFoundError("ไม่พบบัญชีลูกค้า");
+      return loyaltyBalanceOf(customerId);
+    },
+    async listLoyaltyLedger(customerId, limit) {
+      if (!customers.has(customerId)) throw new NotFoundError("ไม่พบบัญชีลูกค้า");
+      const n = Math.min(Math.max(limit || 50, 1), 200);
+      return [...loyaltyLedger]
+        .filter((e) => e.customerId === customerId)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, n)
+        .map((e) => ({ ...e }));
+    },
+    async createReward(input, actor) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const name = normalizeRewardName(input.name);
+          const imageUrl = normalizeRewardImageUrl(input.imageUrl ?? null);
+          const pointsCost = normalizeRewardPointsCost(input.pointsCost);
+          const quotaTotal = normalizeRewardQuotaTotal(input.quotaTotal ?? null);
+          const menu = menuItems.get(input.menuId);
+          if (!menu) throw new NotFoundError("ไม่พบเมนูอ้างอิง");
+          if (menu.kind !== "drink") throw new ConflictError("รางวัลแลกได้เฉพาะเมนูเครื่องดื่มเท่านั้น");
+          if (menu.isArchived) throw new ConflictError("เมนูนี้ถูก archive แล้ว ใช้เป็นรางวัลไม่ได้");
+          const startsAt = input.startsAt ?? null;
+          const endsAt = input.endsAt ?? null;
+          if (startsAt !== null && Number.isNaN(new Date(startsAt).getTime())) {
+            throw new Error("วันเริ่มแลกไม่ถูกต้อง");
+          }
+          if (endsAt !== null && Number.isNaN(new Date(endsAt).getTime())) {
+            throw new Error("วันหมดเขตแลกไม่ถูกต้อง");
+          }
+          if (startsAt !== null && endsAt !== null && new Date(startsAt).getTime() > new Date(endsAt).getTime()) {
+            throw new Error("วันเริ่มแลกต้องไม่หลังวันหมดเขตแลก");
+          }
+          const at = nowIso();
+          const reward: Reward = {
+            id: randomUUID(),
+            name,
+            imageUrl,
+            menuId: menu.id,
+            menuName: menu.name,
+            pointsCost,
+            quotaTotal,
+            quotaUsed: 0,
+            startsAt,
+            endsAt,
+            isActive: input.isActive ?? true,
+            createdAt: at,
+            updatedAt: at,
+          };
+          rewards.set(reward.id, reward);
+          await writeAudit(rewardCreatedEvent({ ...reward }, actor));
+          return { ...reward };
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async listRewards() {
+      return [...rewards.values()]
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .map((r) => ({ ...r }));
+    },
+    async listRedeemableRewards(now = new Date()) {
+      return [...rewards.values()]
+        .filter((r) => rewardBlockReason(r, now) === null)
+        .sort((a, b) => a.pointsCost - b.pointsCost || a.name.localeCompare(b.name, "th"))
+        .map((r) => ({ ...r }));
+    },
+    async getReward(id) {
+      const r = rewards.get(id);
+      return r ? { ...r } : null;
+    },
+    async updateReward(id, patch, actor) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const current = rewards.get(id);
+          if (!current) throw new NotFoundError("ไม่พบรางวัล");
+          const before = { pointsCost: current.pointsCost, quotaTotal: current.quotaTotal };
+          let touched = false;
+          let statusOnly = true;
+          if (patch.name !== undefined) {
+            current.name = normalizeRewardName(patch.name);
+            touched = true;
+            statusOnly = false;
+          }
+          if (patch.imageUrl !== undefined) {
+            current.imageUrl = normalizeRewardImageUrl(patch.imageUrl);
+            touched = true;
+            statusOnly = false;
+          }
+          if (patch.pointsCost !== undefined) {
+            current.pointsCost = normalizeRewardPointsCost(patch.pointsCost);
+            touched = true;
+            statusOnly = false;
+          }
+          if (patch.quotaTotal !== undefined) {
+            const q = normalizeRewardQuotaTotal(patch.quotaTotal);
+            if (q !== null && q < current.quotaUsed) {
+              throw new ConflictError(`จำนวนสิทธิ์ต้องไม่น้อยกว่าที่ใช้ไปแล้ว (${current.quotaUsed})`);
+            }
+            current.quotaTotal = q;
+            touched = true;
+            statusOnly = false;
+          }
+          if (patch.startsAt !== undefined) {
+            const v = patch.startsAt;
+            if (v !== null && Number.isNaN(new Date(v).getTime())) throw new Error("วันเริ่มแลกไม่ถูกต้อง");
+            current.startsAt = v;
+            touched = true;
+            statusOnly = false;
+          }
+          if (patch.endsAt !== undefined) {
+            const v = patch.endsAt;
+            if (v !== null && Number.isNaN(new Date(v).getTime())) throw new Error("วันหมดเขตแลกไม่ถูกต้อง");
+            current.endsAt = v;
+            touched = true;
+            statusOnly = false;
+          }
+          if (
+            current.startsAt !== null &&
+            current.endsAt !== null &&
+            new Date(current.startsAt).getTime() > new Date(current.endsAt).getTime()
+          ) {
+            throw new Error("วันเริ่มแลกต้องไม่หลังวันหมดเขตแลก");
+          }
+          if (patch.isActive !== undefined) {
+            if (typeof patch.isActive !== "boolean") throw new Error("สถานะรางวัลไม่ถูกต้อง");
+            current.isActive = patch.isActive;
+            touched = true;
+          }
+          if (!touched) return { ...current };
+          current.updatedAt = nowIso();
+          if (statusOnly) {
+            await writeAudit(rewardStatusChangedEvent({ ...current }, actor));
+          } else {
+            await writeAudit(rewardUpdatedEvent(before, { ...current }, actor));
+          }
+          return { ...current };
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async redeemReserve(input, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const key = normalizeLoyaltyIdempotencyKey(input.idempotencyKey);
+          const hash = redemptionPayloadHash({ customerId: input.customerId, rewardId: input.rewardId });
+          const existingId = redemptionsByIdem.get(key);
+          if (existingId) {
+            const ex = redemptions.get(existingId)!;
+            if (redemptionPayloadHash({ customerId: ex.customerId, rewardId: ex.rewardId }) !== hash) {
+              throw new ConflictError("คำขอนี้ถูกใช้แลกไปแล้ว กรุณาสร้างคำขอใหม่");
+            }
+            return { redemption: { ...ex }, deduplicated: true };
+          }
+          const customer = customers.get(input.customerId);
+          if (!customer || customer.isDeleted || !customer.isActive) {
+            throw new ConflictError("บัญชีลูกค้าใช้งานไม่ได้ กรุณาเข้าสู่ระบบใหม่");
+          }
+          const reward = rewards.get(input.rewardId);
+          if (!reward) throw new NotFoundError("ไม่พบรางวัล");
+          const blocked = rewardBlockReason(reward, now);
+          if (blocked) throw new ConflictError(blocked);
+          if (reward.quotaTotal !== null && reward.quotaUsed + rewardHeldCount(reward.id) >= reward.quotaTotal) {
+            throw new ConflictError("สิทธิ์แลกของรางวัลนี้หมดแล้ว");
+          }
+          const balance = loyaltyBalanceOf(customer.id);
+          const held = loyaltyHeldOf(customer.id);
+          if (balance - held < reward.pointsCost) {
+            throw new ConflictError(
+              `คะแนนไม่พอแลก (ใช้ ${reward.pointsCost} แต้ม คงเหลือใช้ได้ ${balance - held} แต้ม)`,
+            );
+          }
+          if (!isMenuOrderable(reward.menuId, 1)) {
+            throw new ConflictError("วัตถุดิบสำหรับรางวัลนี้ไม่พอชั่วคราว กรุณาลองใหม่ภายหลัง");
+          }
+          const reason = input.reason === undefined || input.reason === null || input.reason === ""
+            ? "แลกคะแนนเป็นเครื่องดื่ม"
+            : normalizeLoyaltyReason(input.reason);
+          let code = generateRedemptionCode();
+          for (let i = 0; i < 5 && redemptionsByCode.has(code); i += 1) {
+            code = generateRedemptionCode();
+          }
+          if (redemptionsByCode.has(code)) {
+            throw new ConflictError("สร้างรหัสแลกไม่สำเร็จ กรุณาลองใหม่อีกครั้ง");
+          }
+          const at = now.toISOString();
+          const redemption: RewardRedemption = {
+            id: randomUUID(),
+            code,
+            customerId: customer.id,
+            rewardId: reward.id,
+            rewardName: reward.name,
+            menuId: reward.menuId,
+            menuName: reward.menuName,
+            pointsCost: reward.pointsCost,
+            status: "reserved",
+            idempotencyKey: key,
+            queueJobId: null,
+            reason,
+            createdAt: at,
+            updatedAt: at,
+          };
+          redemptions.set(redemption.id, redemption);
+          redemptionsByIdem.set(key, redemption.id);
+          redemptionsByCode.set(code, redemption.id);
+          await writeAudit(redemptionReservedEvent({ ...redemption }, balance - held - reward.pointsCost, actor));
+          return { redemption: { ...redemption }, deduplicated: false };
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async getRedemption(id) {
+      const r = redemptions.get(id);
+      return r ? { ...r } : null;
+    },
+    async listCustomerRedemptions(customerId, limit) {
+      const n = Math.min(Math.max(limit || 50, 1), 200);
+      return [...redemptions.values()]
+        .filter((r) => r.customerId === customerId)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, n)
+        .map((r) => ({ ...r }));
+    },
+    async listPendingRedemptions(limit) {
+      const n = Math.min(Math.max(limit || 50, 1), 200);
+      return [...redemptions.values()]
+        .filter((r) => r.status === "reserved")
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+        .slice(0, n)
+        .map((r) => ({ ...r }));
+    },
+    async redeemConsume(id, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const current = redemptions.get(id);
+          if (!current) throw new NotFoundError("ไม่พบรายการแลก");
+          if (current.status === "consumed") {
+            const jobId = rewardJobsByRedemption.get(current.id) ?? current.queueJobId;
+            if (!jobId) throw new Error("งานคิวของรายการแลกนี้หายไป");
+            return { redemption: { ...current }, job: toQueueDetail(jobId)! };
+          }
+          assertRedemptionTransition(current.status, "consumed");
+          const reward = rewards.get(current.rewardId);
+          if (!reward) throw new NotFoundError("ไม่พบรางวัล");
+          if (!reward.isActive) throw new ConflictError("รางวัลนี้ปิดรับแลกแล้ว");
+          if (!isMenuOrderable(current.menuId, 1)) {
+            throw new ConflictError("วัตถุดิบหมดชั่วคราว รับรายการไม่ได้ กรุณาคืนคะแนนให้ลูกค้า");
+          }
+          // ตัดสต๊อกจริง 1 หน่วย (ครั้งเดียว — บันทึก ledger ผูก redemption)
+          const recipe = latestRecipeOf("menu", current.menuId);
+          if (recipe) {
+            for (const line of recipe.lines) {
+              const ing = ingredients.get(line.ingredientId);
+              if (!ing) continue;
+              const need = roundStock(line.qty);
+              if (roundStock(ing.onHand - ing.reserved) < need || roundStock(ing.onHand - need) < 0) {
+                throw new ConflictError("วัตถุดิบหมดชั่วคราว รับรายการไม่ได้ กรุณาคืนคะแนนให้ลูกค้า");
+              }
+            }
+            for (const line of recipe.lines) {
+              const ing = ingredients.get(line.ingredientId);
+              if (!ing) continue;
+              const need = roundStock(line.qty);
+              const beforeOnHand = ing.onHand;
+              const beforeReserved = ing.reserved;
+              ing.onHand = roundStock(ing.onHand - need);
+              ing.updatedAt = nowIso();
+              stockLedger.push({
+                id: randomUUID(),
+                ingredientId: ing.id,
+                op: "consume",
+                deltaOnHand: -need,
+                deltaReserved: 0,
+                beforeOnHand,
+                afterOnHand: ing.onHand,
+                beforeReserved,
+                afterReserved: ing.reserved,
+                reason: `ตัดใช้จริงให้รางวัลแลก ${current.code} (${current.menuName} ×1)`,
+                actorId: actor.actorId ?? null,
+                actorUsername: actor.actorUsername ?? null,
+                orderId: null,
+                reference: current.code,
+                createdAt: nowIso(),
+              });
+            }
+          }
+          const at = now.toISOString();
+          const job: QueueJob = {
+            id: randomUUID(),
+            orderId: null,
+            orderNumber: current.code,
+            paymentId: null,
+            orderItemId: "",
+            menuId: current.menuId,
+            menuName: current.menuName,
+            station: "drink",
+            quantity: 1,
+            readyQty: 0,
+            deliveredQty: 0,
+            status: "queued",
+            readyAt: at,
+            tableId: null,
+            roundId: null,
+            isRemake: false,
+            isPriority: false,
+            reason: null,
+            claimedBy: null,
+            rewardRedemptionId: current.id,
+            createdAt: at,
+            updatedAt: at,
+          };
+          queueJobs.set(job.id, job);
+          rewardJobsByRedemption.set(current.id, job.id);
+          await writeAudit(queueCreatedEvent({ ...job }, actor));
+          current.status = "consumed";
+          current.queueJobId = job.id;
+          current.updatedAt = at;
+          reward.quotaUsed += 1;
+          reward.updatedAt = at;
+          appendLoyaltyTx(
+            {
+              customerId: current.customerId,
+              points: -current.pointsCost,
+              source: "reward_consume",
+              orderId: null,
+              paymentId: null,
+              orderItemId: null,
+              redemptionId: current.id,
+              walkinTokenId: null,
+              reason: `แลก ${current.rewardName} (${current.code})`,
+              actorId: actor.actorId ?? null,
+              actorUsername: actor.actorUsername ?? null,
+            },
+            now,
+          );
+          await writeAudit(redemptionConsumedEvent({ ...current }, job.id, actor));
+          return { redemption: { ...current }, job: toQueueDetail(job.id)! };
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async redeemRelease(id, input, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const current = redemptions.get(id);
+          if (!current) throw new NotFoundError("ไม่พบรายการแลก");
+          if (current.status === "released") {
+            return { redemption: { ...current }, deduplicated: true };
+          }
+          assertRedemptionTransition(current.status, "released");
+          const reason = normalizeLoyaltyReason(input.reason);
+          current.status = "released";
+          current.reason = reason;
+          current.updatedAt = now.toISOString();
+          await writeAudit(redemptionReleasedEvent({ ...current }, reason, actor));
+          return { redemption: { ...current }, deduplicated: false };
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async issueWalkinQr(actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          let token = generateWalkinToken();
+          let code = buildWalkinCode(token);
+          for (let i = 0; i < 5 && walkinsByCode.has(code); i += 1) {
+            token = generateWalkinToken();
+            code = buildWalkinCode(token);
+          }
+          if (walkinsByCode.has(code)) {
+            throw new ConflictError("สร้าง QR ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง");
+          }
+          const at = now.toISOString();
+          const row: WalkinQrToken = {
+            id: randomUUID(),
+            code,
+            createdBy: actor.actorUsername ?? actor.actorId ?? null,
+            createdAt: at,
+            expiresAt: new Date(now.getTime() + WALKIN_QR_TTL_MINUTES * 60 * 1000).toISOString(),
+            redeemedAt: null,
+            redeemedBy: null,
+          };
+          walkinTokens.set(row.id, row);
+          walkinsByCode.set(code, row.id);
+          await writeAudit(walkinIssuedEvent({ ...row }, actor));
+          return { ...row };
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async redeemWalkinQr(input, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const code = normalizeWalkinCode(input.code);
+          const tokenId = walkinsByCode.get(code);
+          if (!tokenId) throw new NotFoundError("ไม่พบรหัส QR นี้");
+          const token = walkinTokens.get(tokenId)!;
+          if (token.redeemedAt) throw new ConflictError("QR นี้ถูกใช้ไปแล้ว");
+          if (new Date(token.expiresAt).getTime() < now.getTime()) {
+            throw new ConflictError("QR นี้หมดอายุแล้ว (อายุ 10 นาที)");
+          }
+          const customer = customers.get(input.customerId);
+          if (!customer || customer.isDeleted || !customer.isActive) {
+            throw new ConflictError("บัญชีลูกค้าใช้งานไม่ได้ กรุณาเข้าสู่ระบบใหม่");
+          }
+          token.redeemedAt = now.toISOString();
+          token.redeemedBy = customer.id;
+          const tx = appendLoyaltyTx(
+            {
+              customerId: customer.id,
+              points: LOYALTY_POINTS_PER_DRINK_UNIT,
+              source: "walkin",
+              orderId: null,
+              paymentId: null,
+              orderItemId: null,
+              redemptionId: null,
+              walkinTokenId: token.id,
+              reason: `สแกน QR Walk-in ${token.code}`,
+              actorId: actor.actorId ?? null,
+              actorUsername: actor.actorUsername ?? null,
+            },
+            now,
+          );
+          await writeAudit(walkinRedeemedEvent({ ...token }, customer.id, actor));
+          await writeAudit(loyaltyEarnedEvent(tx, actor));
+          return { token: { ...token }, earned: LOYALTY_POINTS_PER_DRINK_UNIT };
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async linkGuestOrder(input, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const order = orders.get(input.orderId);
+          if (!order) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+          if (order.customerId !== null) throw new ConflictError("คำสั่งซื้อนี้ผูกบัญชีแล้ว");
+          if (!order.guestPhone) throw new ConflictError("คำสั่งซื้อนี้ไม่ใช่ของ Guest");
+          if (guestClaimsByOrder.has(order.id)) throw new ConflictError("คำสั่งซื้อนี้ถูกผูกบัญชีไปแล้ว");
+          const customer = customers.get(input.customerId);
+          if (!customer || customer.isDeleted || !customer.isActive) {
+            throw new ConflictError("บัญชีลูกค้าใช้งานไม่ได้ กรุณาเข้าสู่ระบบใหม่");
+          }
+          if (!customer.phone || normalizeThaiPhone(order.guestPhone) !== customer.phone) {
+            throw new ConflictError("เบอร์โทรของคำสั่งซื้อนี้ไม่ตรงกับบัญชี กรุณาตรวจสอบอีกครั้ง");
+          }
+          const ageMs = now.getTime() - new Date(order.createdAt).getTime();
+          if (ageMs > GUEST_LINK_WINDOW_HOURS * 60 * 60 * 1000) {
+            throw new ConflictError("เกิน 24 ชั่วโมงหลังยืนยันคำสั่งซื้อ ผูกบัญชีไม่ได้แล้ว");
+          }
+          order.customerId = customer.id;
+          order.updatedAt = now.toISOString();
+          const at = now.toISOString();
+          const claim: GuestLinkClaim = {
+            id: randomUUID(),
+            orderId: order.id,
+            customerId: customer.id,
+            guestPhone: customer.phone,
+            claimedAt: at,
+          };
+          guestClaims.set(claim.id, claim);
+          guestClaimsByOrder.set(order.id, claim.id);
+          await writeAudit(guestLinkedEvent(order.id, customer.id, actor));
+          // รับเฉพาะคะแนนที่ยังไม่มีผู้รับ (helper กัน double-earn เอง)
+          const earned = await tryAutoEarnForOrderInternal(order.id, actor, now);
+          return { order: toDetail(order.id)!, earned };
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async mergeCustomerAccounts(input, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          if (input.sourceCustomerId === input.targetCustomerId) {
+            throw new ConflictError("บัญชีต้นทางและปลายทางต้องเป็นคนละบัญชี");
+          }
+          const pairKey = `${input.sourceCustomerId}|${input.targetCustomerId}`;
+          const dupId = mergesByPair.get(pairKey);
+          if (dupId) {
+            return { record: { ...merges.get(dupId)! }, movedPoints: 0, deduplicated: true };
+          }
+          const source = customers.get(input.sourceCustomerId);
+          const target = customers.get(input.targetCustomerId);
+          if (!source) throw new NotFoundError("ไม่พบบัญชีต้นทาง");
+          if (!target || target.isDeleted || !target.isActive) {
+            throw new ConflictError("บัญชีปลายทางใช้งานไม่ได้");
+          }
+          if (source.isDeleted || !source.isActive) {
+            throw new ConflictError("บัญชีต้นทางถูกปิดหรือรวมไปแล้ว");
+          }
+          const movedPoints = loyaltyBalanceOf(source.id);
+          for (const e of loyaltyLedger) {
+            if (e.customerId === source.id) e.customerId = target.id;
+          }
+          for (const r of redemptions.values()) {
+            if (r.customerId === source.id) r.customerId = target.id;
+          }
+          for (const c of guestClaims.values()) {
+            if (c.customerId === source.id) c.customerId = target.id;
+          }
+          // ย้าย LINE link เฉพาะเมื่อปลายทางยังไม่มี (กันขัดแย้ง 1:1)
+          const sourceLink = lineLinks.get(source.id);
+          if (sourceLink && !lineLinks.get(target.id)) {
+            lineLinksBySubject.delete(`line:${sourceLink.providerSubject}`);
+            const moved: CustomerLineLink = { ...sourceLink, customerId: target.id };
+            lineLinks.delete(source.id);
+            lineLinks.set(target.id, moved);
+            lineLinksBySubject.set(`line:${moved.providerSubject}`, target.id);
+          } else if (sourceLink) {
+            lineLinksBySubject.delete(`line:${sourceLink.providerSubject}`);
+            lineLinks.delete(source.id);
+          }
+          // ปิดบัญชีต้นทางแบบนิรนาม (คง id ภายในไว้รักษาประวัติ)
+          if (source.phone) customersByPhone.delete(source.phone);
+          if (source.email) customersByEmail.delete(source.email);
+          source.name = "ลูกค้าที่รวมบัญชีแล้ว";
+          source.phone = null;
+          source.email = null;
+          source.passwordHash = `merged:${source.id}`;
+          source.isActive = false;
+          source.isDeleted = true;
+          source.updatedAt = now.toISOString();
+          source.deletedAt = now.toISOString();
+          for (const [sid, s] of customerSessions) {
+            if (s.customerId === source.id) customerSessions.delete(sid);
+          }
+          const at = now.toISOString();
+          const record: CustomerMergeRecord = {
+            id: randomUUID(),
+            sourceCustomerId: source.id,
+            targetCustomerId: target.id,
+            approvedBy: actor.actorUsername ?? actor.actorId ?? null,
+            createdAt: at,
+          };
+          merges.set(record.id, { ...record });
+          mergesByPair.set(pairKey, record.id);
+          await writeAudit(accountMergedEvent(source.id, target.id, movedPoints, actor));
+          return { record: { ...record }, movedPoints, deduplicated: false };
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    async reversePointsOnRefund(orderId, refundId, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          if (!refunds.has(refundId)) throw new NotFoundError("ไม่พบคำขอคืนเงิน");
+          return await reversePointsOnRefundInternal(orderId, refundId, actor, now);
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
     },
     // ---- Ticket 06 memory: การจอง + รอบการใช้โต๊ะ (all-or-nothing + serialize กันชน) ----
     async createReservation(input, actor, now = new Date()) {
@@ -4418,6 +5454,8 @@ const MIGRATION_FILES = [
   "007_reservations.sql",
   "008_menu_options_recipes_inventory.sql",
   "009_payments_receipts_refunds.sql",
+  "010_kitchen_drink_queues.sql",
+  "011_loyalty_rewards.sql",
 ];
 
 export function findMigrationFile(name = MIGRATION_FILES[0]!): string {
@@ -4741,10 +5779,10 @@ function rowToQueueJob(r: Record<string, unknown>): QueueJob {
   }
   return {
     id: String(r["id"]),
-    orderId: String(r["order_id"]),
+    orderId: r["order_id"] == null ? null : String(r["order_id"]),
     orderNumber: String(r["order_number"]),
-    paymentId: String(r["payment_id"]),
-    orderItemId: String(r["order_item_id"]),
+    paymentId: r["payment_id"] == null ? null : String(r["payment_id"]),
+    orderItemId: r["order_item_id"] == null ? "" : String(r["order_item_id"]),
     menuId: String(r["menu_id"]),
     menuName: String(r["menu_name"]),
     station,
@@ -4759,14 +5797,127 @@ function rowToQueueJob(r: Record<string, unknown>): QueueJob {
     isPriority: Number(r["is_priority"] ?? 0) === 1,
     reason: r["reason"] == null ? null : String(r["reason"]),
     claimedBy: r["claimed_by"] == null ? null : String(r["claimed_by"]),
+    // Ticket 10: คอลัมน์รางวัล (แถวเก่าก่อน migration 011 ถือว่าไม่ใช่งานรางวัล)
+    rewardRedemptionId: r["reward_redemption_id"] == null ? null : String(r["reward_redemption_id"]),
     createdAt: new Date(r["created_at"] as string).toISOString(),
     updatedAt: new Date(r["updated_at"] as string).toISOString(),
   };
 }
 
+// ---- Ticket 10: converters แถว loyalty/rewards (ใช้ทั้ง seams ใน createMysqlStore) ----
+
+function rowToLoyaltyTx(r: Record<string, unknown>): LoyaltyTransaction {
+  const source = String(r["source"]);
+  if (
+    source !== "order" && source !== "walkin" && source !== "reward_reserve" &&
+    source !== "reward_consume" && source !== "reward_release" &&
+    source !== "refund" && source !== "merge" && source !== "adjust"
+  ) {
+    throw new Error("แหล่งที่มาธุรกรรมคะแนนในฐานข้อมูลไม่ถูกต้อง");
+  }
+  return {
+    id: String(r["id"]),
+    customerId: String(r["customer_id"]),
+    points: Number(r["points"]),
+    source: source as LoyaltySource,
+    orderId: r["order_id"] == null ? null : String(r["order_id"]),
+    paymentId: r["payment_id"] == null ? null : String(r["payment_id"]),
+    orderItemId: r["order_item_id"] == null ? null : String(r["order_item_id"]),
+    redemptionId: r["redemption_id"] == null ? null : String(r["redemption_id"]),
+    walkinTokenId: r["walkin_token_id"] == null ? null : String(r["walkin_token_id"]),
+    reason: r["reason"] == null ? "" : String(r["reason"]),
+    actorId: r["actor_id"] == null ? null : String(r["actor_id"]),
+    actorUsername: r["actor_username"] == null ? null : String(r["actor_username"]),
+    createdAt: new Date(r["created_at"] as string).toISOString(),
+  };
+}
+
+function rowToReward(r: Record<string, unknown>): Reward {
+  return {
+    id: String(r["id"]),
+    name: String(r["name"]),
+    imageUrl: r["image_url"] == null ? null : String(r["image_url"]),
+    menuId: String(r["menu_id"]),
+    menuName: String(r["menu_name"]),
+    pointsCost: Number(r["points_cost"]),
+    quotaTotal: r["quota_total"] == null ? null : Number(r["quota_total"]),
+    quotaUsed: Number(r["quota_used"] ?? 0),
+    startsAt: r["starts_at"] == null ? null : new Date(r["starts_at"] as string).toISOString(),
+    endsAt: r["ends_at"] == null ? null : new Date(r["ends_at"] as string).toISOString(),
+    isActive: Number(r["is_active"]) === 1,
+    createdAt: new Date(r["created_at"] as string).toISOString(),
+    updatedAt: new Date(r["updated_at"] as string).toISOString(),
+  };
+}
+
+function rowToRedemption(r: Record<string, unknown>): RewardRedemption {
+  const status = String(r["status"]);
+  if (status !== "reserved" && status !== "consumed" && status !== "released") {
+    throw new Error("สถานะการแลกในฐานข้อมูลไม่ถูกต้อง");
+  }
+  return {
+    id: String(r["id"]),
+    code: String(r["code"]),
+    customerId: String(r["customer_id"]),
+    rewardId: String(r["reward_id"]),
+    rewardName: String(r["reward_name"]),
+    menuId: String(r["menu_id"]),
+    menuName: String(r["menu_name"]),
+    pointsCost: Number(r["points_cost"]),
+    status: status as RedemptionStatus,
+    idempotencyKey: String(r["idempotency_key"]),
+    queueJobId: r["queue_job_id"] == null ? null : String(r["queue_job_id"]),
+    reason: r["reason"] == null ? null : String(r["reason"]),
+    createdAt: new Date(r["created_at"] as string).toISOString(),
+    updatedAt: new Date(r["updated_at"] as string).toISOString(),
+  };
+}
+
+function rowToWalkin(r: Record<string, unknown>): WalkinQrToken {
+  return {
+    id: String(r["id"]),
+    code: String(r["code"]),
+    createdBy: r["created_by"] == null ? null : String(r["created_by"]),
+    createdAt: new Date(r["created_at"] as string).toISOString(),
+    expiresAt: new Date(r["expires_at"] as string).toISOString(),
+    redeemedAt: r["redeemed_at"] == null ? null : new Date(r["redeemed_at"] as string).toISOString(),
+    redeemedBy: r["redeemed_by"] == null ? null : String(r["redeemed_by"]),
+  };
+}
+
+function rowToGuestClaim(r: Record<string, unknown>): GuestLinkClaim {
+  return {
+    id: String(r["id"]),
+    orderId: String(r["order_id"]),
+    customerId: String(r["customer_id"]),
+    guestPhone: String(r["guest_phone"]),
+    claimedAt: new Date(r["claimed_at"] as string).toISOString(),
+  };
+}
+
+function rowToMerge(r: Record<string, unknown>): CustomerMergeRecord {
+  return {
+    id: String(r["id"]),
+    sourceCustomerId: String(r["source_customer_id"]),
+    targetCustomerId: String(r["target_customer_id"]),
+    approvedBy: r["approved_by"] == null ? null : String(r["approved_by"]),
+    createdAt: new Date(r["created_at"] as string).toISOString(),
+  };
+}
+
+function rowToReversal(r: Record<string, unknown>): LoyaltyReversal {
+  return {
+    id: String(r["id"]),
+    orderId: String(r["order_id"]),
+    refundId: String(r["refund_id"]),
+    customerId: String(r["customer_id"]),
+    points: Number(r["points"]),
+    createdAt: new Date(r["created_at"] as string).toISOString(),
+  };
+}
+
 /** สถานะ derived ฝั่งคำสั่งซื้อจาก payment (ไม่เปลี่ยน OrderStatus contract) */
-function paymentToOrderState(status: PaymentStatus | null): OrderPaymentState {
-  if (status === "paid") return "paid";
+function paymentToOrderState(status: PaymentStatus | null): OrderPaymentState {  if (status === "paid") return "paid";
   if (status === "manual_review") return "manual_review";
   if (status === "failed" || status === "cancelled") return "failed";
   if (status === "expired") return "expired";
@@ -5320,6 +6471,8 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
     await insertAuditRow(q, paymentStatusChangedEvent(before, { ...p }, reason, actor));
     // Ticket 09: ชำระสำเร็จสร้าง queue jobs แบบ exactly-once ใน transaction เดียวกัน
     await ensureQueueJobsTx(q, p, detail, actor, now);
+    // Ticket 10: สะสมคะแนนอัตโนมัติแบบ no-op (ยังไม่ส่งมอบ = ไม่เข้าเงื่อนไข)
+    await tryAutoEarnTx(q, detail.id, actor, now);
         const receipt = await readReceiptTx(q, p.id);
     if (!receipt) throw new Error("ออกใบเสร็จไม่สำเร็จ");
     return receipt;
@@ -5402,6 +6555,7 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
         isPriority: false,
         reason: null,
         claimedBy: null,
+        rewardRedemptionId: null,
         createdAt: now.toISOString(),
         updatedAt: now.toISOString(),
       };
@@ -5419,8 +6573,12 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
     return created;
   }
 
-  /** ตรวจว่า order/payment หยุดเดินต่อหรือยัง (คืนเงิน/ยกเลิกแล้ว → 409) */
-  async function assertQueueOrderActiveTx(q: QueryRunner, orderId: string): Promise<Order> {
+  /**
+   * ตรวจว่า order/payment หยุดเดินต่อหรือยัง (คืนเงิน/ยกเลิกแล้ว → 409)
+   * orderId null = งานรางวัล (ไม่ผูกคำสั่งซื้อ — ข้ามการตรวจ)
+   */
+  async function assertQueueOrderActiveTx(q: QueryRunner, orderId: string | null): Promise<Order | null> {
+    if (orderId === null) return null;
     const [oRows] = (await q.query("SELECT * FROM orders WHERE id = ? LIMIT 1", [orderId])) as [
       Record<string, unknown>[],
       unknown,
@@ -5477,6 +6635,304 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
     }
     await q.query("UPDATE orders SET stock_consumed = 1 WHERE id = ?", [order.id]);
     await insertAuditRow(q, orderStockConsumedEvent(order.orderNumber, order.id, actor));
+  }
+
+  // ---- Ticket 10 MySQL helpers: คะแนน/รางวัล (เรียกใน transaction เดียวกับ caller) ----
+
+  async function loyaltyBalanceTx(q: QueryRunner, customerId: string): Promise<number> {
+    const [rows] = (await q.query("SELECT COALESCE(SUM(points), 0) AS s FROM loyalty_transactions WHERE customer_id = ?", [customerId])) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    return Number(rows[0]!["s"] ?? 0);
+  }
+
+  async function loyaltyHeldTx(q: QueryRunner, customerId: string): Promise<number> {
+    const [rows] = (await q.query("SELECT COALESCE(SUM(points_cost), 0) AS s FROM reward_redemptions WHERE customer_id = ? AND status = 'reserved'", [customerId])) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    return Number(rows[0]!["s"] ?? 0);
+  }
+
+  async function rewardHeldCountTx(q: QueryRunner, rewardId: string): Promise<number> {
+    const [rows] = (await q.query("SELECT COUNT(*) AS n FROM reward_redemptions WHERE reward_id = ? AND status = 'reserved'", [rewardId])) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    return Number(rows[0]!["n"] ?? 0);
+  }
+
+  async function earnedForOrderItemTx(q: QueryRunner, orderItemId: string): Promise<number> {
+    const [rows] = (await q.query("SELECT COALESCE(SUM(points), 0) AS s FROM loyalty_transactions WHERE order_item_id = ? AND source = 'order'", [orderItemId])) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    return Number(rows[0]!["s"] ?? 0);
+  }
+
+  async function appendLoyaltyTx(
+    q: QueryRunner,
+    tx: Omit<LoyaltyTransaction, "id" | "createdAt">,
+    now: Date,
+  ): Promise<LoyaltyTransaction> {
+    const id = randomUUID();
+    await q.query(
+      "INSERT INTO loyalty_transactions (id, customer_id, points, source, order_id, payment_id, order_item_id, redemption_id, walkin_token_id, reason, actor_id, actor_username) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [
+        id, tx.customerId, tx.points, tx.source, tx.orderId, tx.paymentId, tx.orderItemId,
+        tx.redemptionId, tx.walkinTokenId, tx.reason, tx.actorId, tx.actorUsername,
+      ],
+    );
+    const [rows] = (await q.query("SELECT * FROM loyalty_transactions WHERE id = ? LIMIT 1", [id])) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    if (rows.length === 0) throw new Error("บันทึกธุรกรรมคะแนนไม่สำเร็จ");
+    void now;
+    return rowToLoyaltyTx(rows[0]!);
+  }
+
+  /** เมนูรับรางวัล 1 หน่วยได้หรือไม่ (สูตรล่าสุดมีพร้อมขายพอ — ไม่มีสูตร = ตรวจผ่าน) */
+  async function isMenuOrderableTx(q: QueryRunner, menuId: string, units: number): Promise<boolean> {
+    const recipe = await readLatestRecipeTx(q, "menu", menuId);
+    if (!recipe) return true;
+    for (const line of recipe.lines) {
+      const [ingRows] = (await q.query("SELECT * FROM ingredients WHERE id = ? LIMIT 1", [line.ingredientId])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      if (ingRows.length === 0) return false;
+      const ing = rowToIngredient(ingRows[0]!);
+      if (!ing.isEnabled) return false;
+      if (roundStock(ing.onHand - ing.reserved) < roundStock(line.qty * units)) return false;
+    }
+    return true;
+  }
+
+  /** ตัดสต๊อกจริง 1 หน่วยให้รางวัลแลก (ตรวจครบก่อนตัด — เรียกใน tx เดียวกับ caller) */
+  async function consumeStockForRewardTx(
+    q: QueryRunner,
+    menuId: string,
+    code: string,
+    menuName: string,
+    actor: ShopActor,
+  ): Promise<void> {
+    const recipe = await readLatestRecipeTx(q, "menu", menuId);
+    if (!recipe) return;
+    const locked = new Map<string, { ing: ReturnType<typeof rowToIngredient>; need: number }>();
+    for (const line of recipe.lines) {
+      const [ingRows] = (await q.query("SELECT * FROM ingredients WHERE id = ? LIMIT 1 FOR UPDATE", [line.ingredientId])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      if (ingRows.length === 0) continue;
+      const ing = rowToIngredient(ingRows[0]!);
+      const need = roundStock(line.qty);
+      if (roundStock(ing.onHand - ing.reserved) < need || roundStock(ing.onHand - need) < 0) {
+        throw new ConflictError("วัตถุดิบหมดชั่วคราว รับรายการไม่ได้ กรุณาคืนคะแนนให้ลูกค้า");
+      }
+      locked.set(ing.id, { ing, need });
+    }
+    for (const { ing, need } of locked.values()) {
+      const afterOnHand = roundStock(ing.onHand - need);
+      await q.query("UPDATE ingredients SET on_hand = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [afterOnHand, ing.id]);
+      await insertLedgerRow(q, {
+        ingredientId: ing.id,
+        op: "consume",
+        deltaOnHand: -need,
+        deltaReserved: 0,
+        beforeOnHand: ing.onHand,
+        afterOnHand,
+        beforeReserved: ing.reserved,
+        afterReserved: ing.reserved,
+        reason: `ตัดใช้จริงให้รางวัลแลก ${code} (${menuName} ×1)`,
+        actorId: actor.actorId ?? null,
+        actorUsername: actor.actorUsername ?? null,
+        orderId: null,
+        reference: code,
+      });
+    }
+  }
+
+  /**
+   * สะสมคะแนนให้คำสั่งซื้อแบบ exactly-once ใน transaction เดียวกับ caller
+   * (เงื่อนไขเดียวกับ memory helper — paid + delivered/completed เฉพาะ drink ราคา > 0)
+   */
+  async function tryAutoEarnTx(
+    q: QueryRunner,
+    orderId: string,
+    actor: ShopActor,
+    now: Date,
+  ): Promise<number> {
+    const [oRows] = (await q.query("SELECT * FROM orders WHERE id = ? LIMIT 1", [orderId])) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    if (oRows.length === 0) return 0;
+    const order = rowToOrder(oRows[0]!);
+    if (order.status === "cancelled" || !order.customerId) return 0;
+    const [cRows] = (await q.query("SELECT * FROM customers WHERE id = ? LIMIT 1", [order.customerId])) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    if (cRows.length === 0) return 0;
+    const customer = rowToCustomer(cRows[0]!);
+    if (customer.isDeleted || !customer.isActive) return 0;
+    const [pRows] = (await q.query("SELECT * FROM payments WHERE order_id = ? LIMIT 1", [order.id])) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    if (pRows.length === 0 || String(pRows[0]!["status"]) !== "paid") return 0;
+    const payId = String(pRows[0]!["id"]);
+    const [iRows] = (await q.query("SELECT * FROM order_items WHERE order_id = ? ORDER BY menu_name ASC", [order.id])) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    const menuIds = [...new Set((iRows as Record<string, unknown>[]).map((r) => String(r["menu_id"])))];
+    const kindByMenu = new Map<string, string>();
+    if (menuIds.length > 0) {
+      const [mRows] = (await q.query(`SELECT id, kind FROM menu_items WHERE id IN (${menuIds.map(() => "?").join(",")})`, menuIds)) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      for (const m of mRows as Record<string, unknown>[]) kindByMenu.set(String(m["id"]), String(m["kind"]));
+    }
+    let earned = 0;
+    for (const r of iRows as Record<string, unknown>[]) {
+      const item = rowToOrderItem(r);
+      if (kindByMenu.get(item.menuId) !== "drink") continue;
+      if (item.unitPrice <= 0) continue;
+      let eligible: number;
+      if (order.status === "completed") {
+        eligible = item.quantity;
+      } else {
+        const [jRows] = (await q.query(
+          "SELECT COALESCE(SUM(delivered_qty), 0) AS d FROM queue_jobs WHERE order_id = ? AND order_item_id = ? AND station = 'drink' AND reward_redemption_id IS NULL AND status <> 'cancelled'",
+          [order.id, item.id],
+        )) as [Record<string, unknown>[], unknown];
+        eligible = Math.min(item.quantity, Number(jRows[0]!["d"] ?? 0));
+      }
+      const todo = eligible - (await earnedForOrderItemTx(q, item.id));
+      if (todo <= 0) continue;
+      const points = todo * LOYALTY_POINTS_PER_DRINK_UNIT;
+      const tx = await appendLoyaltyTx(q, {
+        customerId: customer.id,
+        points,
+        source: "order",
+        orderId: order.id,
+        paymentId: payId,
+        orderItemId: item.id,
+        redemptionId: null,
+        walkinTokenId: null,
+        reason: `สะสมจากคำสั่งซื้อ ${order.orderNumber} (${item.menuName} ×${todo})`,
+        actorId: actor.actorId ?? null,
+        actorUsername: actor.actorUsername ?? null,
+      }, now);
+      await insertAuditRow(q, loyaltyEarnedEvent(tx, actor));
+      earned += points;
+    }
+    return earned;
+  }
+
+  /**
+   * ย้อนคะแนนเมื่อคืนเงินแบบ idempotent ใน transaction เดียวกับ caller
+   * (refund เดิมมี reversal แล้ว = คืนของเดิม ไม่เขียนซ้ำ)
+   */
+  async function reversePointsTx(
+    q: QueryRunner,
+    orderId: string,
+    refundId: string,
+    actor: ShopActor,
+    now: Date,
+  ): Promise<{ reversal: LoyaltyReversal; deduplicated: boolean }> {
+    const [exRows] = (await q.query("SELECT * FROM loyalty_reversals WHERE refund_id = ? LIMIT 1", [refundId])) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    if (exRows.length > 0) return { reversal: rowToReversal(exRows[0]!), deduplicated: true };
+    const [oRows] = (await q.query("SELECT * FROM orders WHERE id = ? LIMIT 1", [orderId])) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    if (oRows.length === 0) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+    const order = rowToOrder(oRows[0]!);
+    const customerId = order.customerId ?? "";
+    let earned = 0;
+    if (customerId) {
+      const [sRows] = (await q.query(
+        "SELECT COALESCE(SUM(points), 0) AS s FROM loyalty_transactions WHERE order_id = ? AND source = 'order' AND customer_id = ?",
+        [orderId, customerId],
+      )) as [Record<string, unknown>[], unknown];
+      earned = Number(sRows[0]!["s"] ?? 0);
+    }
+    if (earned > 0 && customerId) {
+      await appendLoyaltyTx(q, {
+        customerId,
+        points: -earned,
+        source: "refund",
+        orderId,
+        paymentId: null,
+        orderItemId: null,
+        redemptionId: null,
+        walkinTokenId: null,
+        reason: `ย้อนคะแนนจากคำสั่งซื้อ ${order.orderNumber} ที่คืนเงิน`,
+        actorId: actor.actorId ?? null,
+        actorUsername: actor.actorUsername ?? null,
+      }, now);
+    }
+    const id = randomUUID();
+    await q.query("INSERT INTO loyalty_reversals (id, order_id, refund_id, customer_id, points) VALUES (?, ?, ?, ?, ?)", [
+      id, orderId, refundId, customerId, earned,
+    ]);
+    const [rRows] = (await q.query("SELECT * FROM loyalty_reversals WHERE id = ? LIMIT 1", [id])) as [
+      Record<string, unknown>[],
+      unknown,
+    ];
+    if (rRows.length === 0) throw new Error("บันทึกการย้อนคะแนนไม่สำเร็จ");
+    const reversal = rowToReversal(rRows[0]!);
+    await insertAuditRow(q, pointsReversedEvent(orderId, customerId || "-", earned, refundId, actor));
+    return { reversal, deduplicated: false };
+  }
+
+  /** สร้างงานคิวรางวัล (drink 1 หน่วย ราคา 0 — ไม่ผูก order/payment) ใน tx เดียวกับ caller */
+  async function insertRewardJobTx(
+    q: QueryRunner,
+    redemption: RewardRedemption,
+    actor: ShopActor,
+    now: Date,
+  ): Promise<QueueJob> {
+    const at = now.toISOString();
+    const job: QueueJob = {
+      id: randomUUID(),
+      orderId: null,
+      orderNumber: redemption.code,
+      paymentId: null,
+      orderItemId: "",
+      menuId: redemption.menuId,
+      menuName: redemption.menuName,
+      station: "drink",
+      quantity: 1,
+      readyQty: 0,
+      deliveredQty: 0,
+      status: "queued",
+      readyAt: at,
+      tableId: null,
+      roundId: null,
+      isRemake: false,
+      isPriority: false,
+      reason: null,
+      claimedBy: null,
+      rewardRedemptionId: redemption.id,
+      createdAt: at,
+      updatedAt: at,
+    };
+    await q.query(
+      "INSERT INTO queue_jobs (id, order_id, order_number, payment_id, order_item_id, menu_id, menu_name, station, quantity, ready_qty, delivered_qty, status, ready_at, table_id, round_id, is_remake, is_priority, reason, claimed_by, reward_redemption_id) VALUES (?, NULL, ?, NULL, ?, ?, ?, 'drink', 1, 0, 0, 'queued', ?, NULL, NULL, 0, 0, NULL, NULL, ?)",
+      [job.id, job.orderNumber, job.orderItemId, job.menuId, job.menuName, toMysqlDatetime(job.readyAt), redemption.id],
+    );
+    await insertAuditRow(q, queueCreatedEvent({ ...job }, actor));
+    return job;
   }
 
   async function readCapacityTx(q: QueryRunner, station: QueueStation): Promise<number> {
@@ -5790,6 +7246,8 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
         sql += " WHERE action LIKE 'table\\_round\\_%'";
       } else if (prefix === "payment_") {
         sql += " WHERE action LIKE 'payment\\_%'";
+      } else if (prefix === "loyalty_") {
+        sql += " WHERE (action LIKE 'loyalty\\_%' OR action LIKE 'reward\\_%')";
       } else if (prefix === "queue_") {
         sql += " WHERE action LIKE 'queue\\_%'";
       } else if (prefix === "account_") {
@@ -6924,6 +8382,10 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
         await insertAuditRow(conn, orderStatusChangedEvent(before, after, reason, actor));
         if (patch.status === "cancelled" && current.stockReserved && !current.stockConsumed) {
           await insertAuditRow(conn, orderStockReleasedEvent(after.orderNumber, after.id, reason, actor));
+        }
+        // Ticket 10: ปิดงาน completed เข้าเงื่อนไขสะสมคะแนนส่วนที่เหลือ (exactly-once)
+        if (patch.status === "completed") {
+          await tryAutoEarnTx(conn, id, actor, new Date());
         }
         return after;
       });
@@ -8269,6 +9731,8 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
         );
         const after: Payment = { ...current, status: "refunded", updatedAt: now.toISOString() };
         await insertAuditRow(conn, paymentRefundApprovedEvent(after, refundId, reason, actor));
+        // Ticket 10: คืนเงินต้องย้อนคะแนน earn ที่เกี่ยวข้อง (กัน double-reversal)
+        await reversePointsTx(conn, order.id, refundId, actor, now);
         const [rRows] = (await conn.query("SELECT * FROM refunds WHERE id = ? LIMIT 1", [refundId])) as [
           Record<string, unknown>[],
           unknown,
@@ -8402,12 +9866,15 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
         assertQueueTransition(job.status, "preparing");
         const before = { status: job.status };
         // ตัดสต๊อกจริงครั้งแรกของคำสั่งซื้อ (ครั้งเดียว — มี flag แล้วเป็น no-op)
-        const [oRows] = (await conn.query("SELECT * FROM orders WHERE id = ? LIMIT 1 FOR UPDATE", [order.id])) as [
-          Record<string, unknown>[],
-          unknown,
-        ];
-        const locked = rowToOrder(oRows[0]!);
-        await consumeStockForQueueStartTx(conn, locked, id, actor);
+        // งานรางวัล (order null) ตัดสต๊อกแล้วตอนร้านรับแลก จึงข้ามขั้นนี้
+        if (order) {
+          const [oRows] = (await conn.query("SELECT * FROM orders WHERE id = ? LIMIT 1 FOR UPDATE", [order.id])) as [
+            Record<string, unknown>[],
+            unknown,
+          ];
+          const locked = rowToOrder(oRows[0]!);
+          await consumeStockForQueueStartTx(conn, locked, id, actor);
+        }
         await conn.query("UPDATE queue_jobs SET status = 'preparing', claimed_by = ? WHERE id = ?", [
           actor.actorUsername ?? actor.actorId ?? null, id,
         ]);
@@ -8468,6 +9935,10 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
         await conn.query("UPDATE queue_jobs SET delivered_qty = ?, status = ? WHERE id = ?", [deliveredQty, status, id]);
         const after = { ...job, deliveredQty, status: status as QueueJob["status"], updatedAt: now.toISOString() };
         await insertAuditRow(conn, queueStatusChangedEvent(before, after, `ส่งมอบ ${qty} รายการ`, actor));
+        // Ticket 10: ส่งมอบแล้วเข้าเงื่อนไขสะสมคะแนน (exactly-once — ซ้ำเป็น no-op)
+        if (job.orderId !== null) {
+          await tryAutoEarnTx(conn, job.orderId, actor, now);
+        }
         return (await readQueueDetailTx(conn, id))!;
       });
     },
@@ -8516,10 +9987,11 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
         const remakeId = randomUUID();
         const at = toMysqlDatetime(now.toISOString());
         await conn.query(
-          "INSERT INTO queue_jobs (id, order_id, order_number, payment_id, order_item_id, menu_id, menu_name, station, quantity, ready_qty, delivered_qty, status, ready_at, table_id, round_id, is_remake, is_priority, reason, claimed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'queued', ?, ?, ?, 1, 0, ?, NULL)",
+          "INSERT INTO queue_jobs (id, order_id, order_number, payment_id, order_item_id, menu_id, menu_name, station, quantity, ready_qty, delivered_qty, status, ready_at, table_id, round_id, is_remake, is_priority, reason, claimed_by, reward_redemption_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'queued', ?, ?, ?, 1, 0, ?, NULL, ?)",
           [
             remakeId, original.orderId, original.orderNumber, original.paymentId, original.orderItemId,
             original.menuId, original.menuName, original.station, qty, at, original.tableId, original.roundId, reason,
+            original.rewardRedemptionId,
           ],
         );
         const remake = rowToQueueJob({
@@ -8528,6 +10000,7 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
           station: original.station, quantity: qty, ready_qty: 0, delivered_qty: 0, status: "queued",
           ready_at: now.toISOString(), table_id: original.tableId, round_id: original.roundId,
           is_remake: 1, is_priority: 0, reason, claimed_by: null,
+          reward_redemption_id: original.rewardRedemptionId,
           created_at: now.toISOString(), updated_at: now.toISOString(),
         });
         await insertAuditRow(conn, queueRemadeEvent({ ...original }, { ...remake }, reason, actor));
@@ -8542,6 +10015,10 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
         ];
         if (rows.length === 0) throw new NotFoundError("ไม่พบงานคิว");
         const job = rowToQueueJob(rows[0]!);
+        // งานรางวัล (ไม่ผูกคำสั่งซื้อ) ยกเลิกผ่านการคืนคะแนนแลก ไม่ใช่ช่องทางนี้
+        if (job.orderId === null || job.rewardRedemptionId !== null) {
+          throw new ConflictError("งานรางวัลยกเลิกได้ผ่านการคืนคะแนนแลกเท่านั้น");
+        }
         const [oRows] = (await conn.query("SELECT * FROM orders WHERE id = ? LIMIT 1", [job.orderId])) as [
           Record<string, unknown>[],
           unknown,
@@ -8664,6 +10141,546 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
         }
       }
       return null;
+    },
+    // ---- Ticket 10 MySQL: คะแนนสะสมและรางวัล (ledger append-only + idempotent) ----
+    async earnPointsForOrder(orderId: string, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const earned = await tryAutoEarnTx(conn, orderId, actor, now);
+        return { earned, deduplicated: earned === 0 };
+      });
+    },
+    async getLoyaltyBalance(customerId: string) {
+      const [cRows] = (await pool.query("SELECT id FROM customers WHERE id = ? LIMIT 1", [customerId])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      if (cRows.length === 0) throw new NotFoundError("ไม่พบบัญชีลูกค้า");
+      return loyaltyBalanceTx(pool, customerId);
+    },
+    async listLoyaltyLedger(customerId: string, limit: number) {
+      const [cRows] = (await pool.query("SELECT id FROM customers WHERE id = ? LIMIT 1", [customerId])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      if (cRows.length === 0) throw new NotFoundError("ไม่พบบัญชีลูกค้า");
+      const n = Math.min(Math.max(limit || 50, 1), 200);
+      const [rows] = (await pool.query("SELECT * FROM loyalty_transactions WHERE customer_id = ? ORDER BY created_at DESC LIMIT ?", [customerId, n])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      return (rows as Record<string, unknown>[]).map(rowToLoyaltyTx);
+    },
+    async createReward(input, actor) {
+      return withPaymentTx(async (conn) => {
+        const name = normalizeRewardName(input.name);
+        const imageUrl = normalizeRewardImageUrl(input.imageUrl ?? null);
+        const pointsCost = normalizeRewardPointsCost(input.pointsCost);
+        const quotaTotal = normalizeRewardQuotaTotal(input.quotaTotal ?? null);
+        const [menuRows] = (await conn.query("SELECT * FROM menu_items WHERE id = ? LIMIT 1", [input.menuId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (menuRows.length === 0) throw new NotFoundError("ไม่พบเมนูอ้างอิง");
+        const menu = rowToMenu(menuRows[0]!);
+        if (menu.kind !== "drink") throw new ConflictError("รางวัลแลกได้เฉพาะเมนูเครื่องดื่มเท่านั้น");
+        if (menu.isArchived) throw new ConflictError("เมนูนี้ถูก archive แล้ว ใช้เป็นรางวัลไม่ได้");
+        const startsAt = input.startsAt ?? null;
+        const endsAt = input.endsAt ?? null;
+        if (startsAt !== null && Number.isNaN(new Date(startsAt).getTime())) throw new Error("วันเริ่มแลกไม่ถูกต้อง");
+        if (endsAt !== null && Number.isNaN(new Date(endsAt).getTime())) throw new Error("วันหมดเขตแลกไม่ถูกต้อง");
+        if (startsAt !== null && endsAt !== null && new Date(startsAt).getTime() > new Date(endsAt).getTime()) {
+          throw new Error("วันเริ่มแลกต้องไม่หลังวันหมดเขตแลก");
+        }
+        const id = randomUUID();
+        await conn.query(
+          "INSERT INTO rewards (id, name, image_url, menu_id, menu_name, points_cost, quota_total, quota_used, starts_at, ends_at, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
+          [
+            id, name, imageUrl, menu.id, menu.name, pointsCost, quotaTotal,
+            startsAt ? toMysqlDatetime(startsAt) : null,
+            endsAt ? toMysqlDatetime(endsAt) : null,
+            (input.isActive ?? true) ? 1 : 0,
+          ],
+        );
+        const [rows] = (await conn.query("SELECT * FROM rewards WHERE id = ? LIMIT 1", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const reward = rowToReward(rows[0]!);
+        await insertAuditRow(conn, rewardCreatedEvent(reward, actor));
+        return reward;
+      });
+    },
+    async listRewards() {
+      const [rows] = (await pool.query("SELECT * FROM rewards ORDER BY created_at DESC")) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      return (rows as Record<string, unknown>[]).map(rowToReward);
+    },
+    async listRedeemableRewards(now: Date = new Date()) {
+      const [rows] = (await pool.query("SELECT * FROM rewards WHERE is_active = 1")) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      return (rows as Record<string, unknown>[])
+        .map(rowToReward)
+        .filter((r) => rewardBlockReason(r, now) === null)
+        .sort((a, b) => a.pointsCost - b.pointsCost || a.name.localeCompare(b.name, "th"));
+    },
+    async getReward(id: string) {
+      const [rows] = (await pool.query("SELECT * FROM rewards WHERE id = ? LIMIT 1", [id])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      if (rows.length === 0) return null;
+      return rowToReward(rows[0]!);
+    },
+    async updateReward(id, patch, actor) {
+      return withPaymentTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM rewards WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบรางวัล");
+        const before = rowToReward(rows[0]!);
+        const sets: string[] = [];
+        const params: unknown[] = [];
+        let touched = false;
+        let statusOnly = true;
+        if (patch.name !== undefined) {
+          sets.push("name = ?");
+          params.push(normalizeRewardName(patch.name));
+          touched = true;
+          statusOnly = false;
+        }
+        if (patch.imageUrl !== undefined) {
+          sets.push("image_url = ?");
+          params.push(normalizeRewardImageUrl(patch.imageUrl));
+          touched = true;
+          statusOnly = false;
+        }
+        if (patch.pointsCost !== undefined) {
+          sets.push("points_cost = ?");
+          params.push(normalizeRewardPointsCost(patch.pointsCost));
+          touched = true;
+          statusOnly = false;
+        }
+        if (patch.quotaTotal !== undefined) {
+          const q = normalizeRewardQuotaTotal(patch.quotaTotal);
+          if (q !== null && q < before.quotaUsed) {
+            throw new ConflictError(`จำนวนสิทธิ์ต้องไม่น้อยกว่าที่ใช้ไปแล้ว (${before.quotaUsed})`);
+          }
+          sets.push("quota_total = ?");
+          params.push(q);
+          touched = true;
+          statusOnly = false;
+        }
+        const startsAt = patch.startsAt !== undefined ? patch.startsAt : before.startsAt;
+        const endsAt = patch.endsAt !== undefined ? patch.endsAt : before.endsAt;
+        if (startsAt !== null && Number.isNaN(new Date(startsAt).getTime())) throw new Error("วันเริ่มแลกไม่ถูกต้อง");
+        if (endsAt !== null && Number.isNaN(new Date(endsAt).getTime())) throw new Error("วันหมดเขตแลกไม่ถูกต้อง");
+        if (startsAt !== null && endsAt !== null && new Date(startsAt).getTime() > new Date(endsAt).getTime()) {
+          throw new Error("วันเริ่มแลกต้องไม่หลังวันหมดเขตแลก");
+        }
+        if (patch.startsAt !== undefined) {
+          sets.push("starts_at = ?");
+          params.push(patch.startsAt ? toMysqlDatetime(patch.startsAt) : null);
+          touched = true;
+          statusOnly = false;
+        }
+        if (patch.endsAt !== undefined) {
+          sets.push("ends_at = ?");
+          params.push(patch.endsAt ? toMysqlDatetime(patch.endsAt) : null);
+          touched = true;
+          statusOnly = false;
+        }
+        if (patch.isActive !== undefined) {
+          if (typeof patch.isActive !== "boolean") throw new Error("สถานะรางวัลไม่ถูกต้อง");
+          sets.push("is_active = ?");
+          params.push(patch.isActive ? 1 : 0);
+          touched = true;
+        }
+        if (!touched) return before;
+        await conn.query(`UPDATE rewards SET ${sets.join(", ")} WHERE id = ?`, [...params, id]);
+        const [afterRows] = (await conn.query("SELECT * FROM rewards WHERE id = ? LIMIT 1", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const after = rowToReward(afterRows[0]!);
+        if (statusOnly) {
+          await insertAuditRow(conn, rewardStatusChangedEvent(after, actor));
+        } else {
+          await insertAuditRow(conn, rewardUpdatedEvent({ pointsCost: before.pointsCost, quotaTotal: before.quotaTotal }, after, actor));
+        }
+        return after;
+      });
+    },
+    async redeemReserve(input, actor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const key = normalizeLoyaltyIdempotencyKey(input.idempotencyKey);
+        const hash = redemptionPayloadHash({ customerId: input.customerId, rewardId: input.rewardId });
+        const [idemRows] = (await conn.query("SELECT * FROM reward_redemptions WHERE idempotency_key = ? LIMIT 1", [key])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (idemRows.length > 0) {
+          const ex = rowToRedemption(idemRows[0]!);
+          if (redemptionPayloadHash({ customerId: ex.customerId, rewardId: ex.rewardId }) !== hash) {
+            throw new ConflictError("คำขอนี้ถูกใช้แลกไปแล้ว กรุณาสร้างคำขอใหม่");
+          }
+          return { redemption: ex, deduplicated: true };
+        }
+        const [cRows] = (await conn.query("SELECT * FROM customers WHERE id = ? LIMIT 1", [input.customerId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (cRows.length === 0) throw new NotFoundError("ไม่พบบัญชีลูกค้า");
+        const customer = rowToCustomer(cRows[0]!);
+        if (customer.isDeleted || !customer.isActive) {
+          throw new ConflictError("บัญชีลูกค้าใช้งานไม่ได้ กรุณาเข้าสู่ระบบใหม่");
+        }
+        const [rRows] = (await conn.query("SELECT * FROM rewards WHERE id = ? LIMIT 1 FOR UPDATE", [input.rewardId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rRows.length === 0) throw new NotFoundError("ไม่พบรางวัล");
+        const reward = rowToReward(rRows[0]!);
+        const blocked = rewardBlockReason(reward, now);
+        if (blocked) throw new ConflictError(blocked);
+        if (reward.quotaTotal !== null && reward.quotaUsed + (await rewardHeldCountTx(conn, reward.id)) >= reward.quotaTotal) {
+          throw new ConflictError("สิทธิ์แลกของรางวัลนี้หมดแล้ว");
+        }
+        const balance = await loyaltyBalanceTx(conn, customer.id);
+        const held = await loyaltyHeldTx(conn, customer.id);
+        if (balance - held < reward.pointsCost) {
+          throw new ConflictError(`คะแนนไม่พอแลก (ใช้ ${reward.pointsCost} แต้ม คงเหลือใช้ได้ ${balance - held} แต้ม)`);
+        }
+        if (!(await isMenuOrderableTx(conn, reward.menuId, 1))) {
+          throw new ConflictError("วัตถุดิบสำหรับรางวัลนี้ไม่พอชั่วคราว กรุณาลองใหม่ภายหลัง");
+        }
+        const reason = input.reason === undefined || input.reason === null || input.reason === ""
+          ? "แลกคะแนนเป็นเครื่องดื่ม"
+          : normalizeLoyaltyReason(input.reason);
+        const id = randomUUID();
+        let code = generateRedemptionCode();
+        for (let i = 0; i < 5; i += 1) {
+          try {
+            await conn.query(
+              "INSERT INTO reward_redemptions (id, code, customer_id, reward_id, reward_name, menu_id, menu_name, points_cost, status, idempotency_key, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?)",
+              [id, code, customer.id, reward.id, reward.name, reward.menuId, reward.menuName, reward.pointsCost, key, reason],
+            );
+            break;
+          } catch (err: unknown) {
+            const msg = err && typeof err === "object" && "message" in err && typeof err.message === "string" ? err.message : "";
+            if (msg.includes("uq_redemption_code") && i < 4) {
+              code = generateRedemptionCode();
+              continue;
+            }
+            throw err;
+          }
+        }
+        const [nRows] = (await conn.query("SELECT * FROM reward_redemptions WHERE id = ? LIMIT 1", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (nRows.length === 0) throw new Error("บันทึกการแลกไม่สำเร็จ");
+        const redemption = rowToRedemption(nRows[0]!);
+        await insertAuditRow(conn, redemptionReservedEvent(redemption, balance - held - reward.pointsCost, actor));
+        return { redemption, deduplicated: false };
+      });
+    },
+    async getRedemption(id: string) {
+      const [rows] = (await pool.query("SELECT * FROM reward_redemptions WHERE id = ? LIMIT 1", [id])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      if (rows.length === 0) return null;
+      return rowToRedemption(rows[0]!);
+    },
+    async listCustomerRedemptions(customerId: string, limit: number) {
+      const n = Math.min(Math.max(limit || 50, 1), 200);
+      const [rows] = (await pool.query("SELECT * FROM reward_redemptions WHERE customer_id = ? ORDER BY created_at DESC LIMIT ?", [customerId, n])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      return (rows as Record<string, unknown>[]).map(rowToRedemption);
+    },
+    async listPendingRedemptions(limit: number) {
+      const n = Math.min(Math.max(limit || 50, 1), 200);
+      const [rows] = (await pool.query("SELECT * FROM reward_redemptions WHERE status = 'reserved' ORDER BY created_at ASC LIMIT ?", [n])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      return (rows as Record<string, unknown>[]).map(rowToRedemption);
+    },
+    async redeemConsume(id: string, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM reward_redemptions WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบรายการแลก");
+        const current = rowToRedemption(rows[0]!);
+        if (current.status === "consumed") {
+          const [jRows] = (await conn.query("SELECT * FROM queue_jobs WHERE reward_redemption_id = ? LIMIT 1", [current.id])) as [
+            Record<string, unknown>[],
+            unknown,
+          ];
+          if (jRows.length === 0) throw new Error("งานคิวของรายการแลกนี้หายไป");
+          const detail = await readQueueDetailTx(conn, String(jRows[0]!["id"]));
+          if (!detail) throw new Error("งานคิวของรายการแลกนี้หายไป");
+          return { redemption: current, job: detail };
+        }
+        assertRedemptionTransition(current.status, "consumed");
+        const [rRows] = (await conn.query("SELECT * FROM rewards WHERE id = ? LIMIT 1 FOR UPDATE", [current.rewardId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rRows.length === 0) throw new NotFoundError("ไม่พบรางวัล");
+        const reward = rowToReward(rRows[0]!);
+        if (!reward.isActive) throw new ConflictError("รางวัลนี้ปิดรับแลกแล้ว");
+        if (!(await isMenuOrderableTx(conn, current.menuId, 1))) {
+          throw new ConflictError("วัตถุดิบหมดชั่วคราว รับรายการไม่ได้ กรุณาคืนคะแนนให้ลูกค้า");
+        }
+        await consumeStockForRewardTx(conn, current.menuId, current.code, current.menuName, actor);
+        const job = await insertRewardJobTx(conn, current, actor, now);
+        await conn.query("UPDATE reward_redemptions SET status = 'consumed', queue_job_id = ? WHERE id = ?", [job.id, current.id]);
+        await conn.query("UPDATE rewards SET quota_used = quota_used + 1 WHERE id = ?", [reward.id]);
+        await appendLoyaltyTx(conn, {
+          customerId: current.customerId,
+          points: -current.pointsCost,
+          source: "reward_consume",
+          orderId: null,
+          paymentId: null,
+          orderItemId: null,
+          redemptionId: current.id,
+          walkinTokenId: null,
+          reason: `แลก ${current.rewardName} (${current.code})`,
+          actorId: actor.actorId ?? null,
+          actorUsername: actor.actorUsername ?? null,
+        }, now);
+        const consumed: RewardRedemption = { ...current, status: "consumed", queueJobId: job.id, updatedAt: now.toISOString() };
+        await insertAuditRow(conn, redemptionConsumedEvent(consumed, job.id, actor));
+        const detail = await readQueueDetailTx(conn, job.id);
+        if (!detail) throw new Error("สร้างงานคิวเครื่องดื่มไม่สำเร็จ");
+        return { redemption: consumed, job: detail };
+      });
+    },
+    async redeemRelease(id: string, input: { reason: string }, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM reward_redemptions WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบรายการแลก");
+        const current = rowToRedemption(rows[0]!);
+        if (current.status === "released") {
+          return { redemption: current, deduplicated: true };
+        }
+        assertRedemptionTransition(current.status, "released");
+        const reason = normalizeLoyaltyReason(input.reason);
+        await conn.query("UPDATE reward_redemptions SET status = 'released', reason = ? WHERE id = ?", [reason, id]);
+        const released: RewardRedemption = { ...current, status: "released", reason, updatedAt: now.toISOString() };
+        await insertAuditRow(conn, redemptionReleasedEvent(released, reason, actor));
+        void now;
+        return { redemption: released, deduplicated: false };
+      });
+    },
+    async issueWalkinQr(actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const id = randomUUID();
+        let token = generateWalkinToken();
+        let code = buildWalkinCode(token);
+        for (let i = 0; i < 5; i += 1) {
+          try {
+            await conn.query("INSERT INTO walkin_qr_tokens (id, code, created_by, expires_at) VALUES (?, ?, ?, ?)", [
+              id, code, actor.actorUsername ?? actor.actorId ?? null,
+              toMysqlDatetime(new Date(now.getTime() + WALKIN_QR_TTL_MINUTES * 60 * 1000).toISOString()),
+            ]);
+            break;
+          } catch (err: unknown) {
+            const msg = err && typeof err === "object" && "message" in err && typeof err.message === "string" ? err.message : "";
+            if (msg.includes("uq_walkin_code") && i < 4) {
+              token = generateWalkinToken();
+              code = buildWalkinCode(token);
+              continue;
+            }
+            throw err;
+          }
+        }
+        const [rows] = (await conn.query("SELECT * FROM walkin_qr_tokens WHERE id = ? LIMIT 1", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new Error("ออก QR ไม่สำเร็จ");
+        const created = rowToWalkin(rows[0]!);
+        await insertAuditRow(conn, walkinIssuedEvent(created, actor));
+        return created;
+      });
+    },
+    async redeemWalkinQr(input: { code: string; customerId: string }, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const code = normalizeWalkinCode(input.code);
+        const [tRows] = (await conn.query("SELECT * FROM walkin_qr_tokens WHERE code = ? LIMIT 1 FOR UPDATE", [code])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (tRows.length === 0) throw new NotFoundError("ไม่พบรหัส QR นี้");
+        const token = rowToWalkin(tRows[0]!);
+        if (token.redeemedAt) throw new ConflictError("QR นี้ถูกใช้ไปแล้ว");
+        if (new Date(token.expiresAt).getTime() < now.getTime()) {
+          throw new ConflictError("QR นี้หมดอายุแล้ว (อายุ 10 นาที)");
+        }
+        const [cRows] = (await conn.query("SELECT * FROM customers WHERE id = ? LIMIT 1", [input.customerId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (cRows.length === 0) throw new NotFoundError("ไม่พบบัญชีลูกค้า");
+        const customer = rowToCustomer(cRows[0]!);
+        if (customer.isDeleted || !customer.isActive) {
+          throw new ConflictError("บัญชีลูกค้าใช้งานไม่ได้ กรุณาเข้าสู่ระบบใหม่");
+        }
+        await conn.query("UPDATE walkin_qr_tokens SET redeemed_at = ?, redeemed_by = ? WHERE id = ?", [
+          toMysqlDatetime(now.toISOString()), customer.id, token.id,
+        ]);
+        const tx = await appendLoyaltyTx(conn, {
+          customerId: customer.id,
+          points: LOYALTY_POINTS_PER_DRINK_UNIT,
+          source: "walkin",
+          orderId: null,
+          paymentId: null,
+          orderItemId: null,
+          redemptionId: null,
+          walkinTokenId: token.id,
+          reason: `สแกน QR Walk-in ${token.code}`,
+          actorId: actor.actorId ?? null,
+          actorUsername: actor.actorUsername ?? null,
+        }, now);
+        const redeemed: WalkinQrToken = { ...token, redeemedAt: now.toISOString(), redeemedBy: customer.id };
+        await insertAuditRow(conn, walkinRedeemedEvent(redeemed, customer.id, actor));
+        await insertAuditRow(conn, loyaltyEarnedEvent(tx, actor));
+        return { token: redeemed, earned: LOYALTY_POINTS_PER_DRINK_UNIT };
+      });
+    },
+    async linkGuestOrder(input: { orderId: string; customerId: string }, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const [oRows] = (await conn.query("SELECT * FROM orders WHERE id = ? LIMIT 1 FOR UPDATE", [input.orderId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (oRows.length === 0) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+        const order = rowToOrder(oRows[0]!);
+        if (order.customerId !== null) throw new ConflictError("คำสั่งซื้อนี้ผูกบัญชีแล้ว");
+        if (!order.guestPhone) throw new ConflictError("คำสั่งซื้อนี้ไม่ใช่ของ Guest");
+        const [clRows] = (await conn.query("SELECT id FROM guest_link_claims WHERE order_id = ? LIMIT 1", [order.id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (clRows.length > 0) throw new ConflictError("คำสั่งซื้อนี้ถูกผูกบัญชีไปแล้ว");
+        const [cRows] = (await conn.query("SELECT * FROM customers WHERE id = ? LIMIT 1", [input.customerId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (cRows.length === 0) throw new NotFoundError("ไม่พบบัญชีลูกค้า");
+        const customer = rowToCustomer(cRows[0]!);
+        if (customer.isDeleted || !customer.isActive) {
+          throw new ConflictError("บัญชีลูกค้าใช้งานไม่ได้ กรุณาเข้าสู่ระบบใหม่");
+        }
+        if (!customer.phone || normalizeThaiPhone(order.guestPhone) !== customer.phone) {
+          throw new ConflictError("เบอร์โทรของคำสั่งซื้อนี้ไม่ตรงกับบัญชี กรุณาตรวจสอบอีกครั้ง");
+        }
+        if (now.getTime() - new Date(order.createdAt).getTime() > GUEST_LINK_WINDOW_HOURS * 60 * 60 * 1000) {
+          throw new ConflictError("เกิน 24 ชั่วโมงหลังยืนยันคำสั่งซื้อ ผูกบัญชีไม่ได้แล้ว");
+        }
+        await conn.query("UPDATE orders SET customer_id = ? WHERE id = ?", [customer.id, order.id]);
+        const claimId = randomUUID();
+        await conn.query("INSERT INTO guest_link_claims (id, order_id, customer_id, guest_phone) VALUES (?, ?, ?, ?)", [
+          claimId, order.id, customer.id, customer.phone,
+        ]);
+        await insertAuditRow(conn, guestLinkedEvent(order.id, customer.id, actor));
+        const earned = await tryAutoEarnTx(conn, order.id, actor, now);
+        const detail = await readOrderDetailTx(conn, order.id);
+        if (!detail) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+        return { order: detail, earned };
+      });
+    },
+    async mergeCustomerAccounts(
+      input: { sourceCustomerId: string; targetCustomerId: string },
+      actor: ShopActor,
+      now: Date = new Date(),
+    ) {
+      return withPaymentTx(async (conn) => {
+        if (input.sourceCustomerId === input.targetCustomerId) {
+          throw new ConflictError("บัญชีต้นทางและปลายทางต้องเป็นคนละบัญชี");
+        }
+        const [dupRows] = (await conn.query(
+          "SELECT * FROM customer_merges WHERE source_customer_id = ? AND target_customer_id = ? LIMIT 1",
+          [input.sourceCustomerId, input.targetCustomerId],
+        )) as [Record<string, unknown>[], unknown];
+        if (dupRows.length > 0) {
+          return { record: rowToMerge(dupRows[0]!), movedPoints: 0, deduplicated: true };
+        }
+        const [sRows] = (await conn.query("SELECT * FROM customers WHERE id = ? LIMIT 1 FOR UPDATE", [input.sourceCustomerId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const [tRows] = (await conn.query("SELECT * FROM customers WHERE id = ? LIMIT 1 FOR UPDATE", [input.targetCustomerId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (sRows.length === 0) throw new NotFoundError("ไม่พบบัญชีต้นทาง");
+        if (tRows.length === 0) throw new NotFoundError("ไม่พบบัญชีปลายทาง");
+        const source = rowToCustomer(sRows[0]!);
+        const target = rowToCustomer(tRows[0]!);
+        if (target.isDeleted || !target.isActive) throw new ConflictError("บัญชีปลายทางใช้งานไม่ได้");
+        if (source.isDeleted || !source.isActive) throw new ConflictError("บัญชีต้นทางถูกปิดหรือรวมไปแล้ว");
+        const movedPoints = await loyaltyBalanceTx(conn, source.id);
+        await conn.query("UPDATE loyalty_transactions SET customer_id = ? WHERE customer_id = ?", [target.id, source.id]);
+        await conn.query("UPDATE reward_redemptions SET customer_id = ? WHERE customer_id = ?", [target.id, source.id]);
+        await conn.query("UPDATE guest_link_claims SET customer_id = ? WHERE customer_id = ?", [target.id, source.id]);
+        // ย้าย LINE link เฉพาะเมื่อปลายทางยังไม่มี (กันขัดแย้ง 1:1)
+        const [linkRows] = (await conn.query("SELECT * FROM customer_line_links WHERE customer_id = ? LIMIT 1", [source.id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (linkRows.length > 0) {
+          const [tLinkRows] = (await conn.query("SELECT customer_id FROM customer_line_links WHERE customer_id = ? LIMIT 1", [target.id])) as [
+            Record<string, unknown>[],
+            unknown,
+          ];
+          if (tLinkRows.length === 0) {
+            await conn.query("UPDATE customer_line_links SET customer_id = ? WHERE customer_id = ?", [target.id, source.id]);
+          } else {
+            await conn.query("DELETE FROM customer_line_links WHERE customer_id = ?", [source.id]);
+          }
+        }
+        await conn.query(
+          "UPDATE customers SET name = ?, phone = NULL, email = NULL, password_hash = ?, is_active = 0, is_deleted = 1, deleted_at = ? WHERE id = ?",
+          ["ลูกค้าที่รวมบัญชีแล้ว", `merged:${source.id}`, toMysqlDatetime(now.toISOString()), source.id],
+        );
+        await conn.query("DELETE FROM customer_sessions WHERE customer_id = ?", [source.id]);
+        const recordId = randomUUID();
+        await conn.query("INSERT INTO customer_merges (id, source_customer_id, target_customer_id, approved_by) VALUES (?, ?, ?, ?)", [
+          recordId, source.id, target.id, actor.actorUsername ?? actor.actorId ?? null,
+        ]);
+        const [mRows] = (await conn.query("SELECT * FROM customer_merges WHERE id = ? LIMIT 1", [recordId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const record = rowToMerge(mRows[0]!);
+        await insertAuditRow(conn, accountMergedEvent(source.id, target.id, movedPoints, actor));
+        return { record, movedPoints, deduplicated: false };
+      });
+    },
+    async reversePointsOnRefund(orderId: string, refundId: string, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const [fRows] = (await conn.query("SELECT id FROM refunds WHERE id = ? LIMIT 1", [refundId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (fRows.length === 0) throw new NotFoundError("ไม่พบคำขอคืนเงิน");
+        return reversePointsTx(conn, orderId, refundId, actor, now);
+      });
     },
     async close() {
       await pool.end();
