@@ -117,7 +117,11 @@ export type AuditAction =
   | "loyalty_points_reversed"
   | "reward_created"
   | "reward_updated"
-  | "reward_status_changed";
+  | "reward_status_changed"
+  // ---------- Ticket 11: การเงิน รายงาน Dashboard และ CSV ----------
+  | "finance_entry_created"
+  | "finance_entry_updated"
+  | "finance_entry_deleted";
 
 export interface AuditEntry {
   id: number;
@@ -1145,6 +1149,176 @@ export interface CustomerMergeRecord {
   approvedBy: string | null;
   createdAt: string;
 }
+
+/** ---------- Ticket 11: การเงิน รายงาน Dashboard และ CSV ---------- */
+
+/**
+ * ประเภทรายการเงินมือ (manual entries — แยกจากรายรับที่เกิดจาก paid orders):
+ * - `income` = รายรับมือ (เช่น รายได้เสริมที่นอกเหนือคำสั่งซื้อ)
+ * - `expense` = รายจ่ายจริง (เช่น ซื้อวัตถุดิบ ค่าแรง ค่าสาธารณูปโภค)
+ * รายรับจากคำสั่งซื้อ (paid payments หัก refunds) คำนวณ derived จากตาราง payments/refunds
+ * ไม่ได้เก็บในตารางนี้ — กันนับรายรับซ้ำ
+ */
+export type FinanceKind = "income" | "expense";
+
+export const FINANCE_KINDS: FinanceKind[] = ["income", "expense"];
+
+/** หมวดรายจ่ายจริง */
+export type FinanceExpenseCategory =
+  | "ingredients"
+  | "labor"
+  | "utilities"
+  | "rent"
+  | "maintenance"
+  | "marketing"
+  | "other_expense";
+
+/** หมวดรายรับมือ */
+export type FinanceIncomeCategory = "other_income" | "catering" | "adjustment";
+
+export type FinanceCategory = FinanceExpenseCategory | FinanceIncomeCategory;
+
+export const FINANCE_EXPENSE_CATEGORIES: FinanceExpenseCategory[] = [
+  "ingredients",
+  "labor",
+  "utilities",
+  "rent",
+  "maintenance",
+  "marketing",
+  "other_expense",
+];
+
+export const FINANCE_INCOME_CATEGORIES: FinanceIncomeCategory[] = [
+  "other_income",
+  "catering",
+  "adjustment",
+];
+
+export const FINANCE_CATEGORY_LABELS: Record<FinanceCategory, string> = {
+  ingredients: "วัตถุดิบ",
+  labor: "ค่าแรง",
+  utilities: "ค่าสาธารณูปโภค",
+  rent: "ค่าเช่า",
+  maintenance: "ซ่อมบำรุง",
+  marketing: "การตลาด",
+  other_expense: "อื่น ๆ (รายจ่าย)",
+  other_income: "รายรับอื่น",
+  catering: "รับจัดเลี้ยง",
+  adjustment: "ปรับปรุงยอด",
+};
+
+/** ขีดจำกัด validation การเงิน */
+export const FINANCE_NOTE_MAX = 500;
+export const FINANCE_REASON_MAX = 500;
+export const FINANCE_AMOUNT_MAX = 100000000;
+
+export interface FinanceEntry {
+  id: string;
+  kind: FinanceKind;
+  category: FinanceCategory;
+  /** จำนวนเงิน (บาท, >0, ทศนิยม ≤2) */
+  amount: number;
+  /** วันที่เกิดรายการ (UTC ISO — รับ wall-clock กรุงเทพแล้วแปลงที่ route/store) */
+  occurredAt: string;
+  note: string | null;
+  /** เหตุผล (บังคับ — ใช้ตรวจสอบย้อนหลัง) */
+  reason: string;
+  actorId: string | null;
+  actorUsername: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** ความละเอียดรายงาน: day (รายวัน) / month (รายเดือน) / year (รายปี) — buckets ฝั่ง Asia/Bangkok */
+export type FinanceGranularity = "day" | "month" | "year";
+
+export const FINANCE_GRANULARITIES: FinanceGranularity[] = ["day", "month", "year"];
+
+/** ยอดสรุปหนึ่ง bucket (gross − refunds = net; net + manualIncome − expense = profit) */
+export interface FinanceReportBucket {
+  /** คีย์ bucket ฝั่งกรุงเทพ: day=YYYY-MM-DD, month=YYYY-MM, year=YYYY */
+  bucket: string;
+  /** รายรับรวมจาก paid payments (นับครั้งเดียวตาม paidAt) */
+  grossRevenue: number;
+  /** ยอดคืนเงิน (ครั้งเดียวตาม approvedAt) */
+  refunds: number;
+  /** รายรับสุทธิ = gross − refunds */
+  netRevenue: number;
+  /** รายรับมือ (kind=income) */
+  manualIncome: number;
+  /** รายจ่ายจริง (kind=expense) */
+  actualExpense: number;
+  /** กำไรเบื้องต้น = netRevenue + manualIncome − actualExpense */
+  grossProfit: number;
+  /** จำนวนคำสั่งซื้อที่ชำระสำเร็จ (paid payments, นับครั้งเดียว) */
+  paidOrders: number;
+  /**
+   * ต้นทุนวัตถุดิบประมาณการรวม (จาก orders.estimatedCost ของคำสั่งซื้อที่ชำระ —
+   * แสดงเพื่อวิเคราะห์เท่านั้น ไม่หักในกำไรเพื่อกันหักต้นทุนซ้ำกับรายจ่ายจริง)
+   */
+  estimatedCost: number;
+}
+
+export interface FinanceReport {
+  granularity: FinanceGranularity;
+  /** ขอบเขต wall-clock กรุงเทพที่ขอ (YYYY-MM-DD) */
+  from: string;
+  to: string;
+  buckets: FinanceReportBucket[];
+  total: FinanceReportBucket;
+}
+
+/** เมนูขายดีหนึ่งอันดับ (นับเฉพาะรายการในคำสั่งซื้อที่ชำระสำเร็จ) */
+export interface FinanceTopMenu {
+  menuId: string;
+  menuName: string;
+  quantity: number;
+  revenue: number;
+}
+
+/** ชั่วโมงหนาแน่นหนึ่งชั่วโมง (0–23 ฝั่งกรุงเทพ) */
+export interface FinancePeakHour {
+  /** ชั่วโมงฝั่งกรุงเทพ 0–23 */
+  hour: number;
+  paidOrders: number;
+  revenue: number;
+}
+
+/** ภาพ occupancy ปัจจุบัน (ถ้ามี — null เมื่อไม่มีข้อมูลโต๊ะ/รอบ) */
+export interface FinanceOccupancy {
+  enabledTables: number;
+  freeTables: number;
+  occupiedTables: number;
+  customerCount: number;
+}
+
+/** KPI Dashboard รายวัน (Asia/Bangkok) */
+export interface FinanceDashboard {
+  /** วันที่ wall-clock กรุงเทพ (YYYY-MM-DD) */
+  date: string;
+  /** ยอดขายสุทธิวันนี้ = gross − refunds */
+  netSales: number;
+  grossRevenue: number;
+  refunds: number;
+  /** จำนวนคำสั่งซื้อที่ชำระสำเร็จ */
+  paidOrders: number;
+  /** บิลเฉลี่ย = netSales / paidOrders (0 เมื่อไม่มีคำสั่งซื้อ) */
+  averageTicket: number;
+  manualIncome: number;
+  actualExpense: number;
+  grossProfit: number;
+  /** ต้นทุนประมาณการ (แยกวิเคราะห์ ไม่หักในกำไร) */
+  estimatedCost: number;
+  topMenus: FinanceTopMenu[];
+  peakHours: FinancePeakHour[];
+  occupancy: FinanceOccupancy | null;
+  lowStockCount: number;
+}
+
+/** ประเภท CSV export (documented format — ดู FINANCE_CSV_FORMAT ใน routes/finance.ts) */
+export type FinanceCsvKind = "sales" | "orders" | "finance" | "stock" | "queue";
+
+export const FINANCE_CSV_KINDS: FinanceCsvKind[] = ["sales", "orders", "finance", "stock", "queue"];
 
 /** หลักฐานกลับรายการคะแนนเมื่อคืนเงิน (กัน double-reversal) */
 export interface LoyaltyReversal {

@@ -9,6 +9,16 @@ import type {
   Customer,
   CustomerLineLink,
   CustomerSession,
+  FinanceCategory,
+  FinanceDashboard,
+  FinanceEntry,
+  FinanceGranularity,
+  FinanceKind,
+  FinanceOccupancy,
+  FinancePeakHour,
+  FinanceReport,
+  FinanceReportBucket,
+  FinanceTopMenu,
   Ingredient,
   LineLoginTx,
   ManualStockOp,
@@ -249,6 +259,19 @@ import {
   walkinRedeemedEvent,
 } from "./loyalty/audit-events.js";
 import {
+  financeEntryCreatedEvent,
+  financeEntryDeletedEvent,
+  financeEntryUpdatedEvent,
+} from "./finance/audit-events.js";
+import {
+  normalizeFinanceAmount,
+  normalizeFinanceCategory,
+  normalizeFinanceKind,
+  normalizeFinanceNote,
+  normalizeFinanceOccurredAt,
+  normalizeFinanceReason,
+} from "./finance/validation.js";
+import {
   assertRedemptionTransition,
   buildWalkinCode,
   generateRedemptionCode,
@@ -391,7 +414,7 @@ export interface Store {
   deleteSessionsForUser(userId: string): Promise<void>;
   audit(input: AuditInput): Promise<void>;
   listAudit(
-    prefix: "login_" | "account_" | "shop_" | "customer_" | "menu_" | "order_" | "reservation_" | "round_" | "inventory_" | "payment_" | "queue_" | "loyalty_" | "all",
+    prefix: "login_" | "account_" | "shop_" | "customer_" | "menu_" | "order_" | "reservation_" | "round_" | "inventory_" | "payment_" | "queue_" | "loyalty_" | "finance_" | "all",
     limit: number,
   ): Promise<AuditEntry[]>;
   // ---- Ticket 02: สถานะร้านและโต๊ะ (อ่านเดี่ยว + mutation แบบ atomic พร้อม audit) ----
@@ -896,7 +919,55 @@ export interface Store {
    * refund เดิมเรียกซ้ำเป็น no-op (กัน double-reversal)
    */
   reversePointsOnRefund(orderId: string, refundId: string, actor: ShopActor, now?: Date): Promise<{ reversal: LoyaltyReversal; deduplicated: boolean }>;
+  // ---- Ticket 11: การเงิน รายจ่ายจริง/รายรับมือ + รายงาน/Dashboard (local-first) ----
+  /**
+   * สร้างรายการเงินมือ (Owner/Admin — route ตรวจสิทธิ์):
+   * kind=expense → หมวดรายจ่าย; kind=income → หมวดรายรับมือ + audit แบบ all-or-nothing
+   */
+  createFinanceEntry(
+    input: { kind: FinanceKind; category: FinanceCategory; amount: number; occurredAt: string; note?: string | null; reason: string },
+    actor: ShopActor,
+    now?: Date,
+  ): Promise<FinanceEntry>;
+  getFinanceEntry(id: string): Promise<FinanceEntry | null>;
+  /** รายการเงินมือ (ใหม่สุดก่อน, กรอง kind/category/ช่วง occurredAt ได้) */
+  listFinanceEntries(filter: ListFinanceEntriesFilter): Promise<FinanceEntry[]>;
+  /** แก้ไขรายการเงินมือ + audit ก่อน/หลัง แบบ all-or-nothing */
+  updateFinanceEntry(
+    id: string,
+    patch: { category?: FinanceCategory; amount?: number; occurredAt?: string; note?: string | null; reason: string },
+    actor: ShopActor,
+    now?: Date,
+  ): Promise<FinanceEntry>;
+  /** ลบรายการเงินมือ + audit แบบ all-or-nothing (ต้องมีเหตุผล) */
+  deleteFinanceEntry(id: string, input: { reason: string }, actor: ShopActor): Promise<void>;
+  /**
+   * รายงานการเงินตาม granularity (buckets ฝั่ง Asia/Bangkok):
+   * - รายรับ = paid payments ครั้งเดียวตาม paidAt; คืนเงิน = refunds ครั้งเดียวตาม approvedAt
+   * - รายรับมือ/รายจ่ายจริงจาก finance_entries ตาม occurredAt; ต้นทุนประมาณการแยกวิเคราะห์
+   */
+  getFinanceReport(input: { granularity: FinanceGranularity; from: string; to: string }): Promise<FinanceReport>;
+  /**
+   * KPI Dashboard รายวัน (Asia/Bangkok):
+   * ยอดขายสุทธิ, จำนวนคำสั่งซื้อที่ชำระ, บิลเฉลี่ย, top5 เมนูขายดี,
+   * ชั่วโมงหนาแน่น 24 ชม., occupancy (ถ้ามี), จำนวนวัตถุดิบสต๊อกต่ำ
+   */
+  getFinanceDashboard(date: string, now?: Date): Promise<FinanceDashboard>;
+  /** เมนูขายดีในช่วงวันที่ (นับเฉพาะรายการในคำสั่งซื้อที่ชำระสำเร็จ) */
+  getFinanceTopMenus(input: { from: string; to: string; limit: number }): Promise<FinanceTopMenu[]>;
+  /** ชั่วโมงหนาแน่นในช่วงวันที่ (0–23 ฝั่งกรุงเทพ) */
+  getFinancePeakHours(input: { from: string; to: string }): Promise<FinancePeakHour[]>;
   close?(): Promise<void>;
+}
+
+// ---- Ticket 11: ตัวกรองรายการเงินมือ ----
+export interface ListFinanceEntriesFilter {
+  kind?: FinanceKind;
+  category?: FinanceCategory;
+  /** กรอง occurredAt ฝั่ง UTC ISO (route แปลงจาก wall-clock กรุงเทพก่อนส่ง) */
+  fromOccurredAt?: string;
+  toOccurredAt?: string;
+  limit: number;
 }
 
 export interface MenuPatch {
@@ -1050,6 +1121,259 @@ export function normalizeRoles(roles: Role[]): Role[] {
   return [...new Set(roles)];
 }
 
+// ---------- Ticket 11: helpers ฝั่ง Asia/Bangkok (deterministic, ไม่มี DST) ----------
+
+/** เที่ยงคืนกรุงเทพของวัน YYYY-MM-DD ในรูป UTC ISO (กรุงเทพ = UTC+7 ตลอดปี) */
+export function bangkokDayStartUtc(date: string): string {
+  const [y, m, d] = date.split("-").map(Number) as [number, number, number];
+  return new Date(Date.UTC(y, m - 1, d, 0, 0, 0) - 7 * 3600_000).toISOString();
+}
+
+function isoToMysqlDatetime(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+}
+
+/**
+ * หน้าต่าง UTC สำหรับ from..to (wall-clock กรุงเทพ, ปลายรวม):
+ * [startMysql, endExclusiveMysql) — ใช้กับคอลัมน์ DATETIME (pool timezone Z)
+ */
+export function financeWindowMysql(from: string, to: string): { startMysql: string; endExclusiveMysql: string } {
+  const startIso = bangkokDayStartUtc(from);
+  const parts = to.split("-").map(Number) as [number, number, number];
+  const nextDay = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]) + 86400000);
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  const nextDate = `${nextDay.getUTCFullYear()}-${pad(nextDay.getUTCMonth() + 1)}-${pad(nextDay.getUTCDate())}`;
+  return { startMysql: isoToMysqlDatetime(startIso), endExclusiveMysql: isoToMysqlDatetime(bangkokDayStartUtc(nextDate)) };
+}
+
+/** แปลง UTC ISO เป็นส่วนประกอบ wall-clock กรุงเทพแบบ deterministic (ไม่พึ่ง Intl) */
+export function bangkokWallParts(iso: string): { date: string; month: string; year: string; hour: number } {
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) throw new Error("รูปแบบวันเวลาไม่ถูกต้อง");
+  const b = new Date(t + 7 * 3600_000);
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  const date = `${b.getUTCFullYear()}-${pad(b.getUTCMonth() + 1)}-${pad(b.getUTCDate())}`;
+  return {
+    date,
+    month: date.slice(0, 7),
+    year: date.slice(0, 4),
+    hour: b.getUTCHours(),
+  };
+}
+
+/** คีย์ bucket ตาม granularity จาก UTC ISO */
+export function financeBucketKey(granularity: FinanceGranularity, iso: string): string {
+  const p = bangkokWallParts(iso);
+  if (granularity === "day") return p.date;
+  if (granularity === "month") return p.month;
+  return p.year;
+}
+
+/** สร้างรายการ bucket ตาม granularity ครอบคลุม from..to (wall-clock กรุงเทพ) */
+export function financeBucketKeys(granularity: FinanceGranularity, from: string, to: string): string[] {
+  const keys: string[] = [];
+  if (granularity === "day") {
+    for (let cur = from; cur <= to; cur = nextBangkokDay(cur)) keys.push(cur);
+    return keys;
+  }
+  if (granularity === "month") {
+    let cur = from.slice(0, 7);
+    const end = to.slice(0, 7);
+    while (cur <= end) {
+      keys.push(cur);
+      cur = nextBangkokMonth(cur);
+    }
+    return keys;
+  }
+  const startY = Number(from.slice(0, 4));
+  const endY = Number(to.slice(0, 4));
+  for (let y = startY; y <= endY; y += 1) keys.push(String(y));
+  return keys;
+}
+
+function nextBangkokDay(date: string): string {
+  const [y, m, d] = date.split("-").map(Number) as [number, number, number];
+  const next = new Date(Date.UTC(y, m - 1, d) + 86400000);
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${next.getUTCFullYear()}-${pad(next.getUTCMonth() + 1)}-${pad(next.getUTCDate())}`;
+}
+
+function nextBangkokMonth(month: string): string {
+  let [y, m] = month.split("-").map(Number) as [number, number];
+  m += 1;
+  if (m > 12) {
+    m = 1;
+    y += 1;
+  }
+  return `${y}-${String(m).padStart(2, "0")}`;
+}
+
+export function emptyFinanceBucket(bucket: string): FinanceReportBucket {
+  return {
+    bucket,
+    grossRevenue: 0,
+    refunds: 0,
+    netRevenue: 0,
+    manualIncome: 0,
+    actualExpense: 0,
+    grossProfit: 0,
+    paidOrders: 0,
+    estimatedCost: 0,
+  };
+}
+
+export function roundBaht2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * มาสก์ PII สำหรับ CSV/รายงาน:
+ * - เบอร์โทร: แสดง 2 หลักแรก + 2 หลักสุดท้าย ที่เหลือเป็น * (เช่น 08******12)
+ * - ชื่อ: แสดงอักษรแรก + *** (เช่น ก***)
+ */
+export function maskPhone(phone: string | null): string {
+  if (!phone) return "-";
+  const digits = phone.replace(/\D/g, "");
+  if (digits.length < 4) return "***";
+  return `${digits.slice(0, 2)}******${digits.slice(-2)}`;
+}
+
+export function maskName(name: string | null): string {
+  if (!name) return "-";
+  const t = name.trim();
+  if (!t) return "-";
+  return `${[...t][0]}***`;
+}
+
+// ---------- Ticket 11: aggregation บริสุทธิ์ (ใช้ร่วม memory/MySQL/route) ----------
+
+export interface FinanceReportSource {
+  granularity: FinanceGranularity;
+  from: string;
+  to: string;
+  paidPayments: { amount: number; paidAt: string | null; orderId: string }[];
+  allRefunds: { amount: number; approvedAt: string }[];
+  allEntries: { kind: FinanceKind; amount: number; occurredAt: string }[];
+  orderById: (orderId: string) => { estimatedCost: number } | null;
+}
+
+/**
+ * สร้างรายงานการเงิน: paid นับครั้งเดียวตาม paidAt, refunds ครั้งเดียวตาม approvedAt
+ * (caller กรอง status=paid|refunded มาแล้ว — เงินที่รับมาแล้วนับเป็นรายรับแม้คืนภายหลัง
+ * ยอดคืนแสดงแยกใน refunds; ฟังก์ชันนี้ไม่ตีความสถานะเอง กันนับซ้ำสองชั้น)
+ */
+export function buildFinanceReport(src: FinanceReportSource): FinanceReport {
+  const keys = financeBucketKeys(src.granularity, src.from, src.to);
+  const buckets = new Map<string, FinanceReportBucket>(keys.map((k) => [k, emptyFinanceBucket(k)]));
+  for (const p of src.paidPayments) {
+    if (!p.paidAt) continue;
+    const key = financeBucketKey(src.granularity, p.paidAt);
+    const b = buckets.get(key);
+    if (!b) continue;
+    b.grossRevenue = roundBaht2(b.grossRevenue + p.amount);
+    b.paidOrders += 1;
+    const order = src.orderById(p.orderId);
+    if (order) b.estimatedCost = roundBaht2(b.estimatedCost + order.estimatedCost);
+  }
+  for (const r of src.allRefunds) {
+    const key = financeBucketKey(src.granularity, r.approvedAt);
+    const b = buckets.get(key);
+    if (!b) continue;
+    b.refunds = roundBaht2(b.refunds + r.amount);
+  }
+  for (const e of src.allEntries) {
+    const key = financeBucketKey(src.granularity, e.occurredAt);
+    const b = buckets.get(key);
+    if (!b) continue;
+    if (e.kind === "income") b.manualIncome = roundBaht2(b.manualIncome + e.amount);
+    else b.actualExpense = roundBaht2(b.actualExpense + e.amount);
+  }
+  const ordered = keys.map((k) => buckets.get(k)!);
+  for (const b of ordered) {
+    b.netRevenue = roundBaht2(b.grossRevenue - b.refunds);
+    b.grossProfit = roundBaht2(b.netRevenue + b.manualIncome - b.actualExpense);
+  }
+  const total = emptyFinanceBucket(`${src.from}..${src.to}`);
+  for (const b of ordered) {
+    total.grossRevenue = roundBaht2(total.grossRevenue + b.grossRevenue);
+    total.refunds = roundBaht2(total.refunds + b.refunds);
+    total.manualIncome = roundBaht2(total.manualIncome + b.manualIncome);
+    total.actualExpense = roundBaht2(total.actualExpense + b.actualExpense);
+    total.paidOrders += b.paidOrders;
+    total.estimatedCost = roundBaht2(total.estimatedCost + b.estimatedCost);
+  }
+  total.netRevenue = roundBaht2(total.grossRevenue - total.refunds);
+  total.grossProfit = roundBaht2(total.netRevenue + total.manualIncome - total.actualExpense);
+  return { granularity: src.granularity, from: src.from, to: src.to, buckets: ordered, total };
+}
+
+export interface FinanceTopMenuSource {
+  from: string;
+  to: string;
+  limit: number;
+  paidPayments: { paidAt: string | null; orderId: string }[];
+  itemsByOrder: (orderId: string) => { menuId: string; menuName: string; quantity: number; unitPrice: number; lineTotal: number }[];
+}
+
+export function buildFinanceTopMenus(src: FinanceTopMenuSource): FinanceTopMenu[] {
+  const limit = Math.min(Math.max(src.limit || 10, 1), 50);
+  const fromStart = new Date(bangkokDayStartUtc(src.from)).getTime();
+  const toEnd = new Date(bangkokDayStartUtc(src.to)).getTime() + 86400000 - 1;
+  const paidOrderIds = new Set(
+    src.paidPayments
+      .filter((p) => {
+        if (!p.paidAt) return false;
+        const t = new Date(p.paidAt).getTime();
+        return t >= fromStart && t <= toEnd;
+      })
+      .map((p) => p.orderId),
+  );
+  const agg = new Map<string, { menuName: string; quantity: number; revenue: number }>();
+  for (const oid of paidOrderIds) {
+    for (const item of src.itemsByOrder(oid)) {
+      // รางวัลราคา 0 ไม่สร้างรายรับ — ข้ามรายการราคา 0 จากยอดขาย
+      if (item.unitPrice <= 0) continue;
+      const cur = agg.get(item.menuId) ?? { menuName: item.menuName, quantity: 0, revenue: 0 };
+      cur.quantity += item.quantity;
+      cur.revenue = roundBaht2(cur.revenue + item.lineTotal);
+      agg.set(item.menuId, cur);
+    }
+  }
+  return [...agg.entries()]
+    .map(([menuId, v]) => ({ menuId, menuName: v.menuName, quantity: v.quantity, revenue: v.revenue }))
+    .sort((a, b) => b.revenue - a.revenue || b.quantity - a.quantity)
+    .slice(0, limit);
+}
+
+export interface FinancePeakHourSource {
+  from: string;
+  to: string;
+  paidPayments: { amount: number; paidAt: string | null }[];
+}
+
+export function buildFinancePeakHours(src: FinancePeakHourSource): FinancePeakHour[] {
+  const fromStart = new Date(bangkokDayStartUtc(src.from)).getTime();
+  const toEnd = new Date(bangkokDayStartUtc(src.to)).getTime() + 86400000 - 1;
+  const hours: { paidOrders: number; revenue: number }[] = Array.from({ length: 24 }, () => ({
+    paidOrders: 0,
+    revenue: 0,
+  }));
+  for (const p of src.paidPayments) {
+    if (!p.paidAt) continue;
+    const t = new Date(p.paidAt).getTime();
+    if (t < fromStart || t > toEnd) continue;
+    const h = bangkokWallParts(p.paidAt).hour;
+    hours[h]!.paidOrders += 1;
+    hours[h]!.revenue = roundBaht2(hours[h]!.revenue + p.amount);
+  }
+  // คืนเฉพาะชั่วโมงที่มีกิจกรรม (dashboard เติม 0 เองเมื่อต้องการครบ 24 ชม.)
+  return hours
+    .map((h, hour) => ({ hour, paidOrders: h.paidOrders, revenue: h.revenue }))
+    .filter((h) => h.paidOrders > 0);
+}
+
 export interface MemoryStoreOptions {
   /**
    * seam สำหรับทดสอบ atomicity: คืน true แล้ว audit() จะโยน error
@@ -1142,6 +1466,8 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
   const lineLinks = new Map<string, CustomerLineLink>();
   const lineLinksBySubject = new Map<string, string>();
   const lineTx = new Map<string, LineLoginTx>();
+  // ---- Ticket 11 memory state: รายการเงินมือ (รายรับจาก paid orders  derived ไม่เก็บที่นี่) ----
+  const financeEntries = new Map<string, FinanceEntry>();
 
   function cloneSchedule(s: WeeklySchedule): WeeklySchedule {
     return normalizeWeeklySchedule(JSON.parse(JSON.stringify(s)) as unknown);
@@ -5111,6 +5437,211 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
         }
       });
     },
+    // ---- Ticket 11 memory: รายการเงินมือ + รายงาน/Dashboard (all-or-nothing + derived รายรับ) ----
+    async createFinanceEntry(input, actor, now = new Date()) {
+      const auditsLen = audits.length;
+      const auditsSeq = auditSeq;
+      const entriesBackup = new Map(financeEntries);
+      try {
+        const kind = normalizeFinanceKind(input.kind);
+        const category = normalizeFinanceCategory(kind, input.category);
+        const amount = normalizeFinanceAmount(input.amount);
+        const occurredAt = normalizeFinanceOccurredAt(input.occurredAt);
+        const note = normalizeFinanceNote(input.note ?? null);
+        const reason = normalizeFinanceReason(input.reason);
+        const at = now.toISOString();
+        const entry: FinanceEntry = {
+          id: randomUUID(),
+          kind,
+          category,
+          amount: roundBaht2(amount),
+          occurredAt,
+          note,
+          reason,
+          actorId: actor.actorId ?? null,
+          actorUsername: actor.actorUsername ?? null,
+          createdAt: at,
+          updatedAt: at,
+        };
+        financeEntries.set(entry.id, { ...entry });
+        await writeAudit(financeEntryCreatedEvent(entry, actor));
+        return { ...entry };
+      } catch (err) {
+        financeEntries.clear();
+        for (const [id, e] of entriesBackup) financeEntries.set(id, e);
+        audits.length = auditsLen;
+        auditSeq = auditsSeq;
+        throw err;
+      }
+    },
+    async getFinanceEntry(id) {
+      const e = financeEntries.get(id);
+      return e ? { ...e } : null;
+    },
+    async listFinanceEntries(filter) {
+      const limit = Math.min(Math.max(filter.limit || 50, 1), 200);
+      const fromT = filter.fromOccurredAt ? new Date(filter.fromOccurredAt).getTime() : null;
+      const toT = filter.toOccurredAt ? new Date(filter.toOccurredAt).getTime() : null;
+      return [...financeEntries.values()]
+        .filter((e) => {
+          if (filter.kind && e.kind !== filter.kind) return false;
+          if (filter.category && e.category !== filter.category) return false;
+          const t = new Date(e.occurredAt).getTime();
+          if (fromT !== null && t < fromT) return false;
+          if (toT !== null && t > toT) return false;
+          return true;
+        })
+        .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt) || b.createdAt.localeCompare(a.createdAt))
+        .slice(0, limit)
+        .map((e) => ({ ...e }));
+    },
+    async updateFinanceEntry(id, patch, actor, now = new Date()) {
+      const auditsLen = audits.length;
+      const auditsSeq = auditSeq;
+      const entriesBackup = new Map(financeEntries);
+      try {
+        const current = financeEntries.get(id);
+        if (!current) throw new NotFoundError("ไม่พบรายการเงิน");
+        const reason = normalizeFinanceReason(patch.reason);
+        const before = { ...current };
+        const next: FinanceEntry = { ...current };
+        if (patch.category !== undefined) {
+          next.category = normalizeFinanceCategory(current.kind, patch.category);
+        }
+        if (patch.amount !== undefined) {
+          next.amount = roundBaht2(normalizeFinanceAmount(patch.amount));
+        }
+        if (patch.occurredAt !== undefined) {
+          next.occurredAt = normalizeFinanceOccurredAt(patch.occurredAt);
+        }
+        if (patch.note !== undefined) {
+          next.note = normalizeFinanceNote(patch.note);
+        }
+        next.updatedAt = now.toISOString();
+        financeEntries.set(id, { ...next });
+        await writeAudit(financeEntryUpdatedEvent(before, next, reason, actor));
+        return { ...next };
+      } catch (err) {
+        financeEntries.clear();
+        for (const [eid, e] of entriesBackup) financeEntries.set(eid, e);
+        audits.length = auditsLen;
+        auditSeq = auditsSeq;
+        throw err;
+      }
+    },
+    async deleteFinanceEntry(id, input, actor) {
+      const auditsLen = audits.length;
+      const auditsSeq = auditSeq;
+      const entriesBackup = new Map(financeEntries);
+      try {
+        const current = financeEntries.get(id);
+        if (!current) throw new NotFoundError("ไม่พบรายการเงิน");
+        const reason = normalizeFinanceReason(input.reason);
+        financeEntries.delete(id);
+        await writeAudit(financeEntryDeletedEvent(current, reason, actor));
+      } catch (err) {
+        financeEntries.clear();
+        for (const [eid, e] of entriesBackup) financeEntries.set(eid, e);
+        audits.length = auditsLen;
+        auditSeq = auditsSeq;
+        throw err;
+      }
+    },
+    async getFinanceReport(input) {
+      return buildFinanceReport({
+        granularity: input.granularity,
+        from: input.from,
+        to: input.to,
+        paidPayments: [...payments.values()].filter(
+          (p) => (p.status === "paid" || p.status === "refunded") && p.paidAt,
+        ),
+        allRefunds: [...refunds.values()],
+        allEntries: [...financeEntries.values()],
+        orderById: (oid) => {
+          const o = orders.get(oid);
+          return o ? { estimatedCost: o.estimatedCost } : null;
+        },
+      });
+    },
+    async getFinanceDashboard(date, now = new Date()) {
+      void now;
+      // รายรับ = เงินที่รับมาแล้ว (paid หรือ refunded ภายหลัง — ยอดคืนแสดงแยกใน refunds)
+      const paidList = [...payments.values()].filter(
+        (p) => (p.status === "paid" || p.status === "refunded") && p.paidAt,
+      );
+      const dayReport = buildFinanceReport({
+        granularity: "day",
+        from: date,
+        to: date,
+        paidPayments: paidList,
+        allRefunds: [...refunds.values()],
+        allEntries: [...financeEntries.values()],
+        orderById: (oid) => {
+          const o = orders.get(oid);
+          return o ? { estimatedCost: o.estimatedCost } : null;
+        },
+      });
+      const day = dayReport.buckets[0] ?? emptyFinanceBucket(date);
+      const topMenus = buildFinanceTopMenus({
+        from: date,
+        to: date,
+        limit: 5,
+        paidPayments: paidList,
+        itemsByOrder: (oid) => orderItems.get(oid) ?? [],
+      });
+      const peakHours = buildFinancePeakHours({ from: date, to: date, paidPayments: paidList });
+      const enabledTables = [...tables.values()].filter((t) => t.isEnabled);
+      const openRounds = [...tableRounds.values()].filter((r) => r.status === "open");
+      const openTableIds = new Set(openRounds.map((r) => r.tableId));
+      const occupancy: FinanceOccupancy | null =
+        enabledTables.length === 0
+          ? null
+          : {
+              enabledTables: enabledTables.length,
+              occupiedTables: enabledTables.filter((t) => openTableIds.has(t.id)).length,
+              freeTables: enabledTables.filter((t) => !openTableIds.has(t.id)).length,
+              customerCount: openRounds.reduce((sum, r) => sum + r.partySize, 0),
+            };
+      const lowStockCount = [...ingredients.values()].filter(
+        (g) => g.isEnabled && g.onHand - g.reserved < g.reorderThreshold,
+      ).length;
+      return {
+        date,
+        netSales: day.netRevenue,
+        grossRevenue: day.grossRevenue,
+        refunds: day.refunds,
+        paidOrders: day.paidOrders,
+        averageTicket: day.paidOrders === 0 ? 0 : roundBaht2(day.netRevenue / day.paidOrders),
+        manualIncome: day.manualIncome,
+        actualExpense: day.actualExpense,
+        grossProfit: day.grossProfit,
+        estimatedCost: day.estimatedCost,
+        topMenus,
+        peakHours,
+        occupancy,
+        lowStockCount,
+      };
+    },
+    async getFinanceTopMenus(input) {
+      return buildFinanceTopMenus({
+        from: input.from,
+        to: input.to,
+        limit: input.limit,
+        paidPayments: [...payments.values()].filter(
+          (p) => (p.status === "paid" || p.status === "refunded") && p.paidAt,
+        ),
+        itemsByOrder: (oid) => orderItems.get(oid) ?? [],
+      });
+    },
+    async getFinancePeakHours(input) {
+      return buildFinancePeakHours({
+        from: input.from,
+        to: input.to,
+        paidPayments: [...payments.values()].filter(
+          (p) => (p.status === "paid" || p.status === "refunded") && p.paidAt,
+        ),
+      });
+    },
     // ---- Ticket 06 memory: การจอง + รอบการใช้โต๊ะ (all-or-nothing + serialize กันชน) ----
     async createReservation(input, actor, now = new Date()) {
       return runReservationExclusive(async () => {
@@ -5456,6 +5987,7 @@ const MIGRATION_FILES = [
   "009_payments_receipts_refunds.sql",
   "010_kitchen_drink_queues.sql",
   "011_loyalty_rewards.sql",
+  "012_finance_entries.sql",
 ];
 
 export function findMigrationFile(name = MIGRATION_FILES[0]!): string {
@@ -5756,6 +6288,26 @@ function rowToRefund(r: Record<string, unknown>): Refund {
     approvedBy: r["approved_by"] == null ? null : String(r["approved_by"]),
     approvedAt: new Date(r["approved_at"] as string).toISOString(),
     createdAt: new Date(r["created_at"] as string).toISOString(),
+  };
+}
+
+// ---- Ticket 11: converter แถว finance_entries (ใช้ทั้ง seams ใน createMysqlStore) ----
+
+function rowToFinanceEntry(r: Record<string, unknown>): FinanceEntry {
+  const kind = String(r["kind"]);
+  if (kind !== "income" && kind !== "expense") throw new Error("ประเภทรายการเงินในฐานข้อมูลไม่ถูกต้อง");
+  return {
+    id: String(r["id"]),
+    kind,
+    category: String(r["category"]) as FinanceCategory,
+    amount: Number(r["amount"]),
+    occurredAt: new Date(r["occurred_at"] as string).toISOString(),
+    note: r["note"] == null ? null : String(r["note"]),
+    reason: String(r["reason"] ?? ""),
+    actorId: r["actor_id"] == null ? null : String(r["actor_id"]),
+    actorUsername: r["actor_username"] == null ? null : String(r["actor_username"]),
+    createdAt: new Date(r["created_at"] as string).toISOString(),
+    updatedAt: new Date(r["updated_at"] as string).toISOString(),
   };
 }
 
@@ -10680,6 +11232,285 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
         ];
         if (fRows.length === 0) throw new NotFoundError("ไม่พบคำขอคืนเงิน");
         return reversePointsTx(conn, orderId, refundId, actor, now);
+      });
+    },
+    // ---- Ticket 11 MySQL: รายการเงินมือ + รายงาน/Dashboard (derived รายรับจาก payments/refunds) ----
+    async createFinanceEntry(input, actor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const kind = normalizeFinanceKind(input.kind);
+        const category = normalizeFinanceCategory(kind, input.category);
+        const amount = roundBaht2(normalizeFinanceAmount(input.amount));
+        const occurredAt = normalizeFinanceOccurredAt(input.occurredAt);
+        const note = normalizeFinanceNote(input.note ?? null);
+        const reason = normalizeFinanceReason(input.reason);
+        const id = randomUUID();
+        await conn.query(
+          "INSERT INTO finance_entries (id, kind, category, amount, occurred_at, note, reason, actor_id, actor_username) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          [id, kind, category, amount, toMysqlDatetime(occurredAt), note, reason, actor.actorId ?? null, actor.actorUsername ?? null],
+        );
+        const [rows] = (await conn.query("SELECT * FROM finance_entries WHERE id = ? LIMIT 1", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new Error("บันทึกรายการเงินไม่สำเร็จ");
+        const entry = rowToFinanceEntry(rows[0]!);
+        await insertAuditRow(conn, financeEntryCreatedEvent(entry, actor));
+        void now;
+        return entry;
+      });
+    },
+    async getFinanceEntry(id: string) {
+      const [rows] = (await pool.query("SELECT * FROM finance_entries WHERE id = ? LIMIT 1", [id])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      if (rows.length === 0) return null;
+      return rowToFinanceEntry(rows[0]!);
+    },
+    async listFinanceEntries(filter) {
+      const limit = Math.min(Math.max(filter.limit || 50, 1), 200);
+      const conds: string[] = [];
+      const params: unknown[] = [];
+      if (filter.kind) {
+        conds.push("kind = ?");
+        params.push(filter.kind);
+      }
+      if (filter.category) {
+        conds.push("category = ?");
+        params.push(filter.category);
+      }
+      if (filter.fromOccurredAt) {
+        conds.push("occurred_at >= ?");
+        params.push(toMysqlDatetime(filter.fromOccurredAt));
+      }
+      if (filter.toOccurredAt) {
+        conds.push("occurred_at <= ?");
+        params.push(toMysqlDatetime(filter.toOccurredAt));
+      }
+      const where = conds.length > 0 ? `WHERE ${conds.join(" AND ")}` : "";
+      const [rows] = (await pool.query(
+        `SELECT * FROM finance_entries ${where} ORDER BY occurred_at DESC, created_at DESC LIMIT ?`,
+        [...params, limit],
+      )) as [Record<string, unknown>[], unknown];
+      return (rows as Record<string, unknown>[]).map(rowToFinanceEntry);
+    },
+    async updateFinanceEntry(id, patch, actor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM finance_entries WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบรายการเงิน");
+        const before = rowToFinanceEntry(rows[0]!);
+        const reason = normalizeFinanceReason(patch.reason);
+        const sets: string[] = [];
+        const params: unknown[] = [];
+        let category = before.category;
+        let amount = before.amount;
+        let occurredAt = before.occurredAt;
+        let note = before.note;
+        if (patch.category !== undefined) {
+          category = normalizeFinanceCategory(before.kind, patch.category);
+          sets.push("category = ?");
+          params.push(category);
+        }
+        if (patch.amount !== undefined) {
+          amount = roundBaht2(normalizeFinanceAmount(patch.amount));
+          sets.push("amount = ?");
+          params.push(amount);
+        }
+        if (patch.occurredAt !== undefined) {
+          occurredAt = normalizeFinanceOccurredAt(patch.occurredAt);
+          sets.push("occurred_at = ?");
+          params.push(toMysqlDatetime(occurredAt));
+        }
+        if (patch.note !== undefined) {
+          note = normalizeFinanceNote(patch.note);
+          sets.push("note = ?");
+          params.push(note);
+        }
+        if (sets.length > 0) {
+          await conn.query(`UPDATE finance_entries SET ${sets.join(", ")} WHERE id = ?`, [...params, id]);
+        }
+        const [afterRows] = (await conn.query("SELECT * FROM finance_entries WHERE id = ? LIMIT 1", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const after = rowToFinanceEntry(afterRows[0]!);
+        await insertAuditRow(conn, financeEntryUpdatedEvent(before, after, reason, actor));
+        void now;
+        return after;
+      });
+    },
+    async deleteFinanceEntry(id, input, actor) {
+      return withPaymentTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM finance_entries WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบรายการเงิน");
+        const entry = rowToFinanceEntry(rows[0]!);
+        const reason = normalizeFinanceReason(input.reason);
+        await conn.query("DELETE FROM finance_entries WHERE id = ?", [id]);
+        await insertAuditRow(conn, financeEntryDeletedEvent(entry, reason, actor));
+      });
+    },
+    async getFinanceReport(input) {
+      const { startMysql, endExclusiveMysql } = financeWindowMysql(input.from, input.to);
+      const [payRows] = (await pool.query(
+        "SELECT amount, paid_at, order_id FROM payments WHERE status IN ('paid', 'refunded') AND paid_at IS NOT NULL AND paid_at >= ? AND paid_at < ?",
+        [startMysql, endExclusiveMysql],
+      )) as [Record<string, unknown>[], unknown];
+      const paidPayments = (payRows as Record<string, unknown>[]).map((r) => ({
+        amount: Number(r["amount"]),
+        paidAt: r["paid_at"] == null ? null : new Date(r["paid_at"] as string).toISOString(),
+        orderId: String(r["order_id"]),
+      }));
+      const [refRows] = (await pool.query(
+        "SELECT amount, approved_at FROM refunds WHERE approved_at >= ? AND approved_at < ?",
+        [startMysql, endExclusiveMysql],
+      )) as [Record<string, unknown>[], unknown];
+      const allRefunds = (refRows as Record<string, unknown>[]).map((r) => ({
+        amount: Number(r["amount"]),
+        approvedAt: new Date(r["approved_at"] as string).toISOString(),
+      }));
+      const [entRows] = (await pool.query(
+        "SELECT kind, amount, occurred_at FROM finance_entries WHERE occurred_at >= ? AND occurred_at < ?",
+        [startMysql, endExclusiveMysql],
+      )) as [Record<string, unknown>[], unknown];
+      const allEntries = (entRows as Record<string, unknown>[]).map((r) => ({
+        kind: String(r["kind"]) as FinanceKind,
+        amount: Number(r["amount"]),
+        occurredAt: new Date(r["occurred_at"] as string).toISOString(),
+      }));
+      const orderIds = [...new Set(paidPayments.map((p) => p.orderId))];
+      const costByOrder = new Map<string, number>();
+      for (let i = 0; i < orderIds.length; i += 500) {
+        const chunk = orderIds.slice(i, i + 500);
+        const [oRows] = (await pool.query(
+          `SELECT id, estimated_cost FROM orders WHERE id IN (${chunk.map(() => "?").join(",")})`,
+          chunk,
+        )) as [Record<string, unknown>[], unknown];
+        for (const r of oRows as Record<string, unknown>[]) {
+          costByOrder.set(String(r["id"]), Number(r["estimated_cost"] ?? 0));
+        }
+      }
+      return buildFinanceReport({
+        granularity: input.granularity,
+        from: input.from,
+        to: input.to,
+        paidPayments,
+        allRefunds,
+        allEntries,
+        orderById: (oid) => {
+          const c = costByOrder.get(oid);
+          return c === undefined ? null : { estimatedCost: c };
+        },
+      });
+    },
+    async getFinanceDashboard(date, now: Date = new Date()) {
+      const report = await mysqlStore.getFinanceReport({ granularity: "day", from: date, to: date });
+      const day = report.buckets[0] ?? emptyFinanceBucket(date);
+      const topMenus = await mysqlStore.getFinanceTopMenus({ from: date, to: date, limit: 5 });
+      const peakHours = await mysqlStore.getFinancePeakHours({ from: date, to: date });
+      const [tRows] = (await pool.query("SELECT id, is_enabled FROM shop_tables")) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      const enabled = (tRows as Record<string, unknown>[]).filter((r) => Number(r["is_enabled"]) === 1);
+      const [roundRows] = (await pool.query(
+        "SELECT table_id, party_size FROM table_rounds WHERE status = 'open'",
+      )) as [Record<string, unknown>[], unknown];
+      const openRounds = roundRows as Record<string, unknown>[];
+      const occupancy: FinanceOccupancy | null =
+        enabled.length === 0
+          ? null
+          : {
+              enabledTables: enabled.length,
+              occupiedTables: new Set(openRounds.map((r) => String(r["table_id"]))).size,
+              freeTables: enabled.length - new Set(openRounds.map((r) => String(r["table_id"]))).size,
+              customerCount: openRounds.reduce((sum, r) => sum + Number(r["party_size"] ?? 0), 0),
+            };
+      void now;
+      const [sRows] = (await pool.query(
+        "SELECT on_hand, reserved, reorder_threshold, is_enabled FROM ingredients WHERE is_enabled = 1",
+      )) as [Record<string, unknown>[], unknown];
+      const lowStockCount = (sRows as Record<string, unknown>[]).filter(
+        (r) => Number(r["on_hand"]) - Number(r["reserved"]) < Number(r["reorder_threshold"]),
+      ).length;
+      return {
+        date,
+        netSales: day.netRevenue,
+        grossRevenue: day.grossRevenue,
+        refunds: day.refunds,
+        paidOrders: day.paidOrders,
+        averageTicket: day.paidOrders === 0 ? 0 : roundBaht2(day.netRevenue / day.paidOrders),
+        manualIncome: day.manualIncome,
+        actualExpense: day.actualExpense,
+        grossProfit: day.grossProfit,
+        estimatedCost: day.estimatedCost,
+        topMenus,
+        peakHours,
+        occupancy,
+        lowStockCount,
+      };
+    },
+    async getFinanceTopMenus(input) {
+      const limit = Math.min(Math.max(input.limit || 10, 1), 50);
+      const { startMysql, endExclusiveMysql } = financeWindowMysql(input.from, input.to);
+      const [payRows] = (await pool.query(
+        "SELECT id, order_id, paid_at FROM payments WHERE status IN ('paid', 'refunded') AND paid_at IS NOT NULL AND paid_at >= ? AND paid_at < ?",
+        [startMysql, endExclusiveMysql],
+      )) as [Record<string, unknown>[], unknown];
+      const paidPayments = (payRows as Record<string, unknown>[]).map((r) => ({
+        paidAt: r["paid_at"] == null ? null : new Date(r["paid_at"] as string).toISOString(),
+        orderId: String(r["order_id"]),
+      }));
+      const orderIds = [...new Set(paidPayments.map((p) => p.orderId))];
+      const grouped = new Map<
+        string,
+        { menuId: string; menuName: string; quantity: number; unitPrice: number; lineTotal: number }[]
+      >();
+      for (let i = 0; i < orderIds.length; i += 500) {
+        const chunk = orderIds.slice(i, i + 500);
+        const [iRows] = (await pool.query(
+          `SELECT order_id, menu_id, menu_name, quantity, unit_price, line_total FROM order_items WHERE order_id IN (${chunk.map(() => "?").join(",")})`,
+          chunk,
+        )) as [Record<string, unknown>[], unknown];
+        for (const r of iRows as Record<string, unknown>[]) {
+          const oid = String(r["order_id"]);
+          const list = grouped.get(oid) ?? [];
+          list.push({
+            menuId: String(r["menu_id"]),
+            menuName: String(r["menu_name"]),
+            quantity: Number(r["quantity"]),
+            unitPrice: Number(r["unit_price"]),
+            lineTotal: Number(r["line_total"]),
+          });
+          grouped.set(oid, list);
+        }
+      }
+      return buildFinanceTopMenus({
+        from: input.from,
+        to: input.to,
+        limit,
+        paidPayments,
+        itemsByOrder: (oid) => grouped.get(oid) ?? [],
+      });
+    },
+    async getFinancePeakHours(input) {
+      const { startMysql, endExclusiveMysql } = financeWindowMysql(input.from, input.to);
+      const [payRows] = (await pool.query(
+        "SELECT amount, paid_at FROM payments WHERE status IN ('paid', 'refunded') AND paid_at IS NOT NULL AND paid_at >= ? AND paid_at < ?",
+        [startMysql, endExclusiveMysql],
+      )) as [Record<string, unknown>[], unknown];
+      return buildFinancePeakHours({
+        from: input.from,
+        to: input.to,
+        paidPayments: (payRows as Record<string, unknown>[]).map((r) => ({
+          amount: Number(r["amount"]),
+          paidAt: r["paid_at"] == null ? null : new Date(r["paid_at"] as string).toISOString(),
+        })),
       });
     },
     async close() {

@@ -717,6 +717,126 @@ export interface RewardPatch {
   isActive?: boolean;
 }
 
+// ---------- Ticket 11: การเงิน รายงาน Dashboard และ CSV ----------
+
+export type FinanceKind = "income" | "expense";
+
+export type FinanceCategory =
+  | "ingredients"
+  | "labor"
+  | "utilities"
+  | "rent"
+  | "maintenance"
+  | "marketing"
+  | "other_expense"
+  | "other_income"
+  | "catering"
+  | "adjustment";
+
+export const FINANCE_CATEGORY_LABELS: Record<FinanceCategory, string> = {
+  ingredients: "วัตถุดิบ",
+  labor: "ค่าแรง",
+  utilities: "ค่าสาธารณูปโภค",
+  rent: "ค่าเช่า",
+  maintenance: "ซ่อมบำรุง",
+  marketing: "การตลาด",
+  other_expense: "อื่น ๆ (รายจ่าย)",
+  other_income: "รายรับอื่น",
+  catering: "รับจัดเลี้ยง",
+  adjustment: "ปรับปรุงยอด",
+};
+
+export const FINANCE_EXPENSE_CATEGORIES: FinanceCategory[] = [
+  "ingredients",
+  "labor",
+  "utilities",
+  "rent",
+  "maintenance",
+  "marketing",
+  "other_expense",
+];
+
+export const FINANCE_INCOME_CATEGORIES: FinanceCategory[] = [
+  "other_income",
+  "catering",
+  "adjustment",
+];
+
+export interface FinanceEntry {
+  id: string;
+  kind: FinanceKind;
+  category: FinanceCategory;
+  amount: number;
+  occurredAt: string;
+  note: string | null;
+  reason: string;
+  actorId: string | null;
+  actorUsername: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type FinanceGranularity = "day" | "month" | "year";
+
+export interface FinanceReportBucket {
+  bucket: string;
+  grossRevenue: number;
+  refunds: number;
+  netRevenue: number;
+  manualIncome: number;
+  actualExpense: number;
+  grossProfit: number;
+  paidOrders: number;
+  estimatedCost: number;
+}
+
+export interface FinanceReport {
+  granularity: FinanceGranularity;
+  from: string;
+  to: string;
+  buckets: FinanceReportBucket[];
+  total: FinanceReportBucket;
+}
+
+export interface FinanceTopMenu {
+  menuId: string;
+  menuName: string;
+  quantity: number;
+  revenue: number;
+}
+
+export interface FinancePeakHour {
+  hour: number;
+  paidOrders: number;
+  revenue: number;
+}
+
+export interface FinanceOccupancy {
+  enabledTables: number;
+  freeTables: number;
+  occupiedTables: number;
+  customerCount: number;
+}
+
+export interface FinanceDashboard {
+  date: string;
+  netSales: number;
+  grossRevenue: number;
+  refunds: number;
+  paidOrders: number;
+  averageTicket: number;
+  manualIncome: number;
+  actualExpense: number;
+  grossProfit: number;
+  estimatedCost: number;
+  topMenus: FinanceTopMenu[];
+  peakHours: FinancePeakHour[];
+  occupancy: FinanceOccupancy | null;
+  lowStockCount: number;
+}
+
+export type FinanceCsvKind = "sales" | "orders" | "finance" | "stock" | "queue";
+
 /** ประวัติร้านใช้ AuditItem ชุดเดียวกับประวัติบัญชี (shape เดียวกัน ไม่ duplicate type) */
 
 const BASE = import.meta.env["VITE_API_URL"] ?? "";
@@ -1209,4 +1329,40 @@ export const api = {
       true,
     ),
   loyaltyAudit: () => req<{ items: AuditItem[] }>("/api/audit/loyalty?limit=100"),
+  // Ticket 11: การเงิน รายงาน Dashboard และ CSV (Owner/Admin เท่านั้น)
+  financeEntries: (q: { kind?: FinanceKind; category?: string; from?: string; to?: string; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (q.kind) params.set("kind", q.kind);
+    if (q.category) params.set("category", q.category);
+    if (q.from) params.set("from", q.from);
+    if (q.to) params.set("to", q.to);
+    params.set("limit", String(q.limit ?? 50));
+    return req<{ entries: FinanceEntry[] }>(`/api/finance/entries?${params.toString()}`);
+  },
+  financeEntryCreate: (body: { kind: FinanceKind; category: string; amount: number; occurredAt: string; note?: string | null; reason: string }) =>
+    req<{ entry: FinanceEntry }>("/api/finance/entries", { method: "POST", body: JSON.stringify(body) }, true),
+  financeEntryUpdate: (id: string, body: { category?: string; amount?: number; occurredAt?: string; note?: string | null; reason: string }) =>
+    req<{ entry: FinanceEntry }>(`/api/finance/entries/${id}`, { method: "PATCH", body: JSON.stringify(body) }, true),
+  financeEntryDelete: (id: string, reason: string) =>
+    req<{ ok: boolean; message: string }>(`/api/finance/entries/${id}`, { method: "DELETE", body: JSON.stringify({ reason }) }, true),
+  financeReport: (q: { granularity?: FinanceGranularity; from: string; to: string }) => {
+    const params = new URLSearchParams();
+    if (q.granularity) params.set("granularity", q.granularity);
+    params.set("from", q.from);
+    params.set("to", q.to);
+    return req<{ report: FinanceReport }>(`/api/finance/reports?${params.toString()}`);
+  },
+  financeDashboard: (date?: string) =>
+    req<{ dashboard: FinanceDashboard }>(`/api/finance/dashboard${date ? `?date=${encodeURIComponent(date)}` : ""}`),
+  financeTopMenus: (from: string, to: string, limit = 10) =>
+    req<{ items: FinanceTopMenu[] }>(
+      `/api/finance/analytics/top-menus?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=${limit}`,
+    ),
+  financePeakHours: (from: string, to: string) =>
+    req<{ hours: FinancePeakHour[] }>(
+      `/api/finance/analytics/peak-hours?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+    ),
+  financeExportUrl: (kind: FinanceCsvKind, from: string, to: string) =>
+    `/api/finance/export?kind=${kind}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+  financeAudit: () => req<{ items: AuditItem[] }>("/api/audit/finance?limit=100"),
 };

@@ -28,6 +28,8 @@ import StationQueuePage from "./pages/StationQueue";
 import QueueTrackPage from "./pages/QueueTrack";
 import RewardsPage from "./pages/Rewards";
 import AdminRewardsPage from "./pages/AdminRewards";
+import FinanceDashboardPage from "./pages/FinanceDashboard";
+import FinanceEntriesPage from "./pages/FinanceEntries";
 
 const NAV_BASE =
   "inline-flex min-h-[44px] items-center rounded-xl border px-4 py-2 text-sm font-semibold transition-colors";
@@ -189,6 +191,16 @@ export default function App() {
               </NavLink>
             )}
             {isManager && (
+              <NavLink to="/finance/dashboard" className={({ isActive }) => navClass(isActive)}>
+                Dashboard การเงิน
+              </NavLink>
+            )}
+            {isManager && (
+              <NavLink to="/finance/entries" className={({ isActive }) => navClass(isActive)}>
+                รายรับ/รายจ่าย
+              </NavLink>
+            )}
+            {isManager && (
               <NavLink to="/shop" className={({ isActive }) => navClass(isActive)}>
                 ร้าน
               </NavLink>
@@ -254,6 +266,8 @@ export default function App() {
           {isManager && <Route path="/admin/reservations" element={<AdminReservationsPage />} />}
           {isManager && <Route path="/admin/orders" element={<AdminOrdersPage />} />}
           {isManager && <Route path="/admin/payments" element={<AdminPaymentsPage isOwner={isOwner} />} />}
+          {isManager && <Route path="/finance/dashboard" element={<FinanceDashboardPage />} />}
+          {isManager && <Route path="/finance/entries" element={<FinanceEntriesPage />} />}
           {isManager && <Route path="/admin/menu" element={<MenuAdminPage />} />}
           {isManager && <Route path="/admin/inventory" element={<InventoryPage />} />}
           {isManager && <Route path="/shop" element={<ShopPage />} />}

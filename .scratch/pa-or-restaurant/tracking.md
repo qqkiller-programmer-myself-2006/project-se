@@ -134,6 +134,37 @@
   LINE (12), capacity/พยากรณ์โมเดลเต็ม (13),
   backup/security/observability/release E2E (14)
 
+### Ticket 11 — การเงิน รายงาน Dashboard และ CSV
+
+- สถานะ: resolved (2026-09-15, implement โดย Muse Spark via opencode)
+- ผลตรวจ (exact):
+  - API focused finance 10/10
+  - API full 215 passed/27 skipped (เดิม 205 + ใหม่ 10; MySQL int ข้าม — ไม่มี `TEST_DATABASE_URL`)
+  - Web focused finance-dashboard 4/4
+  - Web full 173 passed (เดิม 169 + ใหม่ 4)
+  - API/Web typecheck passed
+  - API tsc build passed
+  - Vite build passed 72 modules (เดิม 70)
+- ไม่แตะไฟล์งานอื่นที่ค้างมาก่อน (excluded จาก commit ตาม ticket):
+  `apps/api/package.json`, `package-lock.json`, `apps/api/.gitignore`, `apps/api/generated/`,
+  `apps/api/prisma.config.ts`, `apps/api/prisma/`, `apps/api/src/db/`, `experiments/`,
+  `__pycache__`; Tickets 01–10 ไม่ regression (full suites ข้างบน)
+- สิ่งที่สร้าง: types (FinanceKind/Category/Entry/Report/Dashboard/TopMenu/PeakHour/Occupancy/CsvKind + audit actions finance_entry_*),
+  `apps/api/src/finance/{validation,audit-events}.ts`, Store seams (memory + MySQL) + แชร์ pure aggregation
+  (buildFinanceReport/TopMenus/PeakHours + Bangkok helpers + PII masking),
+  `db/migrations/012_finance_entries.sql`, `apps/api/src/routes/finance.ts` + wiring app.ts + audit/finance,
+  Web `FinanceDashboard`/`FinanceEntries` + api client + nav/routes, tests API/Web
+- นโยบายรายรับ: gross = เงินที่รับมาแล้ว (paid หรือ refunded ภายหลัง — นับครั้งเดียวตาม paidAt),
+  refunds ครั้งเดียวตาม approvedAt, net = gross − refunds,
+  กำไรเบื้องต้น = net + รายรับมือ − รายจ่ายจริง; ต้นทุนประมาณการแสดงแยก ไม่หักซ้ำ
+- งานที่ข้าม (บันทึกตาม ticket — ไม่ทำให้ ticket ล้ม):
+  MySQL runtime จริง (มี migration + seams แล้ว แต่ไม่มี `TEST_DATABASE_URL`),
+  Docker, payment/LINE/provider integration, external storage,
+  CSV เกิน 200 แถว/large datasets (documented limit ใน FINANCE_CSV_FORMAT),
+  browser E2E จริง (Playwright/Taste — ไม่มี reference URL ภายนอก)
+- ไม่รวมตาม scope (งาน ticket ถัดไป): LINE (12), capacity/พยากรณ์โมเดลเต็ม (13),
+  backup/security/observability/release E2E (14)
+
 ## Roadmap หลัง Ticket 06
 
 - Ticket 07: ตัวเลือกเมนู สูตร และสต๊อก
