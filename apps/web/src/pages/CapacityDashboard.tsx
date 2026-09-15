@@ -10,6 +10,8 @@ import {
   type WaitEstimate,
 } from "../lib/api";
 import { Alert, Badge, PageHeader, Panel, Spinner, inputClass, primaryButtonClass, secondaryButtonClass } from "../components/ui";
+import { ConnectionBanner, DemoBadge } from "../components/demo";
+import { DEMO_CAPACITY, DEMO_NON_GUARANTEE, isOfflineError } from "../lib/demo";
 
 function fmtTime(iso: string | null): string {
   if (!iso) return "–";
@@ -34,6 +36,7 @@ export default function CapacityDashboardPage() {
   const [nonGuarantee, setNonGuarantee] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [demo, setDemo] = useState(false);
 
   const [waitStation, setWaitStation] = useState<QueueStation>("kitchen");
   const [waitParty, setWaitParty] = useState("2");
@@ -60,12 +63,20 @@ export default function CapacityDashboardPage() {
   const loadOverview = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setDemo(false);
     try {
       const res = await api.capacityOverview();
       setOverview(res.overview);
       setNonGuarantee(res.nonGuarantee);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "โหลดภาพรวมไม่สำเร็จ");
+      if (isOfflineError(err)) {
+        setOverview(DEMO_CAPACITY);
+        setNonGuarantee(DEMO_NON_GUARANTEE);
+        setDemo(true);
+        setError(null);
+      } else {
+        setError(err instanceof Error ? err.message : "โหลดภาพรวมไม่สำเร็จ");
+      }
     } finally {
       setLoading(false);
     }
@@ -165,6 +176,13 @@ export default function CapacityDashboardPage() {
           </button>
         }
       />
+
+      {demo ? (
+        <div className="space-y-3">
+          <DemoBadge />
+          <ConnectionBanner onRetry={() => { void loadOverview(); void loadMeta(); }} />
+        </div>
+      ) : null}
 
       <div aria-live="polite" className="sr-only">
         {loading ? "กำลังโหลดภาพรวมกำลังผลิต" : overview ? `ครัวรอ ${overview.stations[0]?.rangeMin}–${overview.stations[0]?.rangeMax} นาที` : "ยังไม่มีข้อมูล"}

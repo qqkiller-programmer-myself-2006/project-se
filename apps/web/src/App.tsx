@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, NavLink, Route, Routes, useNavigate } from "react-router-dom";
 import { api, ROLE_LABELS, type PublicUser } from "./lib/api";
 import { Spinner } from "./components/ui";
+import { PublicShell } from "./components/shell";
 import LoginPage from "./pages/Login";
 import StaffPage from "./pages/Staff";
 import ChangePasswordPage from "./pages/ChangePassword";
@@ -85,7 +86,9 @@ export default function App() {
   // session ลูกค้าแยกจาก staff (คุกกี้ csid vs sid) — หน้าลูกค้าโหลด session ของตัวเอง ไม่พึ่ง shell นี้
   if (!me)
     return (
+      <PublicShell>
       <Routes>
+        <Route path="/" element={<MenuPublicPage />} />
         <Route path="/status" element={<StatusPage />} />
         <Route path="/menu" element={<MenuPublicPage />} />
         <Route path="/cart" element={<CartPage />} />
@@ -100,6 +103,7 @@ export default function App() {
         <Route path="/notifications" element={<MyNotificationsPage />} />
         <Route path="*" element={<LoginPage onLoggedIn={refresh} />} />
       </Routes>
+      </PublicShell>
     );
 
   const isOwner = me.roles.includes("owner");

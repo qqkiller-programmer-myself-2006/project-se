@@ -9,6 +9,9 @@ import {
 } from "../lib/api";
 import { ReservationCard } from "../components/ReservationCard";
 import { Alert, Panel, Spinner, inputClass, primaryButtonClass, secondaryButtonClass } from "../components/ui";
+import { ConnectionBanner, DemoBadge } from "../components/demo";
+import { Icon } from "../components/icons";
+import { DEMO_RESERVATIONS, isOfflineError } from "../lib/demo";
 
 function newIdempotencyKey(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
@@ -48,16 +51,39 @@ export default function ReservationsPage() {
 
   const [cancelId, setCancelId] = useState<string | null>(null);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const [demo, setDemo] = useState(false);
 
   async function load() {
     try {
       setLoading(true);
       setError(null);
-      const me = await api.customerMe().catch(() => null);
-      setCustomer(me ? me.customer : null);
+      setDemo(false);
+      let me: PublicCustomer | null = null;
+      try {
+        me = (await api.customerMe()).customer;
+      } catch (sessionErr) {
+        if (isOfflineError(sessionErr)) {
+          setCustomer(null);
+          setSessionChecked(true);
+          setItems(DEMO_RESERVATIONS);
+          setDemo(true);
+          return;
+        }
+        me = null;
+      }
+      setCustomer(me);
       setSessionChecked(true);
       if (me) {
-        setItems((await api.myReservations()).reservations);
+        try {
+          setItems((await api.myReservations()).reservations);
+        } catch (listErr) {
+          if (isOfflineError(listErr)) {
+            setItems(DEMO_RESERVATIONS);
+            setDemo(true);
+          } else {
+            throw listErr;
+          }
+        }
       } else {
         setItems([]);
       }
@@ -92,7 +118,11 @@ export default function ReservationsPage() {
       setRecommend(res.table);
       setRecommendChecked(true);
     } catch (err) {
-      setCreateError(err instanceof Error ? err.message : "ค้นหาโต๊ะว่างไม่สำเร็จ");
+      setCreateError(
+        isOfflineError(err)
+          ? "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ในโหมดสาธิต — ดูโต๊ะว่างไม่ได้ กรุณาเชื่อมต่อเน็ตแล้วลองใหม่"
+          : err instanceof Error ? err.message : "ค้นหาโต๊ะว่างไม่สำเร็จ",
+      );
     }
   }
 
@@ -130,7 +160,11 @@ export default function ReservationsPage() {
       setRecommendChecked(false);
       setItems((await api.myReservations()).reservations);
     } catch (err) {
-      setCreateError(err instanceof Error ? err.message : "สร้างการจองไม่สำเร็จ");
+      setCreateError(
+        isOfflineError(err)
+          ? "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ในโหมดสาธิต — สร้างการจองไม่ได้ กรุณาเชื่อมต่อเน็ตแล้วลองใหม่"
+          : err instanceof Error ? err.message : "สร้างการจองไม่สำเร็จ",
+      );
     } finally {
       setCreating(false);
     }
@@ -155,10 +189,20 @@ export default function ReservationsPage() {
       <a href="#reservations-main" className="ui-skip-link">
         ข้ามไปยังการจอง
       </a>
-      <header className="text-center">
-        <h1 className="text-xl font-bold text-ink-900 sm:text-2xl">จองโต๊ะล่วงหน้า</h1>
-        <p className="mt-1 text-sm text-ink-600">จองล่วงหน้าอย่างน้อย 60 นาที ไม่เกิน 3 วัน ยกเลิกได้ก่อนนัด 60 นาที</p>
+      <header className="pa-hero px-5 py-5 text-center sm:px-8">
+        <h1 className="font-display text-xl font-bold text-ink-900 sm:text-2xl">จองโต๊ะล่วงหน้า</h1>
+        <p className="mt-1 inline-flex items-center gap-2 text-sm text-ink-600">
+          <Icon name="reserve" size={18} />
+          จองล่วงหน้าอย่างน้อย 60 นาที ไม่เกิน 3 วัน ยกเลิกได้ก่อนนัด 60 นาที
+        </p>
+        {demo ? (
+          <div className="mt-3 flex justify-center">
+            <DemoBadge />
+          </div>
+        ) : null}
       </header>
+
+      {demo ? <ConnectionBanner onRetry={() => void load()} /> : null}
 
       <main id="reservations-main" aria-label="การจองของฉัน" className="space-y-4">
         {loading ? (
@@ -176,7 +220,7 @@ export default function ReservationsPage() {
           </div>
         ) : (
           <>
-            {sessionChecked && !customer ? (
+            {sessionChecked && !customer && !demo ? (
               <Alert tone="info" role="status">
                 กรุณา
                 <Link to="/customer/login" className="font-semibold text-brand-700 underline underline-offset-2">
@@ -264,6 +308,20 @@ export default function ReservationsPage() {
                       {creating ? "กำลังจอง…" : "ยืนยันการจอง"}
                     </button>
                   </div>
+                </div>
+              </Panel>
+            ) : null}
+
+            {demo ? (
+              <Panel label="การจองตัวอย่าง">
+                <div className="space-y-3">
+                  <h2 className="text-base font-bold text-ink-900">การจองตัวอย่าง ({items.length} รายการ)</h2>
+                  <p className="text-sm text-ink-600">
+                    สร้าง/ยกเลิกการจองต้องเชื่อมต่อเซิร์ฟเวอร์ — ข้อมูลด้านล่างไว้ดูดีไซน์เท่านั้น
+                  </p>
+                  {items.map((r) => (
+                    <ReservationCard key={r.id} reservation={r} />
+                  ))}
                 </div>
               </Panel>
             ) : null}

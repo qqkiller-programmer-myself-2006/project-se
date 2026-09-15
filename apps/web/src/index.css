@@ -1,38 +1,46 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Sarabun", "Noto Sans Thai", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-sans: "Karla", "Sarabun", "Noto Sans Thai", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Playfair Display SC", "Karla", Georgia, "Times New Roman", serif;
 
-  /* Warm restaurant primary: orange / amber */
-  --color-brand-50: #fff7ed;
-  --color-brand-100: #ffedd5;
-  --color-brand-200: #fed7aa;
-  --color-brand-300: #fdba74;
-  --color-brand-400: #fb923c;
-  --color-brand-500: #f97316;
-  --color-brand-600: #c2570b;
-  --color-brand-700: #9a450e;
-  --color-brand-800: #7c3a0d;
-  --color-brand-900: #5f2d0c;
+  /* Vibrant Thai-restaurant reds: primary #DC2626, light #F87171, wash #FEF2F2, cocoa #450A0A */
+  --color-brand-50: #fef2f2;
+  --color-brand-100: #fee2e2;
+  --color-brand-200: #fecaca;
+  --color-brand-300: #fca5a5;
+  --color-brand-400: #f87171;
+  --color-brand-500: #ef4444;
+  --color-brand-600: #dc2626;
+  --color-brand-700: #b91c1c;
+  --color-brand-800: #7f1d1d;
+  --color-brand-900: #450a0a;
 
-  /* Slate neutrals */
-  --color-ink-50: #f8fafc;
-  --color-ink-100: #f1f5f9;
-  --color-ink-200: #e2e8f0;
-  --color-ink-300: #cbd5e1;
-  --color-ink-400: #94a3b8;
-  --color-ink-500: #64748b;
-  --color-ink-600: #475569;
-  --color-ink-700: #334155;
-  --color-ink-800: #1e293b;
-  --color-ink-900: #0f172a;
+  /* Turmeric gold accent #A16207 */
+  --color-gold-100: #fef3c7;
+  --color-gold-200: #fde68a;
+  --color-gold-500: #ca8a04;
+  --color-gold-600: #a16207;
+  --color-gold-700: #713f12;
+
+  /* Warm neutrals kept for body text on cream */
+  --color-ink-50: #fef2f2;
+  --color-ink-100: #f5f0eb;
+  --color-ink-200: #e7ded4;
+  --color-ink-300: #cbbfae;
+  --color-ink-400: #a89880;
+  --color-ink-500: #6b5d4d;
+  --color-ink-600: #52463a;
+  --color-ink-700: #3d332b;
+  --color-ink-800: #292019;
+  --color-ink-900: #1c1512;
 }
 
 :root {
   --surface: #ffffff;
-  --surface-warm: #fff7ed;
-  --border: #e2e8f0;
-  --ring: #c2570b;
+  --surface-warm: #fef2f2;
+  --border: #e7ded4;
+  --ring: #dc2626;
   color-scheme: light;
 }
 
@@ -43,9 +51,87 @@ html {
 body {
   font-family: var(--font-sans);
   background-color: var(--color-brand-50);
+  background-image:
+    radial-gradient(circle at 12% 8%, rgba(220, 38, 38, 0.06) 0 90px, transparent 91px),
+    radial-gradient(circle at 88% 4%, rgba(161, 98, 7, 0.07) 0 70px, transparent 71px);
   color: var(--color-ink-900);
   line-height: 1.65;
   text-rendering: optimizeLegibility;
+}
+
+.pa-display {
+  font-family: var(--font-display);
+  letter-spacing: 0.01em;
+}
+
+/* Block hero: deep cocoa slab with red/gold bands — the single focal point */
+.pa-hero {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(135deg, #450a0a 0%, #7f1d1d 55%, #b91c1c 100%);
+  color: #fef2f2;
+  border-radius: 1.25rem;
+}
+.pa-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(circle at 85% 15%, rgba(248, 113, 113, 0.35) 0 70px, transparent 71px),
+    radial-gradient(circle at 10% 90%, rgba(161, 98, 7, 0.4) 0 60px, transparent 61px),
+    repeating-linear-gradient(-45deg, rgba(255, 255, 255, 0.05) 0 10px, transparent 10px 20px);
+  pointer-events: none;
+}
+.pa-hero::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 8px;
+  background: linear-gradient(90deg, #dc2626 0 25%, #f87171 25% 50%, #a16207 50% 75%, #fde68a 75% 100%);
+}
+
+/* Hero sits on deep cocoa: force light text even when inner
+   elements carry dark text utilities (contrast ≥ 4.5:1 on #450A0A). */
+.pa-hero h1,
+.pa-hero h2,
+.pa-hero p {
+  color: #fef2f2;
+}
+.pa-hero .text-ink-900,
+.pa-hero .text-ink-800,
+.pa-hero .text-ink-600,
+.pa-hero .text-ink-500 {
+  color: #fef2f2;
+}
+
+/* Block section title: gold bar + display type, not another card */
+.pa-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.pa-section-title::before {
+  content: "";
+  width: 6px;
+  height: 1.4em;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #dc2626, #a16207);
+  flex-shrink: 0;
+}
+
+.pa-band-gold {
+  background: linear-gradient(90deg, #a16207, #ca8a04);
+  color: #fffbeb;
+}
+
+/* Receipt-style dashed divider between order blocks */
+.pa-ticket-edge {
+  background-image: linear-gradient(90deg, #cbbfae 45%, transparent 45%);
+  background-size: 12px 2px;
+  background-repeat: repeat-x;
+  height: 2px;
 }
 
 /* Visible, consistent keyboard focus everywhere */

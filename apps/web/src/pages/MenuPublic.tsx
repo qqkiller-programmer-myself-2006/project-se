@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { MENU_KIND_LABELS, api, type MenuKind, type PublicMenuGroupWithOptions } from "../lib/api";
+import { DEMO_MENU_GROUPS, isOfflineError } from "../lib/demo";
 import { Alert, Badge, Panel, Spinner } from "../components/ui";
+import { ConnectionBanner, DemoBadge } from "../components/demo";
+import { Icon, FoodMotif } from "../components/icons";
 
 function fmtPrice(n: number): string {
   return `${n.toLocaleString("th-TH", { maximumFractionDigits: 2 })} บาท`;
@@ -18,6 +21,7 @@ export default function MenuPublicPage() {
   const [groups, setGroups] = useState<PublicMenuGroupWithOptions[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [demo, setDemo] = useState(false);
   const [kind, setKind] = useState<"" | MenuKind>("");
   const [q, setQ] = useState("");
 
@@ -25,9 +29,17 @@ export default function MenuPublicPage() {
     try {
       setLoading(true);
       setError(null);
+      setDemo(false);
       setGroups((await api.menuPublic()).groups);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "โหลดเมนูไม่สำเร็จ");
+      // Prefer real API; fall back to deterministic demo data only when unreachable.
+      if (isOfflineError(err)) {
+        setGroups(DEMO_MENU_GROUPS);
+        setDemo(true);
+        setError(null);
+      } else {
+        setError(err instanceof Error ? err.message : "โหลดเมนูไม่สำเร็จ");
+      }
     } finally {
       setLoading(false);
     }
@@ -60,18 +72,25 @@ export default function MenuPublicPage() {
       <a href="#menu-main" className="ui-skip-link">
         ข้ามไปยังรายการเมนู
       </a>
-      <header className="text-center">
+      <header className="pa-hero px-5 py-5 text-center sm:px-8">
         <p
           aria-hidden="true"
-          className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-600 text-xl font-bold text-white shadow-sm"
+          className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-600 text-white shadow-md"
         >
-          ป
+          <FoodMotif className="h-9 w-9" />
         </p>
-        <h1 className="mt-2 text-xl font-bold text-ink-900 sm:text-2xl">เมนูร้านป้าอ้ออาหารตามสั่ง</h1>
+        <h1 className="font-display mt-2 text-xl font-bold text-ink-900 sm:text-2xl">เมนูร้านป้าอ้ออาหารตามสั่ง</h1>
         <p className="mt-1 text-sm text-ink-600">
           ดูเมนูพร้อมขายแยกตามหมวดหมู่ได้โดยไม่ต้องเข้าสู่ระบบ
         </p>
+        {demo ? (
+          <div className="mt-3 flex justify-center">
+            <DemoBadge />
+          </div>
+        ) : null}
       </header>
+
+      {demo ? <ConnectionBanner onRetry={() => void load()} /> : null}
 
       <main id="menu-main" aria-label="รายการเมนูพร้อมขาย" className="space-y-4">
         <Panel label="ค้นหาและกรองเมนู" className="space-y-3">
@@ -118,8 +137,10 @@ export default function MenuPublicPage() {
             <button
               type="button"
               onClick={() => void load()}
-              className="inline-flex min-h-[44px] items-center rounded-xl border border-ink-300 bg-white px-4 py-2.5 text-sm font-semibold text-ink-800 shadow-sm transition-colors hover:bg-ink-50"
+              aria-label="ลองโหลดเมนูอีกครั้ง"
+              className="inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-ink-300 bg-white px-4 py-2.5 text-sm font-semibold text-ink-800 shadow-sm transition-colors hover:bg-ink-50"
             >
+              <Icon name="refresh" size={18} />
               ลองใหม่
             </button>
           </div>
@@ -136,12 +157,13 @@ export default function MenuPublicPage() {
           </div>
         ) : (
           <div className="space-y-4">
-            <p role="status" className="text-sm text-ink-600">
+            <p role="status" className="inline-flex items-center gap-2 text-sm text-ink-600">
+              <Icon name="menu" size={18} />
               พบ {total} เมนูพร้อมขายใน {filtered.length} หมวดหมู่
             </p>
             {filtered.map((g) => (
               <section key={g.category} aria-label={`หมวด ${g.category}`} className="space-y-3">
-                <h2 className="text-lg font-bold text-ink-900">{g.category}</h2>
+                <h2 className="pa-section-title text-lg font-bold text-ink-900">{g.category}</h2>
                 <ul className="grid gap-3 sm:grid-cols-2">
                   {g.items.map((m) => {
                     // Ticket 07: ข้อมูลเก่า/จำลองอาจไม่มีฟิลด์ใหม่ — ค่าเริ่มต้นพร้อมขายโดยไม่มีตัวเลือก

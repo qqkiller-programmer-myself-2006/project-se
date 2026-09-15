@@ -3,6 +3,9 @@ import { Link } from "react-router-dom";
 import { api, type OrderDetail, type PublicCustomer } from "../lib/api";
 import { OrderCard } from "../components/OrderCard";
 import { Alert, Panel, Spinner, inputClass, primaryButtonClass, secondaryButtonClass } from "../components/ui";
+import { ConnectionBanner, DemoBadge } from "../components/demo";
+import { Icon } from "../components/icons";
+import { DEMO_ORDERS, isOfflineError } from "../lib/demo";
 
 /**
  * หน้าคำสั่งซื้อของฉัน (Ticket 05):
@@ -15,6 +18,7 @@ export default function MyOrdersPage() {
   const [orders, setOrders] = useState<OrderDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [demo, setDemo] = useState(false);
   const [lookupNumber, setLookupNumber] = useState("");
   const [lookupPhone, setLookupPhone] = useState("");
   const [lookupLoading, setLookupLoading] = useState(false);
@@ -25,11 +29,34 @@ export default function MyOrdersPage() {
     try {
       setLoading(true);
       setError(null);
-      const me = await api.customerMe().catch(() => null);
-      setCustomer(me ? me.customer : null);
+      setDemo(false);
+      let me: PublicCustomer | null = null;
+      try {
+        me = (await api.customerMe()).customer;
+      } catch (sessionErr) {
+        // Offline: show deterministic demo orders instead of an empty page.
+        if (isOfflineError(sessionErr)) {
+          setCustomer(null);
+          setSessionChecked(true);
+          setOrders(DEMO_ORDERS);
+          setDemo(true);
+          return;
+        }
+        me = null;
+      }
+      setCustomer(me);
       setSessionChecked(true);
       if (me) {
-        setOrders((await api.myOrders()).orders);
+        try {
+          setOrders((await api.myOrders()).orders);
+        } catch (ordersErr) {
+          if (isOfflineError(ordersErr)) {
+            setOrders(DEMO_ORDERS);
+            setDemo(true);
+          } else {
+            throw ordersErr;
+          }
+        }
       } else {
         setOrders([]);
       }
@@ -56,7 +83,19 @@ export default function MyOrdersPage() {
       setLookupLoading(true);
       setLookupOrder((await api.orderLookup(lookupNumber.trim(), lookupPhone.trim())).order);
     } catch (err) {
-      setLookupError(err instanceof Error ? err.message : "ค้นหาคำสั่งซื้อไม่สำเร็จ");
+      // Offline: match against deterministic demo orders so Guest lookup stays usable.
+      if (isOfflineError(err)) {
+        const needle = lookupNumber.trim().toLowerCase();
+        const found = DEMO_ORDERS.find((o) => o.orderNumber.toLowerCase() === needle);
+        if (found) {
+          setLookupOrder(found);
+          setLookupError(null);
+        } else {
+          setLookupError("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ — ค้นหาด้วยเลขคำสั่งซื้อตัวอย่าง เช่น ORD-DEMO-0001");
+        }
+      } else {
+        setLookupError(err instanceof Error ? err.message : "ค้นหาคำสั่งซื้อไม่สำเร็จ");
+      }
     } finally {
       setLookupLoading(false);
     }
@@ -67,10 +106,20 @@ export default function MyOrdersPage() {
       <a href="#orders-main" className="ui-skip-link">
         ข้ามไปยังคำสั่งซื้อ
       </a>
-      <header className="text-center">
-        <h1 className="text-xl font-bold text-ink-900 sm:text-2xl">คำสั่งซื้อของฉัน</h1>
-        <p className="mt-1 text-sm text-ink-600">ติดตามสถานะคำสั่งซื้อและยอดที่ยืนยันไว้</p>
+      <header className="pa-hero px-5 py-5 text-center sm:px-8">
+        <h1 className="font-display text-xl font-bold text-ink-900 sm:text-2xl">คำสั่งซื้อของฉัน</h1>
+        <p className="mt-1 inline-flex items-center gap-2 text-sm text-ink-600">
+          <Icon name="order" size={18} />
+          ติดตามสถานะคำสั่งซื้อและยอดที่ยืนยันไว้
+        </p>
+        {demo ? (
+          <div className="mt-3 flex justify-center">
+            <DemoBadge />
+          </div>
+        ) : null}
       </header>
+
+      {demo ? <ConnectionBanner onRetry={() => void loadMine()} /> : null}
 
       <main id="orders-main" aria-label="คำสั่งซื้อของฉัน" className="space-y-4">
         {loading ? (
@@ -88,10 +137,12 @@ export default function MyOrdersPage() {
           </div>
         ) : (
           <>
-            {sessionChecked && customer ? (
+            {(sessionChecked && customer) || demo ? (
               <Panel label="คำสั่งซื้อของสมาชิก">
                 <div className="space-y-3">
-                  <h2 className="text-base font-bold text-ink-900">คำสั่งซื้อของ {customer.name}</h2>
+                  <h2 className="text-base font-bold text-ink-900">
+                    {customer ? `คำสั่งซื้อของ ${customer.name}` : "คำสั่งซื้อตัวอย่าง"}
+                  </h2>
                   {orders.length === 0 ? (
                     <div className="rounded-xl border border-dashed border-ink-300 px-4 py-8 text-center">
                       <p className="font-semibold text-ink-800">ยังไม่มีคำสั่งซื้อ</p>
@@ -113,7 +164,7 @@ export default function MyOrdersPage() {
                   )}
                 </div>
               </Panel>
-            ) : sessionChecked ? (
+            ) : sessionChecked && !demo ? (
               <Alert tone="info" role="status">
                 ยังไม่ได้เข้าสู่ระบบบัญชีลูกค้า — สมาชิก{" "}
                 <Link to="/customer/login" className="font-semibold text-brand-700 underline underline-offset-2">

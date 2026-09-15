@@ -24,6 +24,9 @@ import {
   type Cart,
 } from "../lib/cart";
 import { Alert, Badge, Panel, Spinner, inputClass, primaryButtonClass, secondaryButtonClass } from "../components/ui";
+import { ConnectionBanner, DemoBadge } from "../components/demo";
+import { Icon } from "../components/icons";
+import { DEMO_MENU_GROUPS, isOfflineError } from "../lib/demo";
 
 function fmtPrice(n: number): string {
   return `${n.toLocaleString("th-TH", { maximumFractionDigits: 2 })} บาท`;
@@ -56,6 +59,7 @@ export default function CartPage() {
   const [groups, setGroups] = useState<PublicMenuGroupWithOptions[]>([]);
   const [menuLoading, setMenuLoading] = useState(true);
   const [menuError, setMenuError] = useState<string | null>(null);
+  const [demo, setDemo] = useState(false);
   const [cart, setCart] = useState<Cart>(() => loadCart());
   const [customer, setCustomer] = useState<PublicCustomer | null>(null);
   const [sessionChecked, setSessionChecked] = useState(false);
@@ -71,9 +75,16 @@ export default function CartPage() {
     try {
       setMenuLoading(true);
       setMenuError(null);
+      setDemo(false);
       setGroups((await api.menuPublic()).groups);
     } catch (err) {
-      setMenuError(err instanceof Error ? err.message : "โหลดเมนูไม่สำเร็จ");
+      if (isOfflineError(err)) {
+        setGroups(DEMO_MENU_GROUPS);
+        setDemo(true);
+        setMenuError(null);
+      } else {
+        setMenuError(err instanceof Error ? err.message : "โหลดเมนูไม่สำเร็จ");
+      }
     } finally {
       setMenuLoading(false);
     }
@@ -179,7 +190,11 @@ export default function CartPage() {
       setCart(cleared);
       saveCart(cleared);
     } catch (err) {
-      setSubmitError(err instanceof Error ? err.message : "ยืนยันคำสั่งซื้อไม่สำเร็จ");
+      setSubmitError(
+        isOfflineError(err)
+          ? "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ในโหมดสาธิต ยอดในตะกร้าถูกคำนวณจากข้อมูลตัวอย่าง — กรุณาเชื่อมต่อเน็ตแล้วลองยืนยันอีกครั้ง"
+          : err instanceof Error ? err.message : "ยืนยันคำสั่งซื้อไม่สำเร็จ",
+      );
     } finally {
       setSubmitting(false);
     }
@@ -190,13 +205,20 @@ export default function CartPage() {
       <a href="#cart-main" className="ui-skip-link">
         ข้ามไปยังตะกร้า
       </a>
-      <header className="text-center">
-        <h1 className="text-xl font-bold text-ink-900 sm:text-2xl">ตะกร้าและสั่งซื้อ</h1>
+      <header className="pa-hero px-5 py-5 text-center sm:px-8">
+        <h1 className="font-display text-xl font-bold text-ink-900 sm:text-2xl">ตะกร้าและสั่งซื้อ</h1>
         <p className="mt-1 text-sm text-ink-600">
           เลือกเมนูพร้อมขาย ปรับจำนวน ตัวเลือก และหมายเหตุ แล้วกดยืนยันเป็นคำสั่งซื้อ
           {sessionChecked && customer ? ` (สั่งในนาม ${customer.name})` : " (ไม่ต้องสมัครก็สั่งแบบ Guest ได้)"}
         </p>
+        {demo ? (
+          <div className="mt-3 flex justify-center">
+            <DemoBadge />
+          </div>
+        ) : null}
       </header>
+
+      {demo ? <ConnectionBanner onRetry={() => void loadMenu()} /> : null}
 
       <main id="cart-main" aria-label="ตะกร้าและสั่งซื้อ" className="space-y-4">
         {placed ? (
@@ -476,7 +498,10 @@ export default function CartPage() {
 
         <Panel label="เลือกเมนู">
           <div className="space-y-3">
-            <h2 className="text-base font-bold text-ink-900">เลือกเมนูพร้อมขาย</h2>
+            <h2 className="inline-flex items-center gap-2 text-base font-bold text-ink-900">
+              <Icon name="menu" size={18} />
+              เลือกเมนูพร้อมขาย
+            </h2>
             {menuLoading ? (
               <p className="py-6 text-center">
                 <Spinner label="กำลังโหลดเมนู…" />

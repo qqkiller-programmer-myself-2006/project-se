@@ -1,11 +1,12 @@
 import type { ReactNode } from "react";
 
-type AlertTone = "error" | "success" | "info";
+type AlertTone = "error" | "success" | "info" | "demo";
 
 const ALERT_STYLES: Record<AlertTone, string> = {
-  error: "border-red-300 bg-red-50 text-red-800",
+  error: "border-brand-200 bg-white text-brand-800",
   success: "border-green-300 bg-green-50 text-green-900",
-  info: "border-ink-200 bg-ink-50 text-ink-800",
+  info: "border-ink-200 bg-white text-ink-800",
+  demo: "border-gold-200 bg-gold-100 text-gold-700",
 };
 
 export function Alert({
@@ -30,15 +31,16 @@ export function Alert({
   );
 }
 
-type BadgeTone = "active" | "inactive" | "success" | "danger" | "neutral" | "brand";
+type BadgeTone = "active" | "inactive" | "success" | "danger" | "neutral" | "brand" | "gold";
 
 const BADGE_STYLES: Record<BadgeTone, string> = {
   active: "border-green-300 bg-green-50 text-green-900",
   inactive: "border-ink-300 bg-ink-100 text-ink-700",
   success: "border-green-300 bg-green-50 text-green-900",
-  danger: "border-red-300 bg-red-50 text-red-800",
+  danger: "border-brand-300 bg-brand-50 text-brand-800",
   neutral: "border-ink-200 bg-ink-50 text-ink-700",
-  brand: "border-brand-200 bg-brand-50 text-brand-800",
+  brand: "border-brand-600 bg-brand-600 text-white",
+  gold: "border-gold-600 bg-gold-100 text-gold-700",
 };
 
 export function Badge({ tone, children }: { tone: BadgeTone; children: ReactNode }) {
@@ -85,7 +87,7 @@ export function PageHeader({
   return (
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0">
-        <h1 className="text-xl font-bold text-ink-900 sm:text-2xl">{title}</h1>
+        <h1 className="pa-display text-xl font-bold text-brand-900 sm:text-2xl">{title}</h1>
         <p className="mt-1 max-w-2xl text-sm text-ink-600">{description}</p>
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
@@ -103,16 +105,16 @@ export function Spinner({ label = "กำลังโหลด…" }: { label?: 
 }
 
 export const inputClass =
-  "w-full min-h-[44px] rounded-xl border border-ink-300 bg-white px-3 py-2.5 text-base text-ink-900 placeholder:text-ink-400 shadow-sm transition-colors hover:border-ink-400 disabled:cursor-not-allowed disabled:bg-ink-100 disabled:text-ink-500 aria-[invalid=true]:border-red-400 aria-[invalid=true]:bg-red-50";
+  "w-full min-h-[44px] rounded-xl border border-ink-300 bg-white px-3 py-2.5 text-base text-ink-900 placeholder:text-ink-400 shadow-sm transition-colors hover:border-ink-400 disabled:cursor-not-allowed disabled:bg-ink-100 disabled:text-ink-500 aria-[invalid=true]:border-brand-500 aria-[invalid=true]:bg-brand-50";
 
 export const primaryButtonClass =
   "inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-xl bg-brand-600 px-5 py-2.5 font-semibold text-white shadow-sm transition-colors hover:bg-brand-700 active:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-60";
 
 export const secondaryButtonClass =
-  "inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-xl border border-ink-300 bg-white px-4 py-2.5 text-sm font-semibold text-ink-800 shadow-sm transition-colors hover:border-ink-400 hover:bg-ink-50 active:bg-ink-100 disabled:cursor-not-allowed disabled:opacity-60";
+  "inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-xl border border-ink-300 bg-white px-4 py-2.5 text-sm font-semibold text-ink-800 shadow-sm transition-colors hover:border-gold-600 hover:bg-gold-100 hover:text-gold-700 active:bg-ink-100 disabled:cursor-not-allowed disabled:opacity-60";
 
 export const dangerButtonClass =
-  "inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-xl border border-red-300 bg-white px-4 py-2.5 text-sm font-semibold text-red-700 shadow-sm transition-colors hover:bg-red-50 active:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60";
+  "inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-xl border border-brand-300 bg-white px-4 py-2.5 text-sm font-semibold text-brand-700 shadow-sm transition-colors hover:bg-brand-50 active:bg-brand-100 disabled:cursor-not-allowed disabled:opacity-60";
 
 export const successButtonClass =
   "inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-xl border border-green-600 bg-white px-4 py-2.5 text-sm font-semibold text-green-800 shadow-sm transition-colors hover:bg-green-50 active:bg-green-100 disabled:cursor-not-allowed disabled:opacity-60";

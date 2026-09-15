@@ -16,6 +16,8 @@ import {
   primaryButtonClass,
   secondaryButtonClass,
 } from "../components/ui";
+import { ConnectionBanner, DemoBadge } from "../components/demo";
+import { DEMO_NON_GUARANTEE, DEMO_QUEUE_JOBS, isOfflineError } from "../lib/demo";
 
 function fmtTime(iso: string): string {
   const d = new Date(iso);
@@ -53,6 +55,7 @@ export default function QueueTrackPage() {
   // Ticket 13: เวลารอโดยประมาณของคำสั่งซื้อ (enhancement — ล้มเหลวเงียบ ไม่บังสถานะคิวหลัก)
   const [waitEstimate, setWaitEstimate] = useState<WaitEstimate | null>(null);
   const [waitLoading, setWaitLoading] = useState(false);
+  const [demo, setDemo] = useState(false);
 
   async function loadWait(orderId: string, guestPhone?: string) {
     setWaitLoading(true);
@@ -87,6 +90,7 @@ export default function QueueTrackPage() {
     setLoading(true);
     setError(null);
     setWaitEstimate(null);
+    setDemo(false);
     try {
       const found = await api.orderLookup(orderNumber.trim(), phone.trim());
       const res = await api.queueOrder(found.order.id, phone.trim());
@@ -94,7 +98,30 @@ export default function QueueTrackPage() {
       setTrackedNumber(res.orderNumber);
       if (res.jobs.length > 0) void loadWait(found.order.id, phone.trim());
     } catch (err) {
-      setError(err instanceof Error ? err.message : "ติดตามคิวไม่สำเร็จ");
+      // Offline: show deterministic demo queue so the design is inspectable.
+      if (isOfflineError(err)) {
+        setJobs(DEMO_QUEUE_JOBS);
+        setTrackedNumber("ORD-DEMO-0001");
+        setWaitEstimate({
+          orderId: "demo-order-1",
+          station: null,
+          partySize: 2,
+          perStation: [],
+          estimatedWaitMin: 15,
+          rangeMin: 10,
+          rangeMax: 20,
+          readyAtSlowest: null,
+          source: "baseline",
+          modelVersion: "demo-baseline",
+          predictedAt: new Date().toISOString(),
+          timeoutMs: 0,
+          nonGuarantee: DEMO_NON_GUARANTEE,
+        });
+        setDemo(true);
+        setError(null);
+      } else {
+        setError(err instanceof Error ? err.message : "ติดตามคิวไม่สำเร็จ");
+      }
     } finally {
       setLoading(false);
     }
@@ -122,6 +149,13 @@ export default function QueueTrackPage() {
         title="ติดตามคิวอาหารและเครื่องดื่ม"
         description="ดูสถานะงานครัว/เครื่องดื่มของคำสั่งซื้อที่ชำระแล้ว พร้อมเวลารอโดยประมาณ"
       />
+
+      {demo ? (
+        <div className="space-y-3">
+          <DemoBadge />
+          <ConnectionBanner onRetry={() => void trackGuest()} />
+        </div>
+      ) : null}
 
       <div aria-live="polite" className="sr-only">
         {loading ? "กำลังโหลดสถานะคิว" : trackedNumber ? `คำสั่งซื้อ ${trackedNumber} มีงานคิว ${jobs.length} รายการ` : "ยังไม่ได้เลือกคำสั่งซื้อ"}

@@ -17,6 +17,15 @@ import {
   primaryButtonClass,
   secondaryButtonClass,
 } from "../components/ui";
+import { ConnectionBanner, DemoBadge } from "../components/demo";
+import { Icon } from "../components/icons";
+import {
+  DEMO_BALANCE,
+  DEMO_LEDGER,
+  DEMO_REDEMPTIONS,
+  DEMO_REWARDS,
+  isOfflineError,
+} from "../lib/demo";
 
 function newIdempotencyKey(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
@@ -54,6 +63,7 @@ export default function RewardsPage() {
   const [ledger, setLedger] = useState<LoyaltyTransaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [demo, setDemo] = useState(false);
 
   const [redeemBusyId, setRedeemBusyId] = useState<string | null>(null);
   const [redeemMsg, setRedeemMsg] = useState<{ tone: "success" | "error"; text: string } | null>(null);
@@ -74,6 +84,7 @@ export default function RewardsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
+    setDemo(false);
     try {
       const [b, rw, mine, led] = await Promise.all([
         api.loyaltyBalance(),
@@ -86,7 +97,17 @@ export default function RewardsPage() {
       setRedemptions(mine.redemptions);
       setLedger(led.entries);
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : "โหลดข้อมูลสะสมแต้มไม่สำเร็จ");
+      // Prefer real API; deterministic demo data only when unreachable.
+      if (isOfflineError(err)) {
+        setBalance(DEMO_BALANCE);
+        setRewards(DEMO_REWARDS);
+        setRedemptions(DEMO_REDEMPTIONS);
+        setLedger(DEMO_LEDGER);
+        setDemo(true);
+        setLoadError(null);
+      } else {
+        setLoadError(err instanceof Error ? err.message : "โหลดข้อมูลสะสมแต้มไม่สำเร็จ");
+      }
     } finally {
       setLoading(false);
     }
@@ -107,7 +128,12 @@ export default function RewardsPage() {
       setRedeemMsg({ tone: "success", text: `แลก “${redemption.rewardName}” แล้ว รหัสอ้างอิง ${redemption.code} — แสดงรหัสนี้ที่ร้านเพื่อรับเครื่องดื่ม` });
       await load();
     } catch (err) {
-      setRedeemMsg({ tone: "error", text: err instanceof Error ? err.message : "แลกคะแนนไม่สำเร็จ" });
+      setRedeemMsg({
+        tone: "error",
+        text: isOfflineError(err)
+          ? "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ในโหมดสาธิต — แลกคะแนนไม่ได้ กรุณาเชื่อมต่อเน็ตแล้วลองใหม่"
+          : err instanceof Error ? err.message : "แลกคะแนนไม่สำเร็จ",
+      });
     } finally {
       setRedeemBusyId(null);
     }
@@ -127,7 +153,12 @@ export default function RewardsPage() {
       setReleaseReason("");
       await load();
     } catch (err) {
-      setReleaseMsg({ tone: "error", text: err instanceof Error ? err.message : "ยกเลิกรายการไม่สำเร็จ" });
+      setReleaseMsg({
+        tone: "error",
+        text: isOfflineError(err)
+          ? "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ในโหมดสาธิต — ยกเลิกรายการไม่ได้"
+          : err instanceof Error ? err.message : "ยกเลิกรายการไม่สำเร็จ",
+      });
     } finally {
       setReleaseBusy(false);
     }
@@ -150,7 +181,12 @@ export default function RewardsPage() {
       setWalkinCode("");
       await load();
     } catch (err) {
-      setWalkinMsg({ tone: "error", text: err instanceof Error ? err.message : "สแกน QR ไม่สำเร็จ" });
+      setWalkinMsg({
+        tone: "error",
+        text: isOfflineError(err)
+          ? "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ในโหมดสาธิต — รับคะแนนไม่ได้"
+          : err instanceof Error ? err.message : "สแกน QR ไม่สำเร็จ",
+      });
     } finally {
       setWalkinBusy(false);
     }
@@ -173,7 +209,12 @@ export default function RewardsPage() {
       setGuestOrderId("");
       await load();
     } catch (err) {
-      setGuestMsg({ tone: "error", text: err instanceof Error ? err.message : "ผูกคำสั่งซื้อไม่สำเร็จ" });
+      setGuestMsg({
+        tone: "error",
+        text: isOfflineError(err)
+          ? "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ในโหมดสาธิต — ผูกคำสั่งซื้อไม่ได้"
+          : err instanceof Error ? err.message : "ผูกคำสั่งซื้อไม่สำเร็จ",
+      });
     } finally {
       setGuestBusy(false);
     }
@@ -202,11 +243,22 @@ export default function RewardsPage() {
         title="คะแนนสะสมและรางวัล"
         description="สะสม 1 แต้มต่อเครื่องดื่ม 1 หน่วยเมื่อรับเครื่องดื่มแล้ว แล้วนำแต้มมาแลกรางวัล"
         actions={
-          <button type="button" onClick={() => void load()} className={secondaryButtonClass}>
-            โหลดใหม่
-          </button>
+          <span className="flex flex-wrap items-center gap-2">
+            {demo ? <DemoBadge /> : null}
+            <button
+              type="button"
+              onClick={() => void load()}
+              aria-label="โหลดข้อมูลสะสมแต้มใหม่"
+              className={secondaryButtonClass}
+            >
+              <Icon name="refresh" size={18} />
+              โหลดใหม่
+            </button>
+          </span>
         }
       />
+
+      {demo ? <ConnectionBanner onRetry={() => void load()} /> : null}
 
       <Panel label="ยอดคะแนนของฉัน">
         <h2 className="text-base font-bold text-ink-900">ยอดคะแนนของฉัน</h2>

@@ -251,6 +251,51 @@
   browser E2E จริง (Playwright/Taste — ไม่มี reference URL ภายนอก),
   external payment/storage, image upload
 
+### Ticket 15 — UI redesign ร้านป้าอ้อ + demo mode
+
+- สถานะ: resolved (2026-09-15, implement โดย Muse Spark — สานงานค้างใน working tree)
+- ผลตรวจ (exact):
+  - Web full 36 files → **203 passed** (เดิม 190 + ใหม่ 13:
+    demo-mode.test.tsx 5 + ui-redesign-demo-mode.test.tsx 8)
+  - Web typecheck passed (tsc --noEmit exit 0)
+  - Vite build passed (tsc + vite; chunk >500kB warning เดิม)
+- ซ่อม regression จาก redesign 2 จุด: app.test.tsx ("/" เป็นเมนูสาธารณะแล้ว —
+  login test เข้าทาง "/login"), menu-public.test.tsx (ชื่อปุ่มลองใหม่)
+- ไม่แตะไฟล์งานอื่นที่ค้างมาก่อน (excluded จาก commit ตาม ticket):
+  `apps/api/package.json`, `package-lock.json`, `apps/api/.gitignore`,
+  `apps/api/generated/`, `apps/api/prisma.config.ts`, `apps/api/prisma/`,
+  `apps/api/src/db/`, `experiments/`, `__pycache__`;
+  Tickets 01–14 ไม่ regression (full web suite ข้างบน)
+- งานที่ข้าม (บันทึกตาม ticket — ไม่ทำให้ ticket ล้ม):
+  browser E2E จริง (Playwright/Taste — ไม่มี reference URL),
+  MySQL/Docker runtime จริง, LINE/payment provider จริง
+
+### Ticket 15 — Redesign restaurant UI with demo mode
+
+- สถานะ: resolved (2026-09-15)
+- ผลตรวจ (exact):
+  - Web full 36 files → **203 passed** (เดิม 190 + ใหม่ 13:
+    `demo-mode.test.tsx` 5 + `ui-redesign-demo-mode.test.tsx` 8)
+  - Web typecheck passed (exit 0)
+  - Vite build passed 79 modules (exit 0)
+- สิ่งที่สร้าง: ธีมร้านอาหารไทย (red `#DC2626`/`#F87171`, gold `#A16207`,
+  wash `#FEF2F2`, cocoa `#450A0A`; Playfair Display SC + Karla),
+  `PublicShell` (header/nav/footer + `/` → เมนู), ระบบ demo
+  (`lib/demo.ts` + `DemoBadge`/`ConnectionBanner` + `Icon`/`FoodMotif`),
+  demo fallback ทุกหน้าสาธารณะ (menu/cart/orders/reservations/rewards/
+  notifications + queue-track/capacity), ป้าย `โหมดสาธิต · ข้อมูลตัวอย่าง`,
+  banner เชื่อมต่อแบบ non-blocking; HTTP error ยังแสดง error จริง
+  (demo เฉพาะ network failure)
+- ไม่แตะไฟล์งานอื่นที่ค้างมาก่อน (excluded จาก commit):
+  `apps/api/package.json`, `package-lock.json`, `apps/api/.gitignore`,
+  `apps/api/generated/`, `apps/api/prisma.config.ts`, `apps/api/prisma/`,
+  `apps/api/src/db/`, `experiments/`, `__pycache__`; Tickets 01–14 ไม่ regression
+  (full web suite ข้างบน; ปรับแค่ `app.test.tsx` entry `/login` กับชื่อปุ่ม retry
+  ใน `menu-public.test.tsx` ตาม redesign)
+- งานที่ข้าม (deferred): Docker/MySQL runtime จริง, LINE/provider login,
+  payment providers, image storage, browser E2E จริง (Playwright/Taste)
+- รายละเอียด: `.scratch/pa-or-restaurant/issues/15-ui-redesign-demo-mode.md`
+
 ## Roadmap หลัง Ticket 06
 
 - Ticket 07: ตัวเลือกเมนู สูตร และสต๊อก

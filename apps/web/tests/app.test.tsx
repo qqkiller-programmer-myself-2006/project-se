@@ -60,7 +60,7 @@ describe("App ระดับ integration (login/session flow)", () => {
   it("login สำเร็จแล้วเห็นหน้าพนักงานทันที (ไม่วนกลับหน้าล็อกอิน)", async () => {
     const user = userEvent.setup();
     render(
-      <MemoryRouter initialEntries={["/"]}>
+      <MemoryRouter initialEntries={["/login"]}>
         <App />
       </MemoryRouter>,
     );

@@ -107,7 +107,7 @@ describe("หน้าเมนูสาธารณะ (Ticket 04)", () => {
       </MemoryRouter>,
     );
     expect(await screen.findByRole("alert")).toHaveTextContent("เซิร์ฟเวอร์ขัดข้อง");
-    await user.click(screen.getByRole("button", { name: "ลองใหม่" }));
+    await user.click(screen.getByRole("button", { name: "ลองโหลดเมนูอีกครั้ง" }));
     expect(await screen.findByText("ข้าวผัดป้าอ้อ")).toBeInTheDocument();
   });
 
