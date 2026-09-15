@@ -294,7 +294,7 @@
   ใน `menu-public.test.tsx` ตาม redesign)
 - งานที่ข้าม (deferred): Docker/MySQL runtime จริง, LINE/provider login,
   payment providers, image storage, browser E2E จริง (Playwright/Taste)
-- รายละเอียด: `.scratch/pa-or-restaurant/issues/15-ui-redesign-demo-mode.md`
+ - รายละเอียด: `.scratch/pa-or-restaurant/issues/15-ui-redesign-demo-mode.md`
 
 ## Roadmap หลัง Ticket 06
 
