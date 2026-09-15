@@ -66,6 +66,84 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Role surfaces: each workspace has a different job, pace and visual rhythm. */
+.role-customer {
+  --role-accent: #dc2626;
+  --role-surface: #fffaf5;
+  background: var(--role-surface);
+}
+.customer-header {
+  box-shadow: 0 18px 45px -32px rgba(69, 10, 10, .9);
+}
+.customer-main {
+  max-width: 72rem;
+}
+
+/* Kitchen is a control room: compressed rhythm, obvious status, no decorative depth. */
+.role-kitchen {
+  --role-accent: #0f766e;
+  --role-surface: #f1f5f4;
+  background: var(--role-surface);
+}
+.role-kitchen .role-header {
+  border-bottom: 3px solid #0f766e;
+  box-shadow: 0 4px 12px rgba(15, 118, 110, .12);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.role-kitchen .role-main { max-width: 88rem; }
+.role-kitchen .pa-lift:hover,
+.role-kitchen .pa-lift:focus-visible { transform: none; box-shadow: 0 4px 12px -8px rgba(15, 118, 110, .35); }
+.role-kitchen .role-nav { gap: .35rem; }
+.role-kitchen .role-nav a { border-radius: .5rem; }
+
+/* Owner reads the business as a story: calm navy canvas with strong KPI hierarchy. */
+.role-owner {
+  --role-accent: #1d4ed8;
+  --role-surface: #f5f7fb;
+  background: var(--role-surface);
+}
+.role-owner .role-header {
+  background: #101c36;
+  color: #f8fafc;
+  border-bottom-color: #30456e;
+}
+.role-owner .role-header .text-ink-500,
+.role-owner .role-header .text-ink-600 { color: #c7d2fe; }
+.role-owner .role-main { max-width: 90rem; }
+.role-owner .role-nav a { border-color: #3b4f78; background: #182848; color: #dbeafe; }
+.role-owner .role-nav a[aria-current="page"] { background: #2563eb; border-color: #93c5fd; color: white; }
+
+/* Admin is an information console: compact, sortable-looking, explicit actions. */
+.role-admin {
+  --role-accent: #475569;
+  --role-surface: #f8fafc;
+  background: var(--role-surface);
+}
+.role-admin .role-header {
+  border-bottom: 1px solid #cbd5e1;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, .08);
+}
+.role-admin .role-main { max-width: 90rem; }
+.role-admin .role-nav { gap: .3rem; }
+.role-admin .role-nav a,
+.role-admin .role-nav button { border-radius: .5rem; font-size: .8rem; }
+.role-admin .role-nav a[aria-current="page"] { background: #334155; border-color: #334155; color: white; }
+
+/* Data surfaces inherit a quiet console treatment without changing page behavior. */
+.role-owner .border-ink-200,
+.role-admin .border-ink-200,
+.role-kitchen .border-ink-200 { border-color: #cbd5e1; }
+.role-owner .shadow-sm,
+.role-admin .shadow-sm { box-shadow: 0 5px 16px -12px rgba(15, 23, 42, .45); }
+
+@media (max-width: 640px) {
+  .role-kitchen .role-header { position: relative; }
+  .role-owner .role-nav,
+  .role-admin .role-nav { max-height: 9rem; overflow-y: auto; }
+}
+
 .pa-display {
   font-family: var(--font-display);
   letter-spacing: 0.01em;

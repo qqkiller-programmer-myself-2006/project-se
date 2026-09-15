@@ -115,12 +115,14 @@ export default function App() {
   // การจัดการพนักงานเป็นของ Owner คนเดียว (ตรงกับ server authorization)
   // การจัดการร้าน/โต๊ะ/สมาชิกเป็นของ Owner และ Admin (kitchen/drink ไม่มีเมนูและถูกปฏิเสธที่ server)
 
+  const roleSurface = isOwner ? "role-owner" : isManager ? "role-admin" : canKitchen || canDrink ? "role-kitchen" : "role-staff";
+
   return (
-    <div className="min-h-screen bg-brand-50 text-ink-900">
+    <div className={`min-h-screen bg-brand-50 text-ink-900 ${roleSurface}`}>
       <a href="#main-content" className="ui-skip-link">
         ข้ามไปยังเนื้อหาหลัก
       </a>
-      <header className="border-b border-brand-100 bg-white shadow-sm">
+      <header className="role-header border-b border-brand-100 bg-white shadow-sm">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-4 gap-y-3 px-4 py-3 sm:px-6">
           <Link to={homePath} className="flex min-h-[44px] items-center gap-3">
             <span
@@ -145,7 +147,7 @@ export default function App() {
             <span className="text-ink-600">{me.roles.map((r) => ROLE_LABELS[r]).join(" · ")}</span>
           </p>
 
-          <nav aria-label="เมนูหลักหลังร้าน" className="flex w-full flex-wrap gap-2 sm:ml-auto sm:w-auto">
+          <nav aria-label="เมนูหลักหลังร้าน" className="role-nav flex w-full flex-wrap gap-2 sm:ml-auto sm:w-auto">
             <NavLink to="/status" className={({ isActive }) => navClass(isActive)}>
               สถานะร้าน
             </NavLink>
@@ -269,7 +271,7 @@ export default function App() {
           </nav>
         </div>
       </header>
-      <main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6">
+      <main id="main-content" tabIndex={-1} className="role-main mx-auto w-full max-w-5xl px-4 py-6 sm:px-6">
         <PageEnter>
         <Routes>
           <Route path="/status" element={<StatusPage />} />

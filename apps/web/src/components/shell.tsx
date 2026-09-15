@@ -33,11 +33,11 @@ export const PUBLIC_NAV: PublicNavItem[] = [
 /** Public restaurant shell: cocoa hero band + icon nav + food-motif footer. */
 export function PublicShell({ children }: { children: ReactNode }) {
   return (
-    <div className="min-h-screen bg-brand-50 text-ink-900">
+    <div className="role-customer min-h-screen bg-brand-50 text-ink-900">
       <a href="#public-main" className="ui-skip-link">
         ข้ามไปยังเนื้อหาหลัก
       </a>
-      <header className="bg-brand-900 text-white">
+      <header className="customer-header bg-brand-900 text-white">
         <div className="mx-auto w-full max-w-5xl px-4 pb-4 pt-4 sm:px-6">
           <div className="flex flex-wrap items-center gap-3">
             <Link
@@ -88,7 +88,7 @@ export function PublicShell({ children }: { children: ReactNode }) {
           className="h-2 bg-gradient-to-r from-brand-600 via-brand-400 via-50% to-gold-600"
         />
       </header>
-      <main id="public-main" tabIndex={-1} className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6">
+      <main id="public-main" tabIndex={-1} className="customer-main mx-auto w-full max-w-5xl px-4 py-6 sm:px-6">
         <PageEnter>{children}</PageEnter>
       </main>
       <footer className="mx-auto w-full max-w-5xl px-4 pb-10 sm:px-6">
