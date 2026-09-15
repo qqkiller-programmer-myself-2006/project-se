@@ -74,3 +74,17 @@ warning ของ vite (มีมาก่อน)
   `package-lock.json`, `apps/api/.gitignore`, `apps/api/generated/`,
   `apps/api/prisma.config.ts`, `apps/api/prisma/`, `apps/api/src/db/`,
   `experiments/`, `__pycache__`
+
+### 2026-09-15 — หมายเหตุ executor collision (Claude auth blocker / opencode fallback)
+
+- Brief ฉบับนี้สั่ง direct execution (ห้าม delegate) แต่ role split ของเครื่องให้
+  Claude เป็น planner อย่างเดียว — ฝั่งนี้ (Muse Spark) implement ตรงใน tree
+  ตามสั่ง ขณะเดียวกันมี opencode executor อีกตัว (`build`) ได้รับ brief เดียวกัน
+  และเขียนไฟล์ชุดเดียวกันซ้อนเข้ามา (พบ `shell.tsx`/`ui.tsx`/`index.html` ถูก
+  เขียนทับ, test ไฟล์ของอีกฝั่ง `ui-redesign-demo-mode.test.tsx` โผล่กลางรัน)
+- วิธีแก้: หยุดเขียนทับไฟล์ที่ชน, ยึด disk state เป็นฐาน, แก้เฉพาะจุดที่ทำให้
+  test ทั้งสองฝั่งเขียวพร้อมกัน (เช่น test ฝั่งนี้อ้าง `PUBLIC_NAV` จริงแทน
+  hardcode ป้ายชื่อ; อีกฝั่งซ่อม `app`/`menu-public` tests ที่ redesign ทำให้พัง)
+- ผลลัพธ์: full web suite 203/203 เขียวบน tree เดียวกัน แล้วรวมเป็น commit
+  เดียว `d1866a8` (ข้อความตรง brief) — บันทึกนี้ต่อจาก commit นั้นเพื่อเติม
+  ข้อมูลที่ brief กำหนด (blocker + opencode fallback) ให้ครบ
