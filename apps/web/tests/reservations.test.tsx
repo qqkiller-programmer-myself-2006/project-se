@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import ReservationsPage from "../src/pages/Reservations";
+import ReservationsPage from "../src/pages/customer/Reservations";
 
 const reservation = {
   id: "r1",

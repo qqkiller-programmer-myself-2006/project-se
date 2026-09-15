@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import PayOrderPage from "../src/pages/PayOrder";
-import AdminPaymentsPage from "../src/pages/AdminPayments";
+import PayOrderPage from "../src/pages/customer/PayOrder";
+import AdminPaymentsPage from "../src/pages/admin/AdminPayments";
 import { ReceiptCard } from "../src/components/ReceiptCard";
 
 const order = {

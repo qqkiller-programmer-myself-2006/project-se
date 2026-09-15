@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import MyOrdersPage from "../src/pages/MyOrders";
+import MyOrdersPage from "../src/pages/customer/MyOrders";
 
 const memberOrder = {
   id: "o1",

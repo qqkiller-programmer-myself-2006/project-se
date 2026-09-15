@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import MenuPublicPage from "../src/pages/MenuPublic";
+import MenuPublicPage from "../src/pages/customer/MenuPublic";
 
 const groups = [
   {

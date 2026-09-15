@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import ShopPage from "../src/pages/Shop";
+import ShopPage from "../src/pages/admin/Shop";
 
 const config = {
   shopName: "ร้านป้าอ้ออาหารตามสั่ง",

@@ -2,9 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import App from "../src/App";
-import MenuPublicPage from "../src/pages/MenuPublic";
-import RewardsPage from "../src/pages/Rewards";
-import MyNotificationsPage from "../src/pages/MyNotifications";
+import MenuPublicPage from "../src/pages/customer/MenuPublic";
+import RewardsPage from "../src/pages/customer/Rewards";
+import MyNotificationsPage from "../src/pages/customer/MyNotifications";
 import { PUBLIC_NAV } from "../src/components/shell";
 import { DEMO_MODE_LABEL, isOfflineError } from "../src/lib/demo";
 

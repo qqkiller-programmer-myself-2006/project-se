@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import LoginPage from "../src/pages/Login";
+import LoginPage from "../src/pages/shared/Login";
 
 describe("หน้าเข้าสู่ระบบ (ภาษาไทย)", () => {
   beforeEach(() => {

@@ -2,8 +2,8 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import CapacityDashboardPage from "../src/pages/CapacityDashboard";
-import QueueTrackPage from "../src/pages/QueueTrack";
+import CapacityDashboardPage from "../src/pages/owner/CapacityDashboard";
+import QueueTrackPage from "../src/pages/customer/QueueTrack";
 
 const overview = {
   at: "2026-09-15T03:00:00.000Z",

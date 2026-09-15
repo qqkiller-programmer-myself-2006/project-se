@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import TablesPage from "../src/pages/Tables";
+import TablesPage from "../src/pages/admin/Tables";
 
 const tables = [
   { id: "1", name: "A1", capacity: 4, isEnabled: true, createdAt: "", updatedAt: "" },

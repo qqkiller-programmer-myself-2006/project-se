@@ -2,8 +2,8 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import FinanceDashboardPage from "../src/pages/FinanceDashboard";
-import FinanceEntriesPage from "../src/pages/FinanceEntries";
+import FinanceDashboardPage from "../src/pages/owner/FinanceDashboard";
+import FinanceEntriesPage from "../src/pages/owner/FinanceEntries";
 
 const dashboard = {
   date: "2026-09-15",

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import AuditPage from "../src/pages/Audit";
-import ChangePasswordPage from "../src/pages/ChangePassword";
+import AuditPage from "../src/pages/owner/Audit";
+import ChangePasswordPage from "../src/pages/shared/ChangePassword";
 
 function stubFetch(handler: (url: string, init?: RequestInit) => unknown) {
   vi.stubGlobal(

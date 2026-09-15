@@ -2,8 +2,8 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import AdminNotificationsPage from "../src/pages/AdminNotifications";
-import MyNotificationsPage from "../src/pages/MyNotifications";
+import AdminNotificationsPage from "../src/pages/admin/AdminNotifications";
+import MyNotificationsPage from "../src/pages/customer/MyNotifications";
 
 const item = {
   id: "n1",

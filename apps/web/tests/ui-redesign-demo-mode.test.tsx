@@ -2,12 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import App from "../src/App";
-import MenuPublicPage from "../src/pages/MenuPublic";
-import CartPage from "../src/pages/Cart";
-import MyOrdersPage from "../src/pages/MyOrders";
-import ReservationsPage from "../src/pages/Reservations";
-import RewardsPage from "../src/pages/Rewards";
-import MyNotificationsPage from "../src/pages/MyNotifications";
+import MenuPublicPage from "../src/pages/customer/MenuPublic";
+import CartPage from "../src/pages/customer/Cart";
+import MyOrdersPage from "../src/pages/customer/MyOrders";
+import ReservationsPage from "../src/pages/customer/Reservations";
+import RewardsPage from "../src/pages/customer/Rewards";
+import MyNotificationsPage from "../src/pages/customer/MyNotifications";
 import { DEMO_MODE_LABEL } from "../src/lib/demo";
 
 const DEMO_LABEL = DEMO_MODE_LABEL;

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import AdminOrdersPage from "../src/pages/AdminOrders";
+import AdminOrdersPage from "../src/pages/admin/AdminOrders";
 
 const pending = {
   id: "o1",

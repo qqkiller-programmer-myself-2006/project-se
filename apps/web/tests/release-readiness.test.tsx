@@ -6,8 +6,8 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import App from "../src/App";
-import StatusPage from "../src/pages/Status";
-import QueueTrackPage from "../src/pages/QueueTrack";
+import StatusPage from "../src/pages/shared/Status";
+import QueueTrackPage from "../src/pages/customer/QueueTrack";
 import type { PublicUser } from "../src/lib/api";
 
 // อ่าน CSS ต้นฉบับตรง ๆ (ไม่พึ่ง ?raw transform) — ตรวจ tokens ที่จับต้องได้โดยไม่ใช้เบราว์เซอร์จริง

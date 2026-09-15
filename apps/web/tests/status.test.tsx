@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import StatusPage from "../src/pages/Status";
+import StatusPage from "../src/pages/shared/Status";
 
 function stubFetch(handler: (url: string) => unknown) {
   vi.stubGlobal(

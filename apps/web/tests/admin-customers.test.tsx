@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import AdminCustomersPage from "../src/pages/AdminCustomers";
+import AdminCustomersPage from "../src/pages/admin/AdminCustomers";
 
 const list = [
   { id: "c1", name: "สมชาย", phone: "0811111111", email: null, isActive: true, isDeleted: false, createdAt: "", lineLinked: false },

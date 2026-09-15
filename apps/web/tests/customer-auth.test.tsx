@@ -2,8 +2,8 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import CustomerRegisterPage from "../src/pages/CustomerRegister";
-import CustomerLoginPage from "../src/pages/CustomerLogin";
+import CustomerRegisterPage from "../src/pages/customer/CustomerRegister";
+import CustomerLoginPage from "../src/pages/customer/CustomerLogin";
 
 describe("หน้าสมัครสมาชิก (ภาษาไทย)", () => {
   beforeEach(() => {
