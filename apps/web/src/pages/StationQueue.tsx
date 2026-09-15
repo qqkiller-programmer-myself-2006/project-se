@@ -13,13 +13,13 @@ import {
   Badge,
   PageHeader,
   Panel,
-  Spinner,
   dangerButtonClass,
   inputClass,
   primaryButtonClass,
   secondaryButtonClass,
   successButtonClass,
 } from "../components/ui";
+import { MotionReveal, Skeleton } from "../components/motion";
 
 const STATUS_FILTERS: (QueueStatus | "")[] = ["", "queued", "claimed", "preparing", "ready", "delivered", "cancelled"];
 
@@ -172,7 +172,9 @@ export default function StationQueuePage({
       </Panel>
 
       {loading ? (
-        <Spinner label="กำลังโหลดคิวงาน…" />
+        <Panel label="กำลังโหลดคิวงาน">
+          <Skeleton label="กำลังโหลดคิวงาน…" lines={5} />
+        </Panel>
       ) : error ? (
         <Alert tone="error" role="alert">{error}</Alert>
       ) : jobs.length === 0 ? (
@@ -185,7 +187,7 @@ export default function StationQueuePage({
             const blocked = new Date(job.readyAt).getTime() > Date.now();
             const busy = busyId === job.id;
             return (
-              <li key={job.id}>
+              <MotionReveal as="li" key={job.id} index={idx}>
                 <Panel label={`งานคิว ${job.orderNumber} ${job.menuName}`}>
                   <div className="space-y-3">
                     <div className="flex flex-wrap items-center gap-2">
@@ -341,7 +343,7 @@ export default function StationQueuePage({
                     )}
                   </div>
                 </Panel>
-              </li>
+              </MotionReveal>
             );
           })}
         </ol>
