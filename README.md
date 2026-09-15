@@ -270,6 +270,25 @@ transaction rollback เมื่อ audit เขียนไม่ได้, mi
 - มี URL แล้วแต่เชื่อมต่อ/migrate ไม่ได้ → **FAIL** (ห้าม catch แล้วผ่าน)
 - ทำความสะอาด users/sessions/audit + customers/customer_sessions/line_links/line_tx + menu + orders/order_items + reservations/table_rounds ที่สร้างทั้งหมดหลังจบ (`afterAll`)
 
+## Ticket 14 — release hardening (backup/recovery, security, observability, release E2E)
+
+- Backup/restore: `docs/runbook/backup-restore.md` (RPO 24 ชม. / RTO 4 ชม. /
+  เก็บ 7 วัน — operator-executed จนกว่าจะมี ticket backup automation),
+  `docs/runbook/migration-rehearsal.md` (checklist 001–014 + เกณฑ์ Go/No-go),
+  ตรวจ static โดยไม่ต้องมี DB: `node scripts/verify-restore.mjs` (exit 0)
+- Security/PII: `docs/SECURITY.md` (role/access matrix ทุก endpoint, CSRF/session/cookie,
+  redaction, input limits, audit/error review, `npm audit --omit=dev` 9 vulns —
+  ไม่ fix เพราะต้อง major upgrade หรือแตะไฟล์ต้องห้าม)
+- Observability: `docs/OBSERVABILITY.md` + `apps/api/src/observability.ts`
+  (request ID `x-request-id` ทุก response, error `code` คงที่โดยไม่เปลี่ยนข้อความไทยเดิม,
+  `GET /api/ready` public 503 เมื่อ DB ไม่พร้อม, `GET /api/metrics/summary` เฉพาะ Owner)
+- Release E2E local-first: `apps/api/tests/release.test.ts` (6 ข้อ: slice ข้ามบทบาท,
+  จองชน/ชำระซ้ำไม่สร้างซ้ำ, role matrix, PII, audit taxonomy) +
+  `apps/web/tests/release-readiness.test.tsx` (5 ข้อ: skip link/landmarks/labels/live,
+  keyboard, touch ≥44px, responsive, focus/reduced-motion — jsdom-feasible, ไม่ใช้ Taste
+  เพราะไม่มี reference URL)
+- Ticket: `.scratch/pa-or-restaurant/issues/14-release-hardening.md`
+
 ## ข้อจำกัดที่ทราบ (สภาพแวดล้อมนี้)
 
 - เครื่องนี้ไม่มี Docker/MySQL จึงตรวจ integration กับ MySQL จริงไม่ได้
@@ -285,5 +304,8 @@ transaction rollback เมื่อ audit เขียนไม่ได้, mi
 - ชุด web tests ทั้งหมดรันพร้อมกัน (`npm run test -w apps/web`) ใช้หน่วยความจำเกินขีดเครื่องนี้
   (worker OOM) จึงรันทีละไฟล์/ทีละชุดด้วย `NODE_OPTIONS=--max-old-space-size=3072` แล้วรวมผล —
   ผ่านครบทุกไฟล์ (ดูรายงานใน ticket)
-- `npm audit --omit=dev` ผลล่าสุด: 3 moderate (`qs` ผ่าน express, `react-router` 6.x)
-  ยังไม่ upgrade เพราะ `react-router-dom@7` เป็น breaking change (ไม่ทำ forced major upgrade)
+- `npm audit --omit=dev` ผลล่าสุด (2026-09-15): 9 vulnerabilities (4 moderate, 5 high) —
+  `qs` (moderate, ผ่าน express), `react-router` 6.x (moderate),
+  `deepmerge-ts→prisma` และ `mariadb→@prisma/adapter-mariadb` (high, อยู่ใน chain
+  ของไฟล์ต้องห้าม) ยังไม่ upgrade เพราะต้อง major upgrade ที่เป็น breaking change
+  หรือแตะไฟล์ที่ห้ามแตะ (ดู `docs/SECURITY.md` ข้อ 7)

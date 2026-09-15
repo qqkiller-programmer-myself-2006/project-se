@@ -220,6 +220,37 @@
   browser E2E จริง (Playwright/Taste — ไม่มี reference URL ภายนอก)
 - ไม่รวมตาม scope (งาน ticket ถัดไป): backup/security/observability/release E2E (14)
 
+### Ticket 14 — Release hardening (backup/recovery, security/observability, release E2E)
+
+- สถานะ: resolved (2026-09-15, implement โดย Muse Spark)
+- ผลตรวจ (exact):
+  - API focused release 6/6 (`tests/release.test.ts`)
+  - API full 20 files passed/9 skipped → **239 passed/29 skipped** (เดิม 233 + ใหม่ 6; MySQL int ข้าม — ไม่มี `TEST_DATABASE_URL`)
+  - Web focused release-readiness 5/5 (`tests/release-readiness.test.tsx`)
+  - Web full 34 files → **190 passed** (เดิม 185 + ใหม่ 5)
+  - `node scripts/verify-restore.mjs` → exit 0 (migrations 14/14 + docs + RPO/RTO)
+  - API/Web typecheck passed
+  - API tsc build passed
+  - Vite build passed 75 modules (เท่าเดิม — ไม่เพิ่มหน้าใหม่)
+  - `npm audit --omit=dev`: 9 vulnerabilities (4 moderate, 5 high) — ไม่ fix (ต้อง major upgrade หรือแตะไฟล์ต้องห้าม)
+- ไม่แตะไฟล์งานอื่นที่ค้างมาก่อน (excluded จาก commit ตาม ticket):
+  `apps/api/package.json`, `package-lock.json`, `apps/api/.gitignore`, `apps/api/generated/`,
+  `apps/api/prisma.config.ts`, `apps/api/prisma/`, `apps/api/src/db/`, `experiments/`,
+  `__pycache__`; Tickets 01–13 ไม่ regression (full suites ข้างบน)
+- สิ่งที่สร้าง: `apps/api/src/observability.ts` (request-id/error taxonomy/redaction/audit catalog),
+  ต่อ `app.ts` (middleware + `/api/ready` + `/api/metrics/summary` + error `code`),
+  `apps/api/tests/release.test.ts`, `apps/web/tests/release-readiness.test.tsx`,
+  `docs/runbook/backup-restore.md`, `docs/runbook/migration-rehearsal.md`,
+  `docs/SECURITY.md`, `docs/OBSERVABILITY.md`, `scripts/verify-restore.mjs`,
+  README ส่วน Ticket 14, `.scratch/pa-or-restaurant/issues/14-release-hardening.md`
+- งานที่ข้าม = deferred external gates (บันทึกใน ticket — ไม่ทำให้ ticket ล้ม):
+  MySQL/Docker runtime จริง + `TEST_DATABASE_URL` integration,
+  LINE Messaging API/credentials/sandbox/webhook/LIFF จริง, Docker/MySQL runtime,
+  payment provider credentials/network จริง, backup automation (Owner download/job),
+  dependency major upgrades (react-router-dom@7, prisma chain, mariadb),
+  browser E2E จริง (Playwright/Taste — ไม่มี reference URL ภายนอก),
+  external payment/storage, image upload
+
 ## Roadmap หลัง Ticket 06
 
 - Ticket 07: ตัวเลือกเมนู สูตร และสต๊อก

@@ -11,6 +11,14 @@ import { z } from "zod";
 import type { Store } from "./store.js";
 import { toPublicUser, type PublicUser, type Role } from "./types.js";
 import { ConflictError, NotFoundError } from "./types.js";
+import {
+  RELEASE_MIGRATION_COUNT,
+  SERVICE_VERSION,
+  requestIdMiddleware,
+  serviceUptimeSec,
+  statusToErrorCode,
+  toErrorBody,
+} from "./observability.js";
 import { createShopRouter } from "./routes/shop.js";
 import { createCustomerRouter } from "./routes/customers.js";
 import { createMenuRouter } from "./routes/menu.js";
@@ -121,6 +129,8 @@ export function createApp(opts: AppOptions): express.Express {
   const { store } = opts;
   const app = express();
   app.disable("x-powered-by");
+  // Ticket 14: correlation/request ID ทุก response (รับค่าที่ client ส่งมาเมื่อปลอดภัย)
+  app.use(requestIdMiddleware);
   // ค่าเริ่มต้นไม่ไว้ใจ proxy ใด ๆ; กำหนด explicit ผ่าน opts.trustedProxy เท่านั้นเมื่อจำเป็น
   app.set("trust proxy", opts.trustedProxy ?? false);
   app.use(express.json({ limit: "32kb" }));
@@ -161,26 +171,26 @@ export function createApp(opts: AppOptions): express.Express {
     try {
       const sid = req.cookies?.[SID_COOKIE] as string | undefined;
       if (!sid) {
-        res.status(401).json({ error: "กรุณาเข้าสู่ระบบก่อน" });
+        res.status(401).json(toErrorBody("AUTH", "กรุณาเข้าสู่ระบบก่อน"));
         return;
       }
       const session = await store.findSession(sid);
       if (!session || new Date(session.expiresAt).getTime() < Date.now()) {
         if (session) await store.deleteSession(sid);
-        res.status(401).json({ error: "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่" });
+        res.status(401).json(toErrorBody("AUTH", "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่"));
         return;
       }
       const user = await store.findById(session.userId);
       if (!user || !user.isActive) {
         await store.deleteSession(sid);
-        res.status(401).json({ error: "บัญชีถูกปิดใช้งานหรือไม่มีอยู่ กรุณาเข้าสู่ระบบใหม่" });
+        res.status(401).json(toErrorBody("AUTH", "บัญชีถูกปิดใช้งานหรือไม่มีอยู่ กรุณาเข้าสู่ระบบใหม่"));
         return;
       }
       // เซสชันผูกกับรุ่น credential: reset/เปลี่ยนรหัสหลังสร้างเซสชันทำให้เซสชันเดิมใช้ไม่ได้
       // แม้แถว session จะยังไม่ถูกลบ (กัน reset/login race)
       if (session.passwordVersion !== user.passwordVersion) {
         await store.deleteSession(sid);
-        res.status(401).json({ error: "เซสชันถูกยกเลิกแล้ว กรุณาเข้าสู่ระบบใหม่" });
+        res.status(401).json(toErrorBody("AUTH", "เซสชันถูกยกเลิกแล้ว กรุณาเข้าสู่ระบบใหม่"));
         return;
       }
       req.user = toPublicUser(user);
@@ -196,7 +206,7 @@ export function createApp(opts: AppOptions): express.Express {
     const cookieToken = req.cookies?.[CSRF_COOKIE] as string | undefined;
     const headerToken = req.headers[CSRF_HEADER] as string | undefined;
     if (!cookieToken || !headerToken || cookieToken !== headerToken) {
-      res.status(403).json({ error: "โทเค็น CSRF ไม่ถูกต้อง กรุณาโหลดหน้าใหม่แล้วลองอีกครั้ง" });
+      res.status(403).json(toErrorBody("FORBIDDEN", "โทเค็น CSRF ไม่ถูกต้อง กรุณาโหลดหน้าใหม่แล้วลองอีกครั้ง"));
       return;
     }
     next();
@@ -204,7 +214,7 @@ export function createApp(opts: AppOptions): express.Express {
 
   function requireOwner(req: Request, res: Response, next: NextFunction): void {
     if (!req.user?.roles.includes("owner")) {
-      res.status(403).json({ error: "สิทธิ์ไม่เพียงพอ เฉพาะ Owner เท่านั้น" });
+      res.status(403).json(toErrorBody("FORBIDDEN", "สิทธิ์ไม่เพียงพอ เฉพาะ Owner เท่านั้น"));
       return;
     }
     next();
@@ -214,7 +224,7 @@ export function createApp(opts: AppOptions): express.Express {
   function requireShopManager(req: Request, res: Response, next: NextFunction): void {
     const roles = req.user?.roles ?? [];
     if (!roles.includes("owner") && !roles.includes("admin")) {
-      res.status(403).json({ error: "สิทธิ์ไม่เพียงพอ เฉพาะ Owner หรือ Admin เท่านั้น" });
+      res.status(403).json(toErrorBody("FORBIDDEN", "สิทธิ์ไม่เพียงพอ เฉพาะ Owner หรือ Admin เท่านั้น"));
       return;
     }
     next();
@@ -594,7 +604,38 @@ export function createApp(opts: AppOptions): express.Express {
   });
 
   app.get("/api/health", (_req, res) => {
-    res.json({ ok: true });
+    // additive เท่านั้น: { ok } เดิมยังคงอยู่ เติม version/uptime สำหรับ release monitoring
+    res.json({ ok: true, version: SERVICE_VERSION, uptimeSec: serviceUptimeSec() });
+  });
+
+  // Ticket 14: readiness probe (public, ไม่มี PII) — ตรวจ seam ฐานข้อมูลแบบเบา (countOwners)
+  // พร้อมใช้งานจริงหลัง reverse proxy/load balancer; ล้มเหลวตอบ 503 (ไม่โยนเป็น 500 เงียบ)
+  app.get("/api/ready", async (_req, res) => {
+    try {
+      await store.countOwners();
+      res.json({ ok: true, version: SERVICE_VERSION, time: new Date().toISOString() });
+    } catch {
+      res
+        .status(503)
+        .json({ ok: false, ...toErrorBody("UNAVAILABLE", "ระบบฐานข้อมูลยังไม่พร้อม") });
+    }
+  });
+
+  // Ticket 14: metrics สรุปแบบเบา (Owner เท่านั้น — ไม่ขยายสิทธิ์ให้ Admin)
+  // ไม่มี PII/secret; ใช้ตรวจ release locally (uptime/version/migrationCount)
+  app.get("/api/metrics/summary", requireAuth, requireOwner, async (_req, res, next) => {
+    try {
+      const ownerCount = await store.countOwners();
+      res.json({
+        version: SERVICE_VERSION,
+        uptimeSec: serviceUptimeSec(),
+        migrationCount: RELEASE_MIGRATION_COUNT,
+        ownerCount,
+        time: new Date().toISOString(),
+      });
+    } catch (err) {
+      next(err);
+    }
   });
 
   // Ticket 02 routes อยู่ใน routes/shop.ts (กฎธุรกิจอยู่ domain/store ห้าม duplicate ที่นี่)
@@ -722,22 +763,24 @@ export function createApp(opts: AppOptions): express.Express {
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    // Ticket 14: error taxonomy แบบคงที่ — เติม `code` ทุก response โดยไม่เปลี่ยน
+    // ข้อความ `error` ภาษาไทยเดิม (backward compatible กับ contract/tests เดิม)
     if (err instanceof ConflictError) {
-      res.status(409).json({ error: err.message });
+      res.status(409).json(toErrorBody("CONFLICT", err.message));
       return;
     }
     if (err instanceof NotFoundError) {
-      res.status(404).json({ error: err.message });
+      res.status(404).json(toErrorBody("NOT_FOUND", err.message));
       return;
     }
     if (err && typeof err === "object" && "status" in err) {
       const status = Number((err as { status: number }).status) || 403;
       const message =
         "message" in err && typeof err.message === "string" ? err.message : "สิทธิ์ไม่เพียงพอ";
-      res.status(status).json({ error: message });
+      res.status(status).json(toErrorBody(statusToErrorCode(status), message));
       return;
     }
-    res.status(500).json({ error: "เกิดข้อผิดพลาดภายในระบบ" });
+    res.status(500).json(toErrorBody("INTERNAL", "เกิดข้อผิดพลาดภายในระบบ"));
   });
 
   return app;
