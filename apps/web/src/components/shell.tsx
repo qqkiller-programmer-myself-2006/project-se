@@ -45,11 +45,20 @@ export function PublicShell({ children }: { children: ReactNode }) {
               className="flex min-h-[44px] items-center gap-3 rounded-xl"
               aria-label="ร้านป้าอ้ออาหารตามสั่ง กลับไปหน้าเมนู"
             >
-              <span
-                aria-hidden="true"
-                className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-600 shadow-md ring-2 ring-gold-200"
-              >
-                <FoodMotif className="h-7 w-7 text-white" />
+              <span className="pa-brand-mark flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-brand-600 shadow-md ring-2 ring-gold-200">
+                <img
+                  src="/brand/pa-or-logo.png"
+                  alt="โลโก้ร้านป้าอ้ออาหารตามสั่ง"
+                  aria-label="โลโก้ร้านป้าอ้ออาหารตามสั่ง"
+                  className="h-full w-full object-cover"
+                  onError={(event) => {
+                    event.currentTarget.hidden = true;
+                    event.currentTarget.nextElementSibling?.removeAttribute("hidden");
+                  }}
+                />
+                <span hidden aria-hidden="true" className="pa-display text-xl font-bold text-white">
+                  ปอ
+                </span>
               </span>
               <span className="leading-tight">
                 <span className="pa-display block text-lg font-bold sm:text-xl">

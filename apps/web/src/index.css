@@ -71,6 +71,28 @@ body {
   letter-spacing: 0.01em;
 }
 
+/* Customer brand mark: the real storefront logo gets a restrained depth cue.
+   It stays decorative and never changes layout or touch behavior. */
+.pa-brand-mark {
+  position: relative;
+  transform: perspective(500px) rotateY(-5deg) translateZ(0);
+  transform-style: preserve-3d;
+  transition: transform var(--motion-base) var(--motion-ease), box-shadow var(--motion-base) var(--motion-ease);
+}
+.pa-brand-mark::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(125deg, rgba(255,255,255,.3), transparent 38%, rgba(69,10,10,.16));
+  mix-blend-mode: soft-light;
+}
+.pa-brand-mark:hover,
+.pa-brand-mark:focus-within {
+  transform: perspective(500px) rotateY(5deg) rotateX(2deg) translateY(-2px);
+  box-shadow: 0 14px 24px -14px rgba(69, 10, 10, 0.8);
+}
+
 /* Block hero: deep cocoa slab with red/gold bands — the single focal point */
 .pa-hero {
   position: relative;
@@ -171,6 +193,11 @@ body {
     transform: none !important;
   }
   .pa-tilt {
+    transform: none !important;
+  }
+  .pa-brand-mark,
+  .pa-brand-mark:hover,
+  .pa-brand-mark:focus-within {
     transform: none !important;
   }
   .pa-lift:hover,

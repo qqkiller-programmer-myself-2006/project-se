@@ -296,6 +296,15 @@
   payment providers, image storage, browser E2E จริง (Playwright/Taste)
  - รายละเอียด: `.scratch/pa-or-restaurant/issues/15-ui-redesign-demo-mode.md`
 
+### Ticket 17 — โลโก้ร้านป้าอ้อและ 3D สำหรับลูกค้า
+
+- สถานะ: resolved (2026-09-15)
+- ผลงาน: เพิ่ม `apps/web/public/brand/pa-or-logo.png`, เชื่อมโลโก้จริงเข้ากับ
+  `PublicShell` พร้อม alt text และ fallback เป็น “ปอ”; เพิ่ม depth cue แบบ 3D
+  เฉพาะ customer brand mark โดยเคารพ reduced-motion
+- งานที่ข้าม: external services, provider login และ browser E2E จริง
+- รายละเอียด: `.scratch/pa-or-restaurant/issues/17-pa-or-logo-customer-3d.md`
+
 ## Roadmap หลัง Ticket 06
 
 - Ticket 07: ตัวเลือกเมนู สูตร และสต๊อก
