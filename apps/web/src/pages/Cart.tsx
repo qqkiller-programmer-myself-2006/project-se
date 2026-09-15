@@ -23,7 +23,8 @@ import {
   toggleLineOption,
   type Cart,
 } from "../lib/cart";
-import { Alert, Badge, Panel, Spinner, inputClass, primaryButtonClass, secondaryButtonClass } from "../components/ui";
+import { Alert, Badge, Panel, inputClass, primaryButtonClass, secondaryButtonClass } from "../components/ui";
+import { DepthHero, MotionReveal, Skeleton, StaggerItem, StaggerList } from "../components/motion";
 import { ConnectionBanner, DemoBadge } from "../components/demo";
 import { Icon } from "../components/icons";
 import { DEMO_MENU_GROUPS, isOfflineError } from "../lib/demo";
@@ -205,7 +206,7 @@ export default function CartPage() {
       <a href="#cart-main" className="ui-skip-link">
         ข้ามไปยังตะกร้า
       </a>
-      <header className="pa-hero px-5 py-5 text-center sm:px-8">
+      <DepthHero>
         <h1 className="font-display text-xl font-bold text-ink-900 sm:text-2xl">ตะกร้าและสั่งซื้อ</h1>
         <p className="mt-1 text-sm text-ink-600">
           เลือกเมนูพร้อมขาย ปรับจำนวน ตัวเลือก และหมายเหตุ แล้วกดยืนยันเป็นคำสั่งซื้อ
@@ -216,13 +217,14 @@ export default function CartPage() {
             <DemoBadge />
           </div>
         ) : null}
-      </header>
+      </DepthHero>
 
       {demo ? <ConnectionBanner onRetry={() => void loadMenu()} /> : null}
 
       <main id="cart-main" aria-label="ตะกร้าและสั่งซื้อ" className="space-y-4">
         {placed ? (
-          <Panel label="ยืนยันคำสั่งซื้อสำเร็จ">
+          <MotionReveal>
+            <Panel label="ยืนยันคำสั่งซื้อสำเร็จ">
             <div className="space-y-3">
               <Alert tone="success" role="status">
                 รับคำสั่งซื้อแล้ว เลขคำสั่งซื้อ {placed.orderNumber} ยอดรวม {fmtPrice(placed.total)}
@@ -240,7 +242,8 @@ export default function CartPage() {
                 </button>
               </div>
             </div>
-          </Panel>
+            </Panel>
+          </MotionReveal>
         ) : null}
 
         <Panel label="ตะกร้าของฉัน">
@@ -254,14 +257,14 @@ export default function CartPage() {
                 <p className="mt-1 text-sm text-ink-600">เลือกเมนูด้านล่างเพื่อเพิ่มลงตะกร้า</p>
               </div>
             ) : (
-              <ul className="space-y-3">
+              <StaggerList className="space-y-3">
                 {cart.map((l, index) => {
                   const info = priceMap.get(l.menuId);
                   const unit = lineUnitPrice(l);
                   const menuGroups = groupsByMenu.get(l.menuId) ?? [];
                   const optionNames = l.options.map((id) => optionMap.get(id)?.name ?? "ตัวเลือกที่ไม่พบ");
                   return (
-                    <li key={`${l.menuId}-${index}`} className="rounded-xl border border-ink-200 p-3">
+                    <StaggerItem key={`${l.menuId}-${index}`} index={index} className="rounded-xl border border-ink-200 p-3">
                       <div className="flex flex-wrap items-start justify-between gap-2">
                         <div className="min-w-0">
                           <p className="font-bold text-ink-900">{info?.name ?? "เมนูที่เลือก"}</p>
@@ -379,10 +382,10 @@ export default function CartPage() {
                           </div>
                         </div>
                       </div>
-                    </li>
+                    </StaggerItem>
                   );
                 })}
-              </ul>
+              </StaggerList>
             )}
             {cart.length > 0 ? (
               <p className="text-right text-base font-bold text-ink-900" role="status">
@@ -503,9 +506,7 @@ export default function CartPage() {
               เลือกเมนูพร้อมขาย
             </h2>
             {menuLoading ? (
-              <p className="py-6 text-center">
-                <Spinner label="กำลังโหลดเมนู…" />
-              </p>
+              <Skeleton label="กำลังโหลดเมนู…" lines={4} />
             ) : menuError ? (
               <div className="space-y-3">
                 <Alert tone="error" role="alert">
@@ -524,14 +525,15 @@ export default function CartPage() {
               groups.map((g) => (
                 <section key={g.category} aria-label={`หมวด ${g.category}`} className="space-y-2">
                   <h3 className="font-bold text-ink-900">{g.category}</h3>
-                  <ul className="grid gap-2 sm:grid-cols-2">
-                    {g.items.map((m) => {
+                  <StaggerList className="grid gap-2 sm:grid-cols-2">
+                    {g.items.map((m, itemIndex) => {
                       const inStock = m.inStock ?? true;
                       const countInCart = cart.filter((l) => l.menuId === m.id).reduce((n, l) => n + l.quantity, 0);
                       return (
-                        <li
+                        <StaggerItem
                           key={m.id}
-                          className="flex items-center justify-between gap-2 rounded-xl border border-ink-200 bg-white p-3"
+                          index={itemIndex}
+                          className="pa-lift flex items-center justify-between gap-2 rounded-xl border border-ink-200 bg-white p-3"
                         >
                           <div className="min-w-0">
                             <p className="truncate font-semibold text-ink-900">{m.name}</p>
@@ -555,10 +557,10 @@ export default function CartPage() {
                           >
                             เพิ่ม
                           </button>
-                        </li>
+                        </StaggerItem>
                       );
                     })}
-                  </ul>
+                  </StaggerList>
                 </section>
               ))
             )}

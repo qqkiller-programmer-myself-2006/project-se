@@ -23,7 +23,7 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
     <div
       role="status"
       aria-live="polite"
-      className="flex flex-wrap items-center gap-2 rounded-2xl border border-[#FECACA] bg-white px-4 py-3 text-sm shadow-sm"
+      className="pa-toast-enter flex flex-wrap items-center gap-2 rounded-2xl border border-[#FECACA] bg-white px-4 py-3 text-sm shadow-sm"
     >
       <span className="inline-flex items-center gap-2 font-semibold text-[#450A0A]">
         <Icon name="wifiOff" size={18} />

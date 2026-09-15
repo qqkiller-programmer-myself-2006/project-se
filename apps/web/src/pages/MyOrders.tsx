@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type OrderDetail, type PublicCustomer } from "../lib/api";
 import { OrderCard } from "../components/OrderCard";
-import { Alert, Panel, Spinner, inputClass, primaryButtonClass, secondaryButtonClass } from "../components/ui";
+import { Alert, Panel, inputClass, primaryButtonClass, secondaryButtonClass } from "../components/ui";
+import { DepthHero, MotionReveal, Skeleton } from "../components/motion";
 import { ConnectionBanner, DemoBadge } from "../components/demo";
 import { Icon } from "../components/icons";
 import { DEMO_ORDERS, isOfflineError } from "../lib/demo";
@@ -106,7 +107,7 @@ export default function MyOrdersPage() {
       <a href="#orders-main" className="ui-skip-link">
         ข้ามไปยังคำสั่งซื้อ
       </a>
-      <header className="pa-hero px-5 py-5 text-center sm:px-8">
+      <DepthHero>
         <h1 className="font-display text-xl font-bold text-ink-900 sm:text-2xl">คำสั่งซื้อของฉัน</h1>
         <p className="mt-1 inline-flex items-center gap-2 text-sm text-ink-600">
           <Icon name="order" size={18} />
@@ -117,15 +118,15 @@ export default function MyOrdersPage() {
             <DemoBadge />
           </div>
         ) : null}
-      </header>
+      </DepthHero>
 
       {demo ? <ConnectionBanner onRetry={() => void loadMine()} /> : null}
 
       <main id="orders-main" aria-label="คำสั่งซื้อของฉัน" className="space-y-4">
         {loading ? (
-          <p className="py-10 text-center">
-            <Spinner label="กำลังโหลดคำสั่งซื้อ…" />
-          </p>
+          <Panel label="กำลังโหลดคำสั่งซื้อ">
+            <Skeleton label="กำลังโหลดคำสั่งซื้อ…" lines={5} />
+          </Panel>
         ) : error ? (
           <div className="space-y-3">
             <Alert tone="error" role="alert">
@@ -157,8 +158,10 @@ export default function MyOrdersPage() {
                       <p role="status" className="text-sm text-ink-600">
                         พบ {orders.length} คำสั่งซื้อ
                       </p>
-                      {orders.map((o) => (
-                        <OrderCard key={o.id} order={o} payTo={`/pay/${o.id}`} />
+                      {orders.map((o, index) => (
+                        <MotionReveal key={o.id} index={index}>
+                          <OrderCard order={o} payTo={`/pay/${o.id}`} />
+                        </MotionReveal>
                       ))}
                     </div>
                   )}

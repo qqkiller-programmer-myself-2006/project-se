@@ -41,6 +41,13 @@
   --surface-warm: #fef2f2;
   --border: #e7ded4;
   --ring: #dc2626;
+  /* Premium motion tokens (Ticket 16): shared durations/easing, capped travel */
+  --motion-fast: 120ms;
+  --motion-base: 220ms;
+  --motion-slow: 480ms;
+  --motion-ease: cubic-bezier(0.22, 0.9, 0.28, 1);
+  --motion-lift: -2px;
+  --motion-delay: 0ms;
   color-scheme: light;
 }
 
@@ -149,6 +156,210 @@ body {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+  /* Premium motion layer: static states only — no travel, tilt, loops, stagger */
+  .pa-page-enter,
+  .pa-toast-enter {
+    animation: none !important;
+  }
+  .pa-reveal {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+  }
+  .pa-depth-layer {
+    animation: none !important;
+    transform: none !important;
+  }
+  .pa-tilt {
+    transform: none !important;
+  }
+  .pa-lift:hover,
+  .pa-lift:focus-visible,
+  .pa-lift:focus-within {
+    transform: none !important;
+  }
+  .pa-press:active {
+    transform: none !important;
+  }
+  .pa-skeleton {
+    animation: none !important;
+    opacity: 0.6;
+  }
+  .pa-chart-bar {
+    transform: none !important;
+    transition: none !important;
+  }
+}
+
+/* ---------- Premium motion/3D layer (Ticket 16) ---------- */
+/* Route/page entrance: short fade-rise, keyed per pathname */
+@keyframes pa-page-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.pa-page-enter {
+  animation: pa-page-in var(--motion-base) var(--motion-ease) both;
+}
+
+/* Scroll entrance reveal (IntersectionObserver adds .is-visible) */
+.pa-reveal {
+  opacity: 0;
+  transform: translateY(12px);
+  transition:
+    opacity var(--motion-base) var(--motion-ease),
+    transform var(--motion-base) var(--motion-ease);
+  transition-delay: var(--motion-delay, 0ms);
+}
+.pa-reveal--fade {
+  transform: none;
+}
+.pa-reveal--scale {
+  transform: translateY(6px) scale(0.98);
+}
+.pa-reveal.is-visible {
+  opacity: 1;
+  transform: none;
+}
+
+/* Staggered lists share the same reveal; delay set inline per item */
+.pa-stagger {
+  perspective: 900px;
+}
+
+/* Hover/focus lift for cards and nav (no layout shift: transform + shadow only) */
+.pa-lift {
+  transition:
+    transform var(--motion-fast) var(--motion-ease),
+    box-shadow var(--motion-fast) var(--motion-ease),
+    border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease);
+}
+.pa-lift:hover,
+.pa-lift:focus-visible,
+.pa-lift:focus-within {
+  transform: translateY(var(--motion-lift));
+  box-shadow: 0 8px 20px -10px rgba(69, 10, 10, 0.35);
+}
+/* Press feedback for buttons/links (paired with :hover lift, never alone) */
+.pa-press {
+  transition: transform var(--motion-fast) var(--motion-ease);
+}
+.pa-press:active {
+  transform: scale(0.98);
+}
+
+/* Subtle 3D tilt surface (JS sets transform on fine pointers; capped at 6deg) */
+.pa-tilt {
+  transform-style: preserve-3d;
+  border-radius: inherit;
+}
+.pa-tilt.is-tilting {
+  will-change: transform;
+  box-shadow: 0 14px 28px -16px rgba(69, 10, 10, 0.45);
+}
+
+/* Layered hero depth: ambient blobs float gently behind content */
+.pa-depth-hero {
+  transform-style: preserve-3d;
+}
+.pa-depth-content {
+  position: relative;
+  z-index: 1;
+}
+.pa-depth-layer {
+  position: absolute;
+  border-radius: 9999px;
+  pointer-events: none;
+  z-index: 0;
+}
+.pa-depth-layer--a {
+  width: 220px;
+  height: 220px;
+  right: -60px;
+  top: -80px;
+  background: radial-gradient(circle, rgba(248, 113, 113, 0.4) 0, transparent 70%);
+  animation: pa-float-a 9s ease-in-out infinite alternate;
+}
+.pa-depth-layer--b {
+  width: 170px;
+  height: 170px;
+  left: -50px;
+  bottom: -60px;
+  background: radial-gradient(circle, rgba(253, 230, 138, 0.35) 0, transparent 70%);
+  animation: pa-float-b 11s ease-in-out infinite alternate;
+}
+.pa-depth-layer--c {
+  width: 120px;
+  height: 120px;
+  left: 38%;
+  top: -50px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.16) 0, transparent 70%);
+  animation: pa-float-a 13s ease-in-out infinite alternate-reverse;
+}
+@keyframes pa-float-a {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(6px, -8px, 0);
+  }
+}
+@keyframes pa-float-b {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(-6px, 6px, 0);
+  }
+}
+
+/* Skeleton shimmer (transform-free: background-position only) */
+.pa-skeleton {
+  background: linear-gradient(90deg, #f5f0eb 25%, #fee2e2 50%, #f5f0eb 75%);
+  background-size: 200% 100%;
+  animation: pa-shimmer 1.6s linear infinite;
+}
+@keyframes pa-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* Dashboard chart reveal: scaleX from the left, fixed track height */
+.pa-chart-track {
+  display: block;
+}
+.pa-chart-bar {
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--motion-slow) var(--motion-ease);
+}
+.pa-chart-bar.is-visible {
+  transform: scaleX(1);
+}
+
+/* Toast/banner transition: short slide-fade on mount */
+@keyframes pa-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.pa-toast-enter {
+  animation: pa-toast-in var(--motion-base) var(--motion-ease) both;
 }
 
 @keyframes ui-spin {

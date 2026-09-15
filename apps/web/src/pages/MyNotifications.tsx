@@ -11,9 +11,9 @@ import {
   Badge,
   PageHeader,
   Panel,
-  Spinner,
   secondaryButtonClass,
 } from "../components/ui";
+import { Skeleton, StaggerItem, StaggerList } from "../components/motion";
 import { ConnectionBanner, DemoBadge } from "../components/demo";
 import { Icon } from "../components/icons";
 import { DEMO_NOTIFICATIONS, isOfflineError } from "../lib/demo";
@@ -156,7 +156,7 @@ export default function MyNotificationsPage() {
 
       <Panel label="ข้อความแจ้งเตือน">
         {loading ? (
-          <Spinner label="กำลังโหลดการแจ้งเตือน…" />
+          <Skeleton label="กำลังโหลดการแจ้งเตือน…" lines={4} />
         ) : error ? (
           <div className="space-y-3">
             <Alert tone="error" role="alert">
@@ -171,9 +171,9 @@ export default function MyNotificationsPage() {
             ยังไม่มีการแจ้งเตือนสำหรับบัญชีนี้ เมื่อมีการจอง การชำระเงิน งานคิว หรือคะแนน ข้อความจะปรากฏที่นี่
           </Alert>
         ) : (
-          <ul className="space-y-3" aria-live="polite">
-            {items.map((n) => (
-              <li key={n.id} className="rounded-xl border border-ink-200 bg-white p-4 shadow-sm">
+          <StaggerList className="space-y-3" label="ข้อความแจ้งเตือน" live>
+            {items.map((n, index) => (
+              <StaggerItem key={n.id} index={index} className="pa-lift rounded-xl border border-ink-200 bg-white p-4 shadow-sm">
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge tone={statusTone(n.status)}>{NOTIFICATION_STATUS_LABELS[n.status]}</Badge>
                   <Badge tone="neutral">{NOTIFICATION_KIND_LABELS[n.kind]}</Badge>
@@ -186,9 +186,9 @@ export default function MyNotificationsPage() {
                 {demo ? (
                   <p className="mt-1 text-xs text-ink-500">ข้อมูลตัวอย่าง — เชื่อมต่อเซิร์ฟเวอร์เพื่อดูข้อความจริง</p>
                 ) : null}
-              </li>
+              </StaggerItem>
             ))}
-          </ul>
+          </StaggerList>
         )}
       </Panel>
       </main>

@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { MENU_KIND_LABELS, api, type MenuKind, type PublicMenuGroupWithOptions } from "../lib/api";
 import { DEMO_MENU_GROUPS, isOfflineError } from "../lib/demo";
-import { Alert, Badge, Panel, Spinner } from "../components/ui";
+import { Alert, Badge, Panel } from "../components/ui";
+import { DepthHero, MotionReveal, Skeleton, StaggerItem, StaggerList, TiltCard } from "../components/motion";
 import { ConnectionBanner, DemoBadge } from "../components/demo";
 import { Icon, FoodMotif } from "../components/icons";
 
@@ -72,7 +73,7 @@ export default function MenuPublicPage() {
       <a href="#menu-main" className="ui-skip-link">
         ข้ามไปยังรายการเมนู
       </a>
-      <header className="pa-hero px-5 py-5 text-center sm:px-8">
+      <DepthHero>
         <p
           aria-hidden="true"
           className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-600 text-white shadow-md"
@@ -88,12 +89,13 @@ export default function MenuPublicPage() {
             <DemoBadge />
           </div>
         ) : null}
-      </header>
+      </DepthHero>
 
       {demo ? <ConnectionBanner onRetry={() => void load()} /> : null}
 
       <main id="menu-main" aria-label="รายการเมนูพร้อมขาย" className="space-y-4">
-        <Panel label="ค้นหาและกรองเมนู" className="space-y-3">
+        <MotionReveal>
+          <Panel label="ค้นหาและกรองเมนู" className="space-y-3">
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <label htmlFor="menu-search" className="mb-1 block text-sm font-semibold text-ink-800">
@@ -122,13 +124,14 @@ export default function MenuPublicPage() {
                 <option value="drink">{MENU_KIND_LABELS.drink}</option>
               </select>
             </div>
-          </div>
-        </Panel>
+            </div>
+          </Panel>
+        </MotionReveal>
 
         {loading ? (
-          <p className="py-10 text-center">
-            <Spinner label="กำลังโหลดเมนู…" />
-          </p>
+          <Panel label="กำลังโหลดเมนู">
+            <Skeleton label="กำลังโหลดเมนู…" lines={6} />
+          </Panel>
         ) : error ? (
           <div className="space-y-3">
             <Alert tone="error" role="alert">
@@ -164,13 +167,14 @@ export default function MenuPublicPage() {
             {filtered.map((g) => (
               <section key={g.category} aria-label={`หมวด ${g.category}`} className="space-y-3">
                 <h2 className="pa-section-title text-lg font-bold text-ink-900">{g.category}</h2>
-                <ul className="grid gap-3 sm:grid-cols-2">
-                  {g.items.map((m) => {
+                <StaggerList className="grid gap-3 sm:grid-cols-2">
+                  {g.items.map((m, index) => {
                     // Ticket 07: ข้อมูลเก่า/จำลองอาจไม่มีฟิลด์ใหม่ — ค่าเริ่มต้นพร้อมขายโดยไม่มีตัวเลือก
                     const optionGroups = m.optionGroups ?? [];
                     const inStock = m.inStock ?? true;
                     return (
-                      <li key={m.id} className="overflow-hidden rounded-2xl border border-ink-200 bg-white shadow-sm">
+                      <StaggerItem key={m.id} index={index} className="overflow-hidden rounded-2xl border border-ink-200 bg-white shadow-sm">
+                        <TiltCard className="pa-lift h-full">
                         {m.imageUrl ? (
                           <img
                             src={m.imageUrl}
@@ -203,10 +207,11 @@ export default function MenuPublicPage() {
                             </div>
                           ) : null}
                         </div>
-                      </li>
+                        </TiltCard>
+                      </StaggerItem>
                     );
                   })}
-                </ul>
+                </StaggerList>
               </section>
             ))}
           </div>

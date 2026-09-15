@@ -12,11 +12,11 @@ import {
   Badge,
   PageHeader,
   Panel,
-  Spinner,
   inputClass,
   primaryButtonClass,
   secondaryButtonClass,
 } from "../components/ui";
+import { MotionReveal, Skeleton, StaggerItem, StaggerList } from "../components/motion";
 import { ConnectionBanner, DemoBadge } from "../components/demo";
 import { Icon } from "../components/icons";
 import {
@@ -222,8 +222,10 @@ export default function RewardsPage() {
 
   if (loading) {
     return (
-      <div className="mx-auto w-full max-w-2xl px-4 py-10 text-center">
-        <Spinner label="กำลังโหลดคะแนนสะสม…" />
+      <div className="mx-auto w-full max-w-2xl px-4 py-10">
+        <Panel label="กำลังโหลดคะแนนสะสม">
+          <Skeleton label="กำลังโหลดคะแนนสะสม…" lines={5} />
+        </Panel>
       </div>
     );
   }
@@ -260,7 +262,8 @@ export default function RewardsPage() {
 
       {demo ? <ConnectionBanner onRetry={() => void load()} /> : null}
 
-      <Panel label="ยอดคะแนนของฉัน">
+      <MotionReveal>
+        <Panel label="ยอดคะแนนของฉัน">
         <h2 className="text-base font-bold text-ink-900">ยอดคะแนนของฉัน</h2>
         <p className="mt-2 flex items-baseline gap-2" aria-live="polite">
           <span className="text-4xl font-bold text-brand-700">{balance ?? 0}</span>
@@ -269,7 +272,8 @@ export default function RewardsPage() {
         {reserved.length > 0 && (
           <p className="mt-1 text-sm text-ink-600">มี {reserved.length} รายการรอร้านรับ (แต้มถูกกันวงเงินไว้ชั่วคราว)</p>
         )}
-      </Panel>
+        </Panel>
+      </MotionReveal>
 
       <Panel label="รางวัลพร้อมแลก">
         <h2 className="text-base font-bold text-ink-900">รางวัลพร้อมแลก</h2>
@@ -281,11 +285,11 @@ export default function RewardsPage() {
         {rewards.length === 0 ? (
           <p className="mt-2 text-sm text-ink-600">ยังไม่มีรางวัลพร้อมแลกในขณะนี้ กลับมาดูใหม่ภายหลัง</p>
         ) : (
-          <ul className="mt-3 space-y-3">
-            {rewards.map((r) => {
+          <StaggerList className="mt-3 space-y-3">
+            {rewards.map((r, index) => {
               const afford = (balance ?? 0) >= r.pointsCost;
               return (
-                <li key={r.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-ink-200 p-3">
+                <StaggerItem key={r.id} index={index} className="pa-lift flex flex-wrap items-center gap-3 rounded-xl border border-ink-200 p-3">
                   <div className="min-w-0 flex-1">
                     <p className="font-semibold text-ink-900">{r.name}</p>
                     <p className="text-sm text-ink-600">{r.menuName} · ใช้ {r.pointsCost} แต้ม · {quotaLabel(r)}</p>
@@ -300,10 +304,10 @@ export default function RewardsPage() {
                   >
                     {redeemBusyId === r.id ? "กำลังแลก…" : afford ? `แลก (${r.pointsCost} แต้ม)` : "แต้มไม่พอ"}
                   </button>
-                </li>
+                </StaggerItem>
               );
             })}
-          </ul>
+          </StaggerList>
         )}
       </Panel>
 
@@ -317,9 +321,9 @@ export default function RewardsPage() {
         {redemptions.length === 0 ? (
           <p className="mt-2 text-sm text-ink-600">ยังไม่เคยแลกรางวัล แลกครั้งแรกจากรายการด้านบนได้เลย</p>
         ) : (
-          <ul className="mt-3 space-y-3">
-            {redemptions.map((r) => (
-              <li key={r.id} className="rounded-xl border border-ink-200 p-3">
+          <StaggerList className="mt-3 space-y-3">
+            {redemptions.map((r, index) => (
+              <StaggerItem key={r.id} index={index} className="rounded-xl border border-ink-200 p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <p className="min-w-0 flex-1 font-semibold text-ink-900">
                     {r.rewardName} <span className="font-normal text-ink-500">({r.code})</span>
@@ -382,9 +386,9 @@ export default function RewardsPage() {
                     )}
                   </div>
                 )}
-              </li>
+              </StaggerItem>
             ))}
-          </ul>
+          </StaggerList>
         )}
       </Panel>
 

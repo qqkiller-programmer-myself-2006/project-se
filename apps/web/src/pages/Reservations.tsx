@@ -8,7 +8,8 @@ import {
   type ReservationDetail,
 } from "../lib/api";
 import { ReservationCard } from "../components/ReservationCard";
-import { Alert, Panel, Spinner, inputClass, primaryButtonClass, secondaryButtonClass } from "../components/ui";
+import { Alert, Panel, inputClass, primaryButtonClass, secondaryButtonClass } from "../components/ui";
+import { DepthHero, MotionReveal, Skeleton } from "../components/motion";
 import { ConnectionBanner, DemoBadge } from "../components/demo";
 import { Icon } from "../components/icons";
 import { DEMO_RESERVATIONS, isOfflineError } from "../lib/demo";
@@ -189,7 +190,7 @@ export default function ReservationsPage() {
       <a href="#reservations-main" className="ui-skip-link">
         ข้ามไปยังการจอง
       </a>
-      <header className="pa-hero px-5 py-5 text-center sm:px-8">
+      <DepthHero>
         <h1 className="font-display text-xl font-bold text-ink-900 sm:text-2xl">จองโต๊ะล่วงหน้า</h1>
         <p className="mt-1 inline-flex items-center gap-2 text-sm text-ink-600">
           <Icon name="reserve" size={18} />
@@ -200,15 +201,15 @@ export default function ReservationsPage() {
             <DemoBadge />
           </div>
         ) : null}
-      </header>
+      </DepthHero>
 
       {demo ? <ConnectionBanner onRetry={() => void load()} /> : null}
 
       <main id="reservations-main" aria-label="การจองของฉัน" className="space-y-4">
         {loading ? (
-          <p className="py-10 text-center">
-            <Spinner label="กำลังโหลดการจอง…" />
-          </p>
+          <Panel label="กำลังโหลดการจอง">
+            <Skeleton label="กำลังโหลดการจอง…" lines={5} />
+          </Panel>
         ) : error ? (
           <div className="space-y-3">
             <Alert tone="error" role="alert">
@@ -319,8 +320,10 @@ export default function ReservationsPage() {
                   <p className="text-sm text-ink-600">
                     สร้าง/ยกเลิกการจองต้องเชื่อมต่อเซิร์ฟเวอร์ — ข้อมูลด้านล่างไว้ดูดีไซน์เท่านั้น
                   </p>
-                  {items.map((r) => (
-                    <ReservationCard key={r.id} reservation={r} />
+                  {items.map((r, index) => (
+                    <MotionReveal key={r.id} index={index}>
+                      <ReservationCard reservation={r} />
+                    </MotionReveal>
                   ))}
                 </div>
               </Panel>
@@ -345,8 +348,9 @@ export default function ReservationsPage() {
                       <p role="status" className="text-sm text-ink-600">
                         พบ {items.length} การจอง
                       </p>
-                      {items.map((r) => (
-                        <div key={r.id} className="space-y-2">
+                      {items.map((r, index) => (
+                        <MotionReveal key={r.id} index={index}>
+                          <div className="space-y-2">
                           <ReservationCard reservation={r} />
                           {(r.status === "pending" || r.status === "confirmed") && (
                             <button
@@ -362,7 +366,8 @@ export default function ReservationsPage() {
                           {r.status !== "pending" && r.status !== "confirmed" ? (
                             <p className="text-sm text-ink-500">สถานะ: {RESERVATION_STATUS_LABELS[r.status]}</p>
                           ) : null}
-                        </div>
+                          </div>
+                        </MotionReveal>
                       ))}
                     </div>
                   )}

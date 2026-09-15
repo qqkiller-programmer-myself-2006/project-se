@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { MotionReveal } from "./motion";
 
 type AlertTone = "error" | "success" | "info" | "demo";
 
@@ -24,7 +25,7 @@ export function Alert({
     <p
       role={role}
       aria-live={ariaLive ?? (role === "alert" ? "assertive" : "polite")}
-      className={`rounded-xl border px-3 py-2.5 text-sm font-medium ${ALERT_STYLES[tone]}`}
+      className={`pa-toast-enter rounded-xl border px-3 py-2.5 text-sm font-medium ${ALERT_STYLES[tone]}`}
     >
       {children}
     </p>
@@ -85,13 +86,15 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <div className="flex flex-wrap items-start justify-between gap-3">
-      <div className="min-w-0">
-        <h1 className="pa-display text-xl font-bold text-brand-900 sm:text-2xl">{title}</h1>
-        <p className="mt-1 max-w-2xl text-sm text-ink-600">{description}</p>
+    <MotionReveal variant="fade">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="pa-display text-xl font-bold text-brand-900 sm:text-2xl">{title}</h1>
+          <p className="mt-1 max-w-2xl text-sm text-ink-600">{description}</p>
+        </div>
+        {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
       </div>
-      {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
-    </div>
+    </MotionReveal>
   );
 }
 
@@ -108,13 +111,13 @@ export const inputClass =
   "w-full min-h-[44px] rounded-xl border border-ink-300 bg-white px-3 py-2.5 text-base text-ink-900 placeholder:text-ink-400 shadow-sm transition-colors hover:border-ink-400 disabled:cursor-not-allowed disabled:bg-ink-100 disabled:text-ink-500 aria-[invalid=true]:border-brand-500 aria-[invalid=true]:bg-brand-50";
 
 export const primaryButtonClass =
-  "inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-xl bg-brand-600 px-5 py-2.5 font-semibold text-white shadow-sm transition-colors hover:bg-brand-700 active:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-60";
+  "pa-press inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-xl bg-brand-600 px-5 py-2.5 font-semibold text-white shadow-sm transition-colors hover:bg-brand-700 active:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-60";
 
 export const secondaryButtonClass =
-  "inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-xl border border-ink-300 bg-white px-4 py-2.5 text-sm font-semibold text-ink-800 shadow-sm transition-colors hover:border-gold-600 hover:bg-gold-100 hover:text-gold-700 active:bg-ink-100 disabled:cursor-not-allowed disabled:opacity-60";
+  "pa-press inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-xl border border-ink-300 bg-white px-4 py-2.5 text-sm font-semibold text-ink-800 shadow-sm transition-colors hover:border-gold-600 hover:bg-gold-100 hover:text-gold-700 active:bg-ink-100 disabled:cursor-not-allowed disabled:opacity-60";
 
 export const dangerButtonClass =
-  "inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-xl border border-brand-300 bg-white px-4 py-2.5 text-sm font-semibold text-brand-700 shadow-sm transition-colors hover:bg-brand-50 active:bg-brand-100 disabled:cursor-not-allowed disabled:opacity-60";
+  "pa-press inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-xl border border-brand-300 bg-white px-4 py-2.5 text-sm font-semibold text-brand-700 shadow-sm transition-colors hover:bg-brand-50 active:bg-brand-100 disabled:cursor-not-allowed disabled:opacity-60";
 
 export const successButtonClass =
-  "inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-xl border border-green-600 bg-white px-4 py-2.5 text-sm font-semibold text-green-800 shadow-sm transition-colors hover:bg-green-50 active:bg-green-100 disabled:cursor-not-allowed disabled:opacity-60";
+  "pa-press inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-xl border border-green-600 bg-white px-4 py-2.5 text-sm font-semibold text-green-800 shadow-sm transition-colors hover:bg-green-50 active:bg-green-100 disabled:cursor-not-allowed disabled:opacity-60";

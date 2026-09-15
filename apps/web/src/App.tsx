@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, NavLink, Route, Routes, useNavigate } from "react-router-dom";
 import { api, ROLE_LABELS, type PublicUser } from "./lib/api";
 import { Spinner } from "./components/ui";
+import { PageEnter } from "./components/motion";
 import { PublicShell } from "./components/shell";
 import LoginPage from "./pages/Login";
 import StaffPage from "./pages/Staff";
@@ -36,7 +37,7 @@ import AdminNotificationsPage from "./pages/AdminNotifications";
 import MyNotificationsPage from "./pages/MyNotifications";
 
 const NAV_BASE =
-  "inline-flex min-h-[44px] items-center rounded-xl border px-4 py-2 text-sm font-semibold transition-colors";
+  "pa-lift pa-press inline-flex min-h-[44px] items-center rounded-xl border px-4 py-2 text-sm font-semibold transition-colors";
 const NAV_IDLE = "border-ink-200 bg-white text-ink-700 hover:border-brand-300 hover:bg-brand-50 hover:text-brand-800";
 const NAV_ACTIVE = "border-brand-600 bg-brand-600 text-white shadow-sm";
 
@@ -269,6 +270,7 @@ export default function App() {
         </div>
       </header>
       <main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6">
+        <PageEnter>
         <Routes>
           <Route path="/status" element={<StatusPage />} />
           <Route path="/menu" element={<MenuPublicPage />} />
@@ -325,6 +327,7 @@ export default function App() {
             }
           />
         </Routes>
+        </PageEnter>
       </main>
       <footer className="mx-auto w-full max-w-5xl px-4 pb-8 sm:px-6">
         <p className="text-xs text-ink-500">

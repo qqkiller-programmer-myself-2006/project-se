@@ -12,11 +12,11 @@ import {
   Badge,
   PageHeader,
   Panel,
-  Spinner,
   inputClass,
   primaryButtonClass,
   secondaryButtonClass,
 } from "../components/ui";
+import { Skeleton, StaggerItem, StaggerList } from "../components/motion";
 
 function statusTone(s: NotificationStatus): "brand" | "success" | "danger" | "neutral" {
   if (s === "sent") return "success";
@@ -247,7 +247,7 @@ export default function AdminNotificationsPage() {
 
       <Panel label="รายการแจ้งเตือน">
         {loading ? (
-          <Spinner label="กำลังโหลดคิวแจ้งเตือน…" />
+          <Skeleton label="กำลังโหลดคิวแจ้งเตือน…" lines={5} />
         ) : error ? (
           <div className="space-y-3">
             <Alert tone="error" role="alert">
@@ -262,9 +262,9 @@ export default function AdminNotificationsPage() {
             ยังไม่มีการแจ้งเตือนตามเงื่อนไขนี้ ข้อความใหม่จะเข้าคิวอัตโนมัติเมื่อมีการจอง ชำระเงิน งานคิว หรือคะแนน
           </Alert>
         ) : (
-          <ul className="space-y-3" aria-live="polite">
-            {items.map((n) => (
-              <li key={n.id} className="rounded-xl border border-ink-200 p-3">
+          <StaggerList className="space-y-3" label="รายการแจ้งเตือน" live>
+            {items.map((n, index) => (
+              <StaggerItem key={n.id} index={index} className="rounded-xl border border-ink-200 p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge tone={statusTone(n.status)}>{NOTIFICATION_STATUS_LABELS[n.status]}</Badge>
                   <Badge tone="neutral">{NOTIFICATION_KIND_LABELS[n.kind]}</Badge>
@@ -291,9 +291,9 @@ export default function AdminNotificationsPage() {
                     </button>
                   </div>
                 )}
-              </li>
+              </StaggerItem>
             ))}
-          </ul>
+          </StaggerList>
         )}
       </Panel>
 

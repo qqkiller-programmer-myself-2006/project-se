@@ -11,11 +11,11 @@ import {
   Badge,
   PageHeader,
   Panel,
-  Spinner,
   inputClass,
   primaryButtonClass,
   secondaryButtonClass,
 } from "../components/ui";
+import { MotionReveal, Skeleton, StaggerItem, StaggerList } from "../components/motion";
 import { ConnectionBanner, DemoBadge } from "../components/demo";
 import { DEMO_NON_GUARANTEE, DEMO_QUEUE_JOBS, isOfflineError } from "../lib/demo";
 
@@ -203,38 +203,39 @@ export default function QueueTrackPage() {
         ) : (
           <div className="mt-3 space-y-2">
             {ordersLoading ? (
-              <Spinner label="กำลังโหลดคำสั่งซื้อ…" />
+              <Skeleton label="กำลังโหลดคำสั่งซื้อ…" lines={3} />
             ) : ordersError ? (
               <Alert tone="error" role="alert">{ordersError}</Alert>
             ) : orders.length === 0 ? (
               <p className="text-sm text-ink-600">ยังไม่มีคำสั่งซื้อในบัญชีนี้</p>
             ) : (
-              <ul className="space-y-2">
-                {orders.map((o) => (
-                  <li key={o.id} className="flex flex-wrap items-center gap-2 rounded-xl border border-ink-200 p-3">
+              <StaggerList className="space-y-2">
+                {orders.map((o, index) => (
+                  <StaggerItem key={o.id} index={index} className="flex flex-wrap items-center gap-2 rounded-xl border border-ink-200 p-3">
                     <span className="text-sm font-bold">{o.orderNumber}</span>
                     <span className="text-sm text-ink-600">{o.items.length} รายการ · {o.total} บาท</span>
                     <button type="button" onClick={() => void trackOrder(o)} disabled={loading} className={secondaryButtonClass}>
                       ดูคิว
                     </button>
-                  </li>
+                  </StaggerItem>
                 ))}
-              </ul>
+              </StaggerList>
             )}
           </div>
         )}
       </Panel>
 
-      {loading && <Spinner label="กำลังโหลดสถานะคิว…" />}
+      {loading && <Skeleton label="กำลังโหลดสถานะคิว…" lines={3} />}
       {error && <Alert tone="error" role="alert">{error}</Alert>}
 
       {!loading && !error && trackedNumber && (
+        <MotionReveal>
         <Panel label={`สถานะคิว ${trackedNumber}`}>
           <h2 className="text-base font-bold text-ink-900">คำสั่งซื้อ {trackedNumber}</h2>
           {jobs.length > 0 && (
             <div className="mt-3 rounded-xl border border-brand-200 bg-brand-50 p-3" aria-live="polite">
               {waitLoading ? (
-                <Spinner label="กำลังประมาณเวลารอ…" />
+                <Skeleton label="กำลังประมาณเวลารอ…" lines={2} />
               ) : waitEstimate ? (
                 <>
                   <p className="text-base font-bold text-brand-800">
@@ -252,9 +253,9 @@ export default function QueueTrackPage() {
           {jobs.length === 0 ? (
             <p className="mt-2 text-sm text-ink-600">คำสั่งซื้อนี้ยังไม่เข้าคิว (อาจรอชำระเงิน) ชำระสำเร็จแล้วงานจะขึ้นที่นี่อัตโนมัติ</p>
           ) : (
-            <ol className="mt-3 space-y-3">
-              {jobs.map((job) => (
-                <li key={job.id} className="rounded-xl border border-ink-200 p-3">
+            <StaggerList as="ol" className="mt-3 space-y-3">
+              {jobs.map((job, index) => (
+                <StaggerItem key={job.id} index={index} className="rounded-xl border border-ink-200 p-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-sm font-bold text-ink-900">{job.menuName} ×{job.quantity}</span>
                     <Badge tone={job.status === "ready" ? "success" : job.status === "delivered" ? "active" : job.status === "cancelled" ? "danger" : "brand"}>
@@ -267,11 +268,12 @@ export default function QueueTrackPage() {
                     {job.tableName ? ` · เสิร์ฟที่โต๊ะ ${job.tableName}` : ""}
                     {job.quantity > 1 ? ` · ทำเสร็จ ${job.readyQty}/${job.quantity} · ส่งมอบ ${job.deliveredQty}/${job.quantity}` : ""}
                   </p>
-                </li>
+                </StaggerItem>
               ))}
-            </ol>
+            </StaggerList>
           )}
         </Panel>
+        </MotionReveal>
       )}
     </div>
   );
