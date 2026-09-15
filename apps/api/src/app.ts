@@ -20,6 +20,8 @@ import { createQueueRouter } from "./routes/queue.js";
 import { createLoyaltyRouter } from "./routes/loyalty.js";
 import { createNotificationRouter } from "./routes/notifications.js";
 import type { LineMessagingProvider } from "./notify/messaging.js";
+import { createCapacityRouter } from "./routes/capacity.js";
+import type { PredictionProvider } from "./predict/adapter.js";
 import { createFinanceRouter } from "./routes/finance.js";
 import { createInventoryRouter } from "./routes/inventory.js";
 import { createReservationRouter } from "./routes/reservations.js";
@@ -44,6 +46,8 @@ export interface AppOptions {
   line?: LineProvider;
   /** LINE Messaging provider สำหรับ Ticket 12 (default: disabled → flush เก็บ failed ไว้ retry) */
   messaging?: LineMessagingProvider;
+  /** Prediction provider สำหรับ Ticket 13 (default: disabled → fallback baseline; tests ฉีด fake) */
+  predictor?: PredictionProvider | null;
   /** callback URL ที่ลงทะเบียนกับ LINE (default: อ่าน LINE_REDIRECT_URI) */
   lineRedirectUri?: string;
   /**
@@ -677,6 +681,17 @@ export function createApp(opts: AppOptions): express.Express {
       clientIp,
       clock,
       messaging: opts.messaging,
+    }),
+  );
+
+  // Ticket 13 routes อยู่ใน routes/capacity.ts (กฎธุรกิจอยู่ predict/* + store)
+  app.use(
+    createCapacityRouter({
+      store,
+      middleware: { requireAuth, requireCsrf, requireShopManager },
+      clientIp,
+      clock,
+      predictor: opts.predictor ?? null,
     }),
   );
 

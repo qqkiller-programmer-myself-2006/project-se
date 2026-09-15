@@ -128,7 +128,12 @@ export type AuditAction =
   | "notification_failed"
   | "notification_dead_letter"
   | "notification_retried"
-  | "notification_skipped";
+  | "notification_skipped"
+  // ---------- Ticket 13: Capacity และการพยากรณ์เวลารอ ----------
+  | "prediction_requested"
+  | "prediction_model_updated"
+  | "prediction_completed"
+  | "prediction_evaluated";
 
 export interface AuditEntry {
   id: number;
@@ -1452,4 +1457,172 @@ export interface Notification {
   sentAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** ---------- Ticket 13: Capacity และการพยากรณ์เวลารอ (local-first) ---------- */
+
+/** แหล่งที่มาของเวลารอ: baseline deterministic หรือโมเดลภายนอก (ต้องดีกว่า baseline ก่อนเปิดใช้) */
+export type PredictionSource = "baseline" | "model";
+
+export const PREDICTION_SOURCES: PredictionSource[] = ["baseline", "model"];
+
+/** ข้อความกำกับทุกเวลารอ — เวลารอโดยประมาณ ไม่ใช่เวลารับประกัน (CONVENTION ห้ามเปลี่ยนความหมาย) */
+export const PREDICTION_NON_GUARANTEE = "เวลารอโดยประมาณ ไม่ใช่เวลารับประกัน";
+
+/** รุ่น baseline เริ่มต้น (deterministic — เวลามาตรฐานรายฝ่าย + คิว + ขนาดปาร์ตี้) */
+export const PREDICTION_BASELINE_VERSION = "baseline-v1";
+/** timeout เริ่มต้นของ prediction adapter (ms) — เกินแล้ว fallback baseline ทันที */
+export const PREDICTION_DEFAULT_TIMEOUT_MS = 500;
+export const PREDICTION_TIMEOUT_MIN_MS = 50;
+export const PREDICTION_TIMEOUT_MAX_MS = 5000;
+export const PREDICTION_MODEL_VERSION_MAX = 64;
+/** เกณฑ์เปิดใช้โมเดล: MAE โมเดลต้องดีกว่า baseline อย่างน้อย threshold (นาที, default 0) */
+export const PREDICTION_DEFAULT_THRESHOLD_MINUTES = 0;
+/** ช่วงเวลารอแสดงเป็น [wait, wait + N] นาที */
+export const PREDICTION_RANGE_PLUS_MINUTES = 5;
+/** จำนวนปาร์ตี้ที่เริ่มบวกเวลารอเพิ่ม (+5 นาทีเมื่อมากกว่า) */
+export const PREDICTION_LARGE_PARTY_SIZE = 4;
+export const PREDICTION_LARGE_PARTY_EXTRA_MINUTES = 5;
+
+export const PREDICTION_SOURCE_LABELS: Record<PredictionSource, string> = {
+  baseline: "เวลามาตรฐาน",
+  model: "โมเดลพยากรณ์",
+};
+
+/** ภาพกำลังผลิต/เวลารอรายฝ่าย (baseline deterministic) */
+export interface CapacityStationSummary {
+  station: QueueStation;
+  /** กำลังผลิตต่อช่วง 15 นาที */
+  perSlot: number;
+  /** งาน active ที่พร้อมทำแล้ว (queued/claimed/preparing, readyAt ถึงแล้ว) */
+  activeJobs: number;
+  /** จำนวนชิ้นคงเหลือของงาน active */
+  unitsAhead: number;
+  /** เวลารอโดยประมาณ (นาที) */
+  estimatedWaitMin: number;
+  rangeMin: number;
+  rangeMax: number;
+  source: PredictionSource;
+}
+
+/** ภาพรวมกำลังผลิตร้าน (staff หลังร้าน) */
+export interface CapacityOverview {
+  /** เวลาที่คำนวณ (UTC ISO) */
+  at: string;
+  stations: CapacityStationSummary[];
+  enabledTables: number;
+  freeTables: number;
+  occupiedTables: number;
+  customerCount: number;
+}
+
+/** เวลารอรายฝ่ายของคำสั่งซื้อ (งานช้าที่สุดตัดสิน) */
+export interface WaitStationBreakdown {
+  station: QueueStation;
+  jobs: number;
+  queueAhead: number;
+  unitsAhead: number;
+  estimatedWaitMin: number;
+}
+
+/** ผลพยากรณ์เวลารอ (baseline หรือ model + metadata ครบ) */
+export interface WaitEstimate {
+  orderId: string | null;
+  station: QueueStation | null;
+  partySize: number;
+  perStation: WaitStationBreakdown[];
+  /** เวลารอโดยประมาณ = งานช้าที่สุด (นาที) */
+  estimatedWaitMin: number;
+  rangeMin: number;
+  rangeMax: number;
+  /** readyAt ช้าที่สุดของงานในคำสั่งซื้อ (null เมื่อไม่มีงาน) */
+  readyAtSlowest: string | null;
+  source: PredictionSource;
+  modelVersion: string;
+  predictedAt: string;
+  timeoutMs: number;
+  /** ข้อความกำกับ — เวลารอโดยประมาณ ไม่ใช่เวลารับประกัน */
+  nonGuarantee: string;
+}
+
+/** ผลตรวจสล็อตล่วงหน้า (preorder/reservation slot validation) */
+export interface PreorderSlotCheck {
+  station: QueueStation;
+  scheduledAt: string;
+  slotStart: string;
+  slotEnd: string;
+  used: number;
+  capacity: number;
+  available: boolean;
+  estimatedWaitMin: number;
+  rangeMin: number;
+  rangeMax: number;
+  /** สล็อตว่างถัดไปเมื่อเต็ม (null เมื่อว่างหรือเต็มทั้ง 7 วัน) */
+  suggestedSlot: QueueSlot | null;
+}
+
+/** รุ่นโมเดลพยากรณ์ (registry — โมเดลจริงยังไม่เลือกผู้ให้บริการ) */
+export interface PredictionModel {
+  version: string;
+  kind: "baseline" | "external";
+  enabled: boolean;
+  /** MAE ต้องดีกว่า baseline อย่างน้อย threshold (นาที) จึงเปิดใช้ได้ */
+  thresholdMinutes: number;
+  timeoutMs: number;
+  /** จำนวนตัวอย่างที่ประเมินแล้ว */
+  samples: number;
+  maeBaseline: number | null;
+  maeModel: number | null;
+  trainedAt: string | null;
+  updatedBy: string | null;
+  updatedAt: string;
+}
+
+/**
+ * ฟีเจอร์สำหรับฝึกโมเดลในอนาคต — เก็บ ณ จุดพยากรณ์เท่านั้น (no leakage):
+ * ไม่มีข้อมูลอนาคต (actual มาตอนส่งมอบครบ) และไม่มี PII ลูกค้า
+ * (ไม่มีชื่อ/เบอร์โทร/อีเมล/LINE user ID)
+ */
+export interface PredictionFeature {
+  id: string;
+  orderId: string | null;
+  station: QueueStation | null;
+  partySize: number;
+  queueAhead: number;
+  unitsAhead: number;
+  /** ชั่วโมงฝั่งกรุงเทพ 0–23 ณ จุดพยากรณ์ */
+  hourOfDay: number;
+  /** วันฝั่งกรุงเทพ 0 (อาทิตย์)–6 (เสาร์) ณ จุดพยากรณ์ */
+  dayOfWeek: number;
+  isRemake: boolean;
+  isPriority: boolean;
+  slotKey: string | null;
+  baselineMin: number;
+  predictedMin: number | null;
+  modelVersion: string;
+  source: PredictionSource;
+  actualMin: number | null;
+  errorBaseline: number | null;
+  errorModel: number | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+/** ผลเทียบความแม่นยำ baseline vs model (Owner เท่านั้น) */
+export interface PredictionAccuracy {
+  samples: number;
+  maeBaseline: number | null;
+  maeModel: number | null;
+  meetsThreshold: boolean;
+  thresholdMinutes: number;
+  /** เกณฑ์ 500 งานตาม D09 — ยังไม่ครบให้รายงานว่าสะสมอยู่ */
+  gatheringSamples: boolean;
+  fixtures: {
+    name: string;
+    samples: number;
+    maeBaseline: number;
+    maeModel: number;
+    modelWins: boolean;
+  };
+  evaluatedAt: string;
 }

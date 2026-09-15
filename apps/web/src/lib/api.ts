@@ -912,6 +912,136 @@ export const NOTIFICATION_STATUS_LABELS: Record<NotificationStatus, string> = {
   skipped: "ข้าม (ดูในเว็บ)",
 };
 
+// ---------- Ticket 13: Capacity + พยากรณ์เวลารอ ----------
+
+export type PredictionSource = "baseline" | "model";
+
+export const PREDICTION_SOURCE_LABELS: Record<PredictionSource, string> = {
+  baseline: "เวลามาตรฐาน",
+  model: "โมเดลพยากรณ์",
+};
+
+export interface CapacityStationSummary {
+  station: QueueStation;
+  perSlot: number;
+  activeJobs: number;
+  unitsAhead: number;
+  estimatedWaitMin: number;
+  rangeMin: number;
+  rangeMax: number;
+  source: PredictionSource;
+}
+
+export interface CapacityOverview {
+  at: string;
+  stations: CapacityStationSummary[];
+  enabledTables: number;
+  freeTables: number;
+  occupiedTables: number;
+  customerCount: number;
+}
+
+export interface WaitStationBreakdown {
+  station: QueueStation;
+  jobs: number;
+  queueAhead: number;
+  unitsAhead: number;
+  estimatedWaitMin: number;
+}
+
+export interface WaitEstimate {
+  orderId: string | null;
+  station: QueueStation | null;
+  partySize: number;
+  perStation: WaitStationBreakdown[];
+  estimatedWaitMin: number;
+  rangeMin: number;
+  rangeMax: number;
+  readyAtSlowest: string | null;
+  source: PredictionSource;
+  modelVersion: string;
+  predictedAt: string;
+  timeoutMs: number;
+  nonGuarantee: string;
+}
+
+export interface QueueSlotInfo {
+  station: QueueStation;
+  slotStart: string;
+  slotEnd: string;
+  used: number;
+  capacity: number;
+  available: number;
+}
+
+export interface PreorderSlotCheck {
+  station: QueueStation;
+  scheduledAt: string;
+  slotStart: string;
+  slotEnd: string;
+  used: number;
+  capacity: number;
+  available: boolean;
+  estimatedWaitMin: number;
+  rangeMin: number;
+  rangeMax: number;
+  suggestedSlot: QueueSlotInfo | null;
+}
+
+export interface PredictionModel {
+  version: string;
+  kind: "baseline" | "external";
+  enabled: boolean;
+  thresholdMinutes: number;
+  timeoutMs: number;
+  samples: number;
+  maeBaseline: number | null;
+  maeModel: number | null;
+  trainedAt: string | null;
+  updatedBy: string | null;
+  updatedAt: string;
+}
+
+export interface PredictionAccuracy {
+  samples: number;
+  maeBaseline: number | null;
+  maeModel: number | null;
+  meetsThreshold: boolean;
+  thresholdMinutes: number;
+  gatheringSamples: boolean;
+  fixtures: {
+    name: string;
+    samples: number;
+    maeBaseline: number;
+    maeModel: number;
+    modelWins: boolean;
+  };
+  evaluatedAt: string;
+}
+
+export interface PredictionFeature {
+  id: string;
+  orderId: string | null;
+  station: QueueStation | null;
+  partySize: number;
+  queueAhead: number;
+  unitsAhead: number;
+  hourOfDay: number;
+  dayOfWeek: number;
+  isRemake: boolean;
+  isPriority: boolean;
+  slotKey: string | null;
+  baselineMin: number;
+  predictedMin: number | null;
+  modelVersion: string;
+  source: PredictionSource;
+  actualMin: number | null;
+  errorBaseline: number | null;
+  errorModel: number | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
 /** ประวัติร้านใช้ AuditItem ชุดเดียวกับประวัติบัญชี (shape เดียวกัน ไม่ duplicate type) */
 
 const BASE = import.meta.env["VITE_API_URL"] ?? "";
@@ -1492,4 +1622,47 @@ export const api = {
       { method: "PATCH", body: JSON.stringify({ enabled }) },
       true,
     ),
+  // Ticket 13: Capacity + พยากรณ์เวลารอ
+  capacityOverview: (station?: QueueStation) =>
+    req<{ overview: CapacityOverview; sourceLabels: Record<string, string>; nonGuarantee: string }>(
+      `/api/capacity/overview${station ? `?station=${station}` : ""}`,
+    ),
+  capacityWaitOrder: (orderId: string, partySize = 2, phone?: string) => {
+    const params = new URLSearchParams({ orderId, partySize: String(partySize) });
+    if (phone) params.set("phone", phone);
+    return req<{ estimate: WaitEstimate; featureId: string; sourceLabels: Record<string, string> }>(
+      `/api/capacity/wait?${params.toString()}`,
+    );
+  },
+  capacityWaitStation: (station: QueueStation, partySize = 2) =>
+    req<{ estimate: WaitEstimate; featureId: string; sourceLabels: Record<string, string> }>(
+      `/api/capacity/wait?station=${station}&partySize=${partySize}`,
+    ),
+  preorderCheck: (body: { station: QueueStation; scheduledAt: string; partySize?: number }) =>
+    req<{ check: PreorderSlotCheck; nonGuarantee: string }>(
+      "/api/capacity/preorder-check",
+      { method: "POST", body: JSON.stringify(body) },
+      true,
+    ),
+  predictionModelGet: () =>
+    req<{ model: PredictionModel; sourceLabels: Record<string, string> }>("/api/predictions/model"),
+  predictionModelSet: (patch: { version?: string; kind?: "baseline" | "external"; enabled?: boolean; thresholdMinutes?: number; timeoutMs?: number }) =>
+    req<{ model: PredictionModel }>(
+      "/api/predictions/model",
+      { method: "PUT", body: JSON.stringify(patch) },
+      true,
+    ),
+  predictionAccuracy: () =>
+    req<{ accuracy: PredictionAccuracy; sourceLabels: Record<string, string> }>("/api/predictions/accuracy"),
+  predictionEvaluate: () =>
+    req<{ accuracy: PredictionAccuracy }>("/api/predictions/evaluate", { method: "POST", body: JSON.stringify({}) }, true),
+  predictionFeatures: (limit = 50) =>
+    req<{ features: PredictionFeature[] }>(`/api/predictions/features?limit=${limit}`),
+  predictionComplete: (id: string, actualMin: number) =>
+    req<{ feature: PredictionFeature; deduplicated: boolean }>(
+      `/api/predictions/features/${id}/complete`,
+      { method: "POST", body: JSON.stringify({ actualMin }) },
+      true,
+    ),
+  predictionAudit: () => req<{ items: AuditItem[] }>("/api/audit/predictions?limit=100"),
 };

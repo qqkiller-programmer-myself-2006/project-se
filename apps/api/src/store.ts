@@ -28,6 +28,7 @@ import type {
   MenuItem,
   MenuOption,
   MenuOptionGroup,
+  CapacityOverview,
   Order,
   OrderDetail,
   OrderItem,
@@ -35,6 +36,11 @@ import type {
   OrderPaymentState,
   OrderServiceType,
   OrderStatus,
+  PredictionAccuracy,
+  PredictionFeature,
+  PredictionModel,
+  PreorderSlotCheck,
+  WaitEstimate,
   Payment,
   PaymentEvent,
   PaymentMethod,
@@ -233,9 +239,17 @@ import {
 import { normalizeThaiPhone } from "./customer/phone.js";
 import { ingredientAvailable, isMenuSellable, STOCK_OPS } from "./types.js";
 import {
+  PREDICTION_BASELINE_VERSION,
+  PREDICTION_DEFAULT_THRESHOLD_MINUTES,
+  PREDICTION_DEFAULT_TIMEOUT_MS,
+  PREDICTION_NON_GUARANTEE,
+  PREDICTION_RANGE_PLUS_MINUTES,
   QUEUE_DEFAULT_CAPACITY_PER_SLOT,
   QUEUE_SLOT_MINUTES,
+  type CapacityStationSummary,
   type CustomerMergeRecord,
+  type PredictionSource,
+  type WaitStationBreakdown,
   type GuestLinkClaim,
   type LoyaltyReversal,
   type LoyaltySource,
@@ -261,6 +275,26 @@ import {
   walkinIssuedEvent,
   walkinRedeemedEvent,
 } from "./loyalty/audit-events.js";
+import {
+  bangkokHourParts,
+  computeStationWaitMin,
+  evaluateAccuracySamples,
+  evaluateFixtureAccuracy,
+  normalizeActualMinutes,
+  normalizeModelVersion,
+  normalizePredictionPartySize,
+  normalizePredictionScheduledAt,
+  normalizePredictionThreshold,
+  normalizePredictionTimeoutMs,
+  predictionSlotKey,
+  waitRangeOf,
+} from "./predict/validation.js";
+import {
+  predictionCompletedEvent,
+  predictionEvaluatedEvent,
+  predictionModelUpdatedEvent,
+  predictionRequestedEvent,
+} from "./predict/audit-events.js";
 import {
   financeEntryCreatedEvent,
   financeEntryDeletedEvent,
@@ -434,7 +468,7 @@ export interface Store {
   deleteSessionsForUser(userId: string): Promise<void>;
   audit(input: AuditInput): Promise<void>;
   listAudit(
-    prefix: "login_" | "account_" | "shop_" | "customer_" | "menu_" | "order_" | "reservation_" | "round_" | "inventory_" | "payment_" | "queue_" | "loyalty_" | "finance_" | "notification_" | "all",
+    prefix: "login_" | "account_" | "shop_" | "customer_" | "menu_" | "order_" | "reservation_" | "round_" | "inventory_" | "payment_" | "queue_" | "loyalty_" | "finance_" | "notification_" | "prediction_" | "all",
     limit: number,
   ): Promise<AuditEntry[]>;
   // ---- Ticket 02: สถานะร้านและโต๊ะ (อ่านเดี่ยว + mutation แบบ atomic พร้อม audit) ----
@@ -1035,7 +1069,67 @@ export interface Store {
    * — scheduler เตือน 30 นาทีกวาดผ่าน seam นี้
    */
   listUpcomingReservations(fromIso: string, toIso: string, limit: number): Promise<ReservationDetail[]>;
+  // ---- Ticket 13: Capacity + wait-time prediction (local-first, baseline deterministic) ----
+  /**
+   * ภาพรวมกำลังผลิต: กำลังผลิตต่อฝ่าย + งาน active + โต๊ะว่าง + เวลารอ baseline
+   * (partySize ใช้ 2 คนสำหรับภาพรวม — ไม่ผูกคำสั่งซื้อใด)
+   */
+  getCapacityOverview(now?: Date): Promise<CapacityOverview>;
+  /**
+   * เวลารอ baseline ของคำสั่งซื้อ (deterministic):
+   * ต่อฝ่าย wait = prep × (1 + queueAhead) + partyAdj; ระดับออเดอร์ = งานช้าที่สุด
+   * + readyAtSlowest + ช่วง [wait, wait+5]
+   */
+  estimateOrderWaitBaseline(orderId: string, partySize: number, now?: Date): Promise<WaitEstimate>;
+  /**
+   * ตรวจสล็อตล่วงหน้า (preorder/reservation slot validation):
+   * เทียบยอดจองสล็อตกับกำลังผลิต — เต็มเสนอช่วงถัดไป (reuse suggestNextSlot)
+   */
+  checkPreorderSlot(station: QueueStation, scheduledAt: string, partySize: number, now?: Date): Promise<PreorderSlotCheck>;
+  /** รุ่นโมเดลปัจจุบัน (singleton — default baseline-v1) */
+  getPredictionModel(): Promise<PredictionModel>;
+  /**
+   * ตั้งค่ารุ่นโมเดล (Owner/Admin — route ตรวจสิทธิ์) + audit ก่อน/หลัง
+   * (เปิด external ได้เฉพาะเมื่อ accuracy ผ่านเกณฑ์ — route ตรวจผ่าน getPredictionAccuracy)
+   */
+  setPredictionModel(
+    patch: { version?: string; kind?: "baseline" | "external"; enabled?: boolean; thresholdMinutes?: number; timeoutMs?: number },
+    actor: ShopActor,
+    now?: Date,
+  ): Promise<PredictionModel>;
+  /**
+   * บันทึก feature ณ จุดพยากรณ์ (no leakage — ไม่มีอนาคต ไม่มี PII) + audit requested
+   * predictedMin null = baseline ล้วน; source/modelVersion มาจาก adapter fallback เสมอ
+   */
+  recordPredictionFeature(
+    input: { orderId?: string | null; station?: QueueStation | null; partySize: number; baselineMin: number; predictedMin?: number | null; source: PredictionSource; modelVersion?: string | null },
+    actor: ShopActor,
+    now?: Date,
+  ): Promise<PredictionFeature>;
+  /** รายการ features ล่าสุด (ใหม่สุดก่อน — Owner/Admin ดู/ตรวจ no-leakage) */
+  listPredictionFeatures(limit: number): Promise<PredictionFeature[]>;
+  /**
+   * บันทึกเวลาจริงเมื่อส่งมอบครบ (actual) + คำนวณ error baseline/model + audit completed
+   * (เรียกซ้ำ id เดิมเป็น no-op — กัน double-complete)
+   */
+  completePredictionFeature(id: string, actualMin: number, actor: ShopActor, now?: Date): Promise<{ feature: PredictionFeature; deduplicated: boolean }>;
+  /** เทียบ MAE baseline vs model บนตัวอย่างที่วัดจริงแล้ว + fixtures (AT18) */
+  getPredictionAccuracy(now?: Date): Promise<PredictionAccuracy>;
+  /**
+   * ประเมินและบันทึก audit evaluated (Owner/Admin — route ตรวจสิทธิ์):
+   * คืนค่าเดียวกับ getPredictionAccuracy
+   */
+  evaluatePredictions(actor: ShopActor, now?: Date): Promise<PredictionAccuracy>;
   close?(): Promise<void>;
+}
+
+// ---- Ticket 13: input การตั้งค่าโมเดล ----
+export interface SetPredictionModelInput {
+  version?: string;
+  kind?: "baseline" | "external";
+  enabled?: boolean;
+  thresholdMinutes?: number;
+  timeoutMs?: number;
 }
 
 // ---- Ticket 12: input/ตัวกรอง outbox ----
@@ -1571,6 +1665,21 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
   const notificationsByEventKey = new Map<string, string>();
   /** opt-out รับแจ้งเตือน (ไม่มีแถว = เปิด) */
   const notificationConsents = new Map<string, boolean>();
+  // ---- Ticket 13 memory state: โมเดลพยากรณ์ + features (tests เท่านั้น) ----
+  let predictionModel: PredictionModel = {
+    version: PREDICTION_BASELINE_VERSION,
+    kind: "baseline",
+    enabled: true,
+    thresholdMinutes: PREDICTION_DEFAULT_THRESHOLD_MINUTES,
+    timeoutMs: PREDICTION_DEFAULT_TIMEOUT_MS,
+    samples: 0,
+    maeBaseline: null,
+    maeModel: null,
+    trainedAt: null,
+    updatedBy: null,
+    updatedAt: nowIso(),
+  };
+  const predictionFeatures = new Map<string, PredictionFeature>();
 
   function cloneSchedule(s: WeeklySchedule): WeeklySchedule {
     return normalizeWeeklySchedule(JSON.parse(JSON.stringify(s)) as unknown);
@@ -2045,6 +2154,30 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
       if (slotStartOf(new Date(j.readyAt)).getTime() === slotStart.getTime()) n += 1;
     }
     return n;
+  }
+
+  // ---- Ticket 13 memory helpers: งาน active สำหรับพยากรณ์ + occupancy โต๊ะ ----
+
+  /** งานที่กินกำลังผลิตจริง: queued/claimed/preparing ที่ readyAt ถึงแล้ว (ไม่นับ ready/delivered/cancelled) */
+  function activePredictionJobs(now: Date): QueueJob[] {
+    const t = now.getTime();
+    return [...queueJobs.values()].filter(
+      (j) =>
+        (j.status === "queued" || j.status === "claimed" || j.status === "preparing") &&
+        new Date(j.readyAt).getTime() <= t,
+    );
+  }
+
+  function memoryTableOccupancy(): { enabledTables: number; freeTables: number; occupiedTables: number; customerCount: number } {
+    const enabledTables = [...tables.values()].filter((x) => x.isEnabled);
+    const openRounds = [...tableRounds.values()].filter((r) => r.status === "open");
+    const occupied = new Set(openRounds.map((r) => r.tableId)).size;
+    return {
+      enabledTables: enabledTables.length,
+      freeTables: enabledTables.length - occupied,
+      occupiedTables: occupied,
+      customerCount: openRounds.reduce((s, r) => s + r.partySize, 0),
+    };
   }
 
   /**
@@ -6316,6 +6449,283 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
         .slice(0, capped)
         .map(toReservationDetail);
     },
+    // ---- Ticket 13 memory: capacity + wait prediction (baseline deterministic) ----
+    async getCapacityOverview(now = new Date()) {
+      const at = now.toISOString();
+      const active = activePredictionJobs(now);
+      const stations: CapacityStationSummary[] = (["kitchen", "drink"] as QueueStation[]).map((st) => {
+        const jobs = active.filter((j) => j.station === st);
+        const queueAhead = jobs.length;
+        const unitsAhead = jobs.reduce((s, j) => s + Math.max(0, j.quantity - j.readyQty), 0);
+        const estimatedWaitMin = computeStationWaitMin(st, queueAhead, 2);
+        const { rangeMin, rangeMax } = waitRangeOf(estimatedWaitMin);
+        return {
+          station: st,
+          perSlot: capacityOf(st).perSlot,
+          activeJobs: queueAhead,
+          unitsAhead,
+          estimatedWaitMin,
+          rangeMin,
+          rangeMax,
+          source: "baseline" as PredictionSource,
+        };
+      });
+      const occ = memoryTableOccupancy();
+      return {
+        at,
+        stations,
+        enabledTables: occ.enabledTables,
+        freeTables: occ.freeTables,
+        occupiedTables: occ.occupiedTables,
+        customerCount: occ.customerCount,
+      };
+    },
+    async estimateOrderWaitBaseline(orderId, partySize, now = new Date()) {
+      const id = orderId.trim();
+      if (!id) throw new Error("กรุณาระบุคำสั่งซื้อ");
+      const order = orders.get(id);
+      if (!order) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+      const party = normalizePredictionPartySize(partySize);
+      const orderJobs = (queueByOrder.get(id) ?? [])
+        .map((jid) => queueJobs.get(jid)!)
+        .filter((j) => j && j.status !== "cancelled");
+      const active = activePredictionJobs(now);
+      const byStation = new Map<QueueStation, { jobs: number; queueAhead: number; unitsAhead: number }>();
+      for (const st of ["kitchen", "drink"] as QueueStation[]) {
+        const mine = orderJobs.filter((j) => j.station === st).length;
+        if (mine === 0) continue;
+        const ahead = active.filter((j) => j.station === st);
+        byStation.set(st, {
+          jobs: mine,
+          queueAhead: ahead.length,
+          unitsAhead: ahead.reduce((s, j) => s + Math.max(0, j.quantity - j.readyQty), 0),
+        });
+      }
+      const perStation: WaitStationBreakdown[] = [...byStation.entries()].map(([station, v]) => ({
+        station,
+        jobs: v.jobs,
+        queueAhead: v.queueAhead,
+        unitsAhead: v.unitsAhead,
+        estimatedWaitMin: computeStationWaitMin(station, v.queueAhead, party),
+      }));
+      const estimatedWaitMin = perStation.length === 0 ? 0 : Math.max(...perStation.map((p) => p.estimatedWaitMin));
+      const { rangeMin, rangeMax } = waitRangeOf(estimatedWaitMin);
+      const readyAtSlowest =
+        orderJobs.length === 0
+          ? null
+          : orderJobs
+              .map((j) => j.readyAt)
+              .sort((a, b) => (a < b ? 1 : -1))[0]!;
+      return {
+        orderId: id,
+        station: null,
+        partySize: party,
+        perStation,
+        estimatedWaitMin,
+        rangeMin,
+        rangeMax,
+        readyAtSlowest,
+        source: "baseline",
+        modelVersion: PREDICTION_BASELINE_VERSION,
+        predictedAt: now.toISOString(),
+        timeoutMs: predictionModel.timeoutMs,
+        nonGuarantee: PREDICTION_NON_GUARANTEE,
+      };
+    },
+    async checkPreorderSlot(station, scheduledAt, partySize, now = new Date()) {
+      const st = normalizeStation(station);
+      const at = normalizePredictionScheduledAt(scheduledAt, now);
+      const party = normalizePredictionPartySize(partySize);
+      const slotStart = slotStartOf(new Date(at));
+      const slotEnd = new Date(slotStart.getTime() + QUEUE_SLOT_MINUTES * 60 * 1000);
+      const used = countJobsInSlot(st, slotStart);
+      const capacity = capacityOf(st).perSlot;
+      const available = used < capacity;
+      const estimatedWaitMin = computeStationWaitMin(st, used, party);
+      const { rangeMin, rangeMax } = waitRangeOf(estimatedWaitMin);
+      const suggestedSlot = available ? null : await memoryStore.suggestNextSlot(st, at, now);
+      return {
+        station: st,
+        scheduledAt: at,
+        slotStart: slotStart.toISOString(),
+        slotEnd: slotEnd.toISOString(),
+        used,
+        capacity,
+        available,
+        estimatedWaitMin,
+        rangeMin,
+        rangeMax,
+        suggestedSlot,
+      };
+    },
+    async getPredictionModel() {
+      return { ...predictionModel };
+    },
+    async setPredictionModel(patch, actor, now = new Date()) {
+      const auditsLen = audits.length;
+      const auditsSeq = auditSeq;
+      const backup = { ...predictionModel };
+      try {
+        const before = { ...predictionModel };
+        const next: PredictionModel = { ...predictionModel };
+        if (patch.version !== undefined) next.version = normalizeModelVersion(patch.version);
+        if (patch.kind !== undefined) {
+          if (patch.kind !== "baseline" && patch.kind !== "external") throw new Error("ชนิดโมเดลไม่ถูกต้อง");
+          next.kind = patch.kind;
+        }
+        if (patch.enabled !== undefined) next.enabled = patch.enabled !== false;
+        if (patch.thresholdMinutes !== undefined) next.thresholdMinutes = normalizePredictionThreshold(patch.thresholdMinutes);
+        if (patch.timeoutMs !== undefined) next.timeoutMs = normalizePredictionTimeoutMs(patch.timeoutMs);
+        next.updatedBy = actor.actorUsername ?? actor.actorId ?? null;
+        next.updatedAt = now.toISOString();
+        predictionModel = next;
+        await writeAudit(predictionModelUpdatedEvent(before, next, actor));
+        return { ...next };
+      } catch (err) {
+        predictionModel = backup;
+        audits.length = auditsLen;
+        auditSeq = auditsSeq;
+        throw err;
+      }
+    },
+    async recordPredictionFeature(input, actor, now = new Date()) {
+      const auditsLen = audits.length;
+      const auditsSeq = auditSeq;
+      const backup = new Map(predictionFeatures);
+      try {
+        const party = normalizePredictionPartySize(input.partySize);
+        const orderId = input.orderId ? String(input.orderId) : null;
+        let station: QueueStation | null = null;
+        if (input.station) station = normalizeStation(input.station);
+        const orderJobs =
+          orderId !== null
+            ? ((queueByOrder.get(orderId) ?? []).map((jid) => queueJobs.get(jid)!).filter((j) => j && j.status !== "cancelled"))
+            : [];
+        if (!station && orderJobs.length > 0) {
+          // ฝ่ายช้าที่สุดตัดสิน (สอดคล้อง estimateOrderWaitBaseline)
+          let slowest: QueueStation | null = null;
+          let slowestWait = -1;
+          for (const st of ["kitchen", "drink"] as QueueStation[]) {
+            if (!orderJobs.some((j) => j.station === st)) continue;
+            const ahead = activePredictionJobs(now).filter((j) => j.station === st).length;
+            const w = computeStationWaitMin(st, ahead, party);
+            if (w > slowestWait) {
+              slowestWait = w;
+              slowest = st;
+            }
+          }
+          station = slowest;
+        }
+        const active = station ? activePredictionJobs(now).filter((j) => j.station === station) : [];
+        const parts = bangkokHourParts(now);
+        const source: PredictionSource = input.source === "model" ? "model" : "baseline";
+        const predictedMin =
+          source === "model" && typeof input.predictedMin === "number" ? Math.max(0, Math.round(input.predictedMin)) : null;
+        const feature: PredictionFeature = {
+          id: randomUUID(),
+          orderId,
+          station,
+          partySize: party,
+          queueAhead: active.length,
+          unitsAhead: active.reduce((s, j) => s + Math.max(0, j.quantity - j.readyQty), 0),
+          hourOfDay: parts.hourOfDay,
+          dayOfWeek: parts.dayOfWeek,
+          isRemake: orderJobs.some((j) => j.isRemake),
+          isPriority: orderJobs.some((j) => j.isPriority),
+          slotKey: station ? predictionSlotKey(station, now) : null,
+          baselineMin: Math.max(0, Math.round(input.baselineMin)),
+          predictedMin,
+          modelVersion: input.modelVersion ? String(input.modelVersion) : PREDICTION_BASELINE_VERSION,
+          source,
+          actualMin: null,
+          errorBaseline: null,
+          errorModel: null,
+          createdAt: now.toISOString(),
+          completedAt: null,
+        };
+        predictionFeatures.set(feature.id, { ...feature });
+        await writeAudit(predictionRequestedEvent(feature, actor));
+        return { ...feature };
+      } catch (err) {
+        predictionFeatures.clear();
+        for (const [k, v] of backup) predictionFeatures.set(k, v);
+        audits.length = auditsLen;
+        auditSeq = auditsSeq;
+        throw err;
+      }
+    },
+    async listPredictionFeatures(limit) {
+      const capped = Math.min(Math.max(limit || 50, 1), 200);
+      return [...predictionFeatures.values()]
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+        .slice(0, capped)
+        .map((f) => ({ ...f }));
+    },
+    async completePredictionFeature(id, actualMin, actor, now = new Date()) {
+      const auditsLen = audits.length;
+      const auditsSeq = auditSeq;
+      const backup = new Map(predictionFeatures);
+      try {
+        const key = String(id).trim();
+        const current = predictionFeatures.get(key);
+        if (!current) throw new NotFoundError("ไม่พบข้อมูลพยากรณ์");
+        if (current.completedAt !== null) return { feature: { ...current }, deduplicated: true };
+        const actual = normalizeActualMinutes(actualMin);
+        const next: PredictionFeature = {
+          ...current,
+          actualMin: actual,
+          errorBaseline: Math.round((actual - current.baselineMin) * 100) / 100,
+          errorModel:
+            current.source === "model" && current.predictedMin !== null
+              ? Math.round((actual - current.predictedMin) * 100) / 100
+              : null,
+          completedAt: now.toISOString(),
+        };
+        predictionFeatures.set(key, { ...next });
+        await writeAudit(predictionCompletedEvent(next, actor));
+        return { feature: { ...next }, deduplicated: false };
+      } catch (err) {
+        predictionFeatures.clear();
+        for (const [k, v] of backup) predictionFeatures.set(k, v);
+        audits.length = auditsLen;
+        auditSeq = auditsSeq;
+        throw err;
+      }
+    },
+    async getPredictionAccuracy(now = new Date()) {
+      const done = [...predictionFeatures.values()].filter((f) => f.actualMin !== null);
+      const r = evaluateAccuracySamples(
+        done.map((f) => ({
+          baselineMin: f.baselineMin,
+          predictedMin: f.predictedMin,
+          source: f.source,
+          actualMin: f.actualMin!,
+        })),
+        predictionModel.thresholdMinutes,
+      );
+      return {
+        samples: r.samples,
+        maeBaseline: r.maeBaseline,
+        maeModel: r.maeModel,
+        meetsThreshold: r.meetsThreshold,
+        thresholdMinutes: predictionModel.thresholdMinutes,
+        gatheringSamples: r.samples < 500,
+        fixtures: evaluateFixtureAccuracy(predictionModel.thresholdMinutes),
+        evaluatedAt: now.toISOString(),
+      };
+    },
+    async evaluatePredictions(actor, now = new Date()) {
+      const accuracy = await memoryStore.getPredictionAccuracy(now);
+      predictionModel = {
+        ...predictionModel,
+        samples: accuracy.samples,
+        maeBaseline: accuracy.maeBaseline,
+        maeModel: accuracy.maeModel,
+        updatedAt: now.toISOString(),
+      };
+      await writeAudit(predictionEvaluatedEvent(accuracy.samples, accuracy.maeBaseline, accuracy.maeModel, actor));
+      return accuracy;
+    },
   };
 
   return memoryStore;
@@ -6336,6 +6746,7 @@ const MIGRATION_FILES = [
   "011_loyalty_rewards.sql",
   "012_finance_entries.sql",
   "013_line_notifications.sql",
+  "014_capacity_wait_predictions.sql",
 ];
 
 export function findMigrationFile(name = MIGRATION_FILES[0]!): string {
@@ -6704,6 +7115,57 @@ function rowToNotification(r: Record<string, unknown>): Notification {
     sentAt: r["sent_at"] == null ? null : new Date(r["sent_at"] as string).toISOString(),
     createdAt: new Date(r["created_at"] as string).toISOString(),
     updatedAt: new Date(r["updated_at"] as string).toISOString(),
+  };
+}
+
+// ---- Ticket 13: converter แถว prediction_models/prediction_features ----
+
+function rowToPredictionModel(r: Record<string, unknown>): PredictionModel {
+  const kind = String(r["kind"] ?? "baseline");
+  return {
+    version: String(r["version"] ?? PREDICTION_BASELINE_VERSION),
+    kind: kind === "external" ? "external" : "baseline",
+    enabled: Number(r["enabled"] ?? 1) === 1,
+    thresholdMinutes: Number(r["threshold_minutes"] ?? PREDICTION_DEFAULT_THRESHOLD_MINUTES),
+    timeoutMs: Number(r["timeout_ms"] ?? PREDICTION_DEFAULT_TIMEOUT_MS),
+    samples: 0,
+    maeBaseline: null,
+    maeModel: null,
+    trainedAt: r["trained_at"] == null ? null : new Date(r["trained_at"] as string).toISOString(),
+    updatedBy: r["updated_by"] == null ? null : String(r["updated_by"]),
+    updatedAt: new Date(r["updated_at"] as string).toISOString(),
+  };
+}
+
+function rowToPredictionFeature(r: Record<string, unknown>): PredictionFeature {
+  const station = r["station"] == null ? null : String(r["station"]);
+  const source = String(r["source"] ?? "baseline");
+  const actual = r["actual_min"] == null ? null : Number(r["actual_min"]);
+  const predicted = r["predicted_min"] == null ? null : Number(r["predicted_min"]);
+  return {
+    id: String(r["id"]),
+    orderId: r["order_id"] == null ? null : String(r["order_id"]),
+    station: station === "kitchen" || station === "drink" ? station : null,
+    partySize: Number(r["party_size"]),
+    queueAhead: Number(r["queue_ahead"]),
+    unitsAhead: Number(r["units_ahead"]),
+    hourOfDay: Number(r["hour_of_day"]),
+    dayOfWeek: Number(r["day_of_week"]),
+    isRemake: Number(r["is_remake"] ?? 0) === 1,
+    isPriority: Number(r["is_priority"] ?? 0) === 1,
+    slotKey: r["slot_key"] == null ? null : String(r["slot_key"]),
+    baselineMin: Number(r["baseline_min"]),
+    predictedMin: predicted,
+    modelVersion: String(r["model_version"]),
+    source: source === "model" ? "model" : "baseline",
+    actualMin: actual,
+    errorBaseline: actual === null ? null : Math.round((actual - Number(r["baseline_min"])) * 100) / 100,
+    errorModel:
+      actual === null || source !== "model" || predicted === null
+        ? null
+        : Math.round((actual - predicted) * 100) / 100,
+    createdAt: new Date(r["created_at"] as string).toISOString(),
+    completedAt: r["completed_at"] == null ? null : new Date(r["completed_at"] as string).toISOString(),
   };
 }
 
@@ -12138,6 +12600,379 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
       return (rows as Record<string, unknown>[]).map((row) => {
         const r = rowToReservation(row);
         return { ...r, tableName: row["table_name"] ? String(row["table_name"]) : "-" };
+      });
+    },
+    // ---- Ticket 13 MySQL: capacity + wait prediction (baseline deterministic) ----
+    async getCapacityOverview(now: Date = new Date()) {
+      const at = now.toISOString();
+      const [capRows] = (await pool.query("SELECT station, per_slot FROM station_capacity")) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      const capOf = (st: QueueStation): number => {
+        const row = (capRows as Record<string, unknown>[]).find((r) => String(r["station"]) === st);
+        return row ? Number(row["per_slot"]) : QUEUE_DEFAULT_CAPACITY_PER_SLOT;
+      };
+      const [jobRows] = (await pool.query(
+        "SELECT station, COUNT(*) AS c, COALESCE(SUM(quantity - ready_qty), 0) AS u FROM queue_jobs WHERE status IN ('queued','claimed','preparing') AND ready_at <= ? GROUP BY station",
+        [toMysqlDatetime(at)],
+      )) as [Record<string, unknown>[], unknown];
+      const loadOf = (st: QueueStation): { queueAhead: number; unitsAhead: number } => {
+        const row = (jobRows as Record<string, unknown>[]).find((r) => String(r["station"]) === st);
+        return {
+          queueAhead: row ? Number(row["c"]) : 0,
+          unitsAhead: row ? Math.max(0, Number(row["u"])) : 0,
+        };
+      };
+      const stations: CapacityStationSummary[] = (["kitchen", "drink"] as QueueStation[]).map((st) => {
+        const load = loadOf(st);
+        const estimatedWaitMin = computeStationWaitMin(st, load.queueAhead, 2);
+        const { rangeMin, rangeMax } = waitRangeOf(estimatedWaitMin);
+        return {
+          station: st,
+          perSlot: capOf(st),
+          activeJobs: load.queueAhead,
+          unitsAhead: load.unitsAhead,
+          estimatedWaitMin,
+          rangeMin,
+          rangeMax,
+          source: "baseline" as PredictionSource,
+        };
+      });
+      const [tRows] = (await pool.query("SELECT id, is_enabled FROM shop_tables")) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      const enabled = (tRows as Record<string, unknown>[]).filter((r) => Number(r["is_enabled"]) === 1);
+      const [roundRows] = (await pool.query(
+        "SELECT table_id, party_size FROM table_rounds WHERE status = 'open'",
+      )) as [Record<string, unknown>[], unknown];
+      const openRounds = roundRows as Record<string, unknown>[];
+      const occupied = new Set(openRounds.map((r) => String(r["table_id"]))).size;
+      return {
+        at,
+        stations,
+        enabledTables: enabled.length,
+        freeTables: enabled.length - occupied,
+        occupiedTables: occupied,
+        customerCount: openRounds.reduce((s, r) => s + Number(r["party_size"] ?? 0), 0),
+      };
+    },
+    async estimateOrderWaitBaseline(orderId: string, partySize: number, now: Date = new Date()) {
+      const id = orderId.trim();
+      if (!id) throw new Error("กรุณาระบุคำสั่งซื้อ");
+      const party = normalizePredictionPartySize(partySize);
+      const [oRows] = (await pool.query("SELECT id FROM orders WHERE id = ? LIMIT 1", [id])) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      if (oRows.length === 0) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+      const [jRows] = (await pool.query(
+        "SELECT station, ready_at, is_remake, is_priority, quantity, ready_qty FROM queue_jobs WHERE order_id = ? AND status != 'cancelled'",
+        [id],
+      )) as [Record<string, unknown>[], unknown];
+      const [aRows] = (await pool.query(
+        "SELECT station, COUNT(*) AS c, COALESCE(SUM(quantity - ready_qty), 0) AS u FROM queue_jobs WHERE status IN ('queued','claimed','preparing') AND ready_at <= ? GROUP BY station",
+        [toMysqlDatetime(now.toISOString())],
+      )) as [Record<string, unknown>[], unknown];
+      const loadOf = (st: QueueStation): { queueAhead: number; unitsAhead: number } => {
+        const row = (aRows as Record<string, unknown>[]).find((r) => String(r["station"]) === st);
+        return {
+          queueAhead: row ? Number(row["c"]) : 0,
+          unitsAhead: row ? Math.max(0, Number(row["u"])) : 0,
+        };
+      };
+      const perStation: WaitStationBreakdown[] = [];
+      let readyAtSlowest: string | null = null;
+      for (const st of ["kitchen", "drink"] as QueueStation[]) {
+        const mine = (jRows as Record<string, unknown>[]).filter((r) => String(r["station"]) === st);
+        if (mine.length === 0) continue;
+        const load = loadOf(st);
+        perStation.push({
+          station: st,
+          jobs: mine.length,
+          queueAhead: load.queueAhead,
+          unitsAhead: load.unitsAhead,
+          estimatedWaitMin: computeStationWaitMin(st, load.queueAhead, party),
+        });
+        for (const r of mine) {
+          const iso = new Date(r["ready_at"] as string).toISOString();
+          if (readyAtSlowest === null || iso > readyAtSlowest) readyAtSlowest = iso;
+        }
+      }
+      const [mRows] = (await pool.query("SELECT timeout_ms FROM prediction_models WHERE id = 'default' LIMIT 1")) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      const estimatedWaitMin = perStation.length === 0 ? 0 : Math.max(...perStation.map((p) => p.estimatedWaitMin));
+      const { rangeMin, rangeMax } = waitRangeOf(estimatedWaitMin);
+      return {
+        orderId: id,
+        station: null,
+        partySize: party,
+        perStation,
+        estimatedWaitMin,
+        rangeMin,
+        rangeMax,
+        readyAtSlowest,
+        source: "baseline" as PredictionSource,
+        modelVersion: PREDICTION_BASELINE_VERSION,
+        predictedAt: now.toISOString(),
+        timeoutMs: mRows.length === 0 ? PREDICTION_DEFAULT_TIMEOUT_MS : Number(mRows[0]!["timeout_ms"]),
+        nonGuarantee: PREDICTION_NON_GUARANTEE,
+      };
+    },
+    async checkPreorderSlot(station: QueueStation, scheduledAt: string, partySize: number, now: Date = new Date()) {
+      const st = normalizeStation(station);
+      const at = normalizePredictionScheduledAt(scheduledAt, now);
+      const party = normalizePredictionPartySize(partySize);
+      const slotStart = slotStartOf(new Date(at));
+      const slotEnd = new Date(slotStart.getTime() + QUEUE_SLOT_MINUTES * 60 * 1000);
+      const used = await countJobsInSlotTx(pool, st, slotStart);
+      const capacity = await readCapacityTx(pool, st);
+      const available = used < capacity;
+      const estimatedWaitMin = computeStationWaitMin(st, used, party);
+      const { rangeMin, rangeMax } = waitRangeOf(estimatedWaitMin);
+      let suggestedSlot = null;
+      if (!available) {
+        suggestedSlot = await mysqlStore.suggestNextSlot(st, at, now);
+      }
+      return {
+        station: st,
+        scheduledAt: at,
+        slotStart: slotStart.toISOString(),
+        slotEnd: slotEnd.toISOString(),
+        used,
+        capacity,
+        available,
+        estimatedWaitMin,
+        rangeMin,
+        rangeMax,
+        suggestedSlot,
+      };
+    },
+    async getPredictionModel() {
+      const [rows] = (await pool.query("SELECT * FROM prediction_models WHERE id = 'default' LIMIT 1")) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      if (rows.length === 0) {
+        return {
+          version: PREDICTION_BASELINE_VERSION,
+          kind: "baseline" as const,
+          enabled: true,
+          thresholdMinutes: PREDICTION_DEFAULT_THRESHOLD_MINUTES,
+          timeoutMs: PREDICTION_DEFAULT_TIMEOUT_MS,
+          samples: 0,
+          maeBaseline: null,
+          maeModel: null,
+          trainedAt: null,
+          updatedBy: null,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+      const m = rowToPredictionModel(rows[0]!);
+      const [fRows] = (await pool.query(
+        "SELECT baseline_min, predicted_min, source, actual_min FROM prediction_features WHERE actual_min IS NOT NULL",
+      )) as [Record<string, unknown>[], unknown];
+      const r = evaluateAccuracySamples(
+        (fRows as Record<string, unknown>[]).map((x) => ({
+          baselineMin: Number(x["baseline_min"]),
+          predictedMin: x["predicted_min"] == null ? null : Number(x["predicted_min"]),
+          source: String(x["source"]) === "model" ? ("model" as const) : ("baseline" as const),
+          actualMin: Number(x["actual_min"]),
+        })),
+        m.thresholdMinutes,
+      );
+      return { ...m, samples: r.samples, maeBaseline: r.maeBaseline, maeModel: r.maeModel };
+    },
+    async setPredictionModel(patch, actor: ShopActor, now: Date = new Date()) {
+      return withShopTx(async (conn) => {
+        const [rows] = (await conn.query("SELECT * FROM prediction_models WHERE id = 'default' LIMIT 1")) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const before =
+          rows.length === 0
+            ? {
+                version: PREDICTION_BASELINE_VERSION,
+                kind: "baseline" as const,
+                enabled: true,
+                thresholdMinutes: PREDICTION_DEFAULT_THRESHOLD_MINUTES,
+                timeoutMs: PREDICTION_DEFAULT_TIMEOUT_MS,
+                samples: 0,
+                maeBaseline: null,
+                maeModel: null,
+                trainedAt: null,
+                updatedBy: null,
+                updatedAt: now.toISOString(),
+              }
+            : { ...rowToPredictionModel(rows[0]!), samples: 0, maeBaseline: null, maeModel: null };
+        const next: PredictionModel = { ...before };
+        if (patch.version !== undefined) next.version = normalizeModelVersion(patch.version);
+        if (patch.kind !== undefined) {
+          if (patch.kind !== "baseline" && patch.kind !== "external") throw new Error("ชนิดโมเดลไม่ถูกต้อง");
+          next.kind = patch.kind;
+        }
+        if (patch.enabled !== undefined) next.enabled = patch.enabled !== false;
+        if (patch.thresholdMinutes !== undefined) next.thresholdMinutes = normalizePredictionThreshold(patch.thresholdMinutes);
+        if (patch.timeoutMs !== undefined) next.timeoutMs = normalizePredictionTimeoutMs(patch.timeoutMs);
+        next.updatedBy = actor.actorUsername ?? actor.actorId ?? null;
+        next.updatedAt = now.toISOString();
+        await conn.query(
+          "INSERT INTO prediction_models (id, version, kind, enabled, threshold_minutes, timeout_ms, updated_by) VALUES ('default', ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE version = VALUES(version), kind = VALUES(kind), enabled = VALUES(enabled), threshold_minutes = VALUES(threshold_minutes), timeout_ms = VALUES(timeout_ms), updated_by = VALUES(updated_by)",
+          [next.version, next.kind, next.enabled ? 1 : 0, next.thresholdMinutes, next.timeoutMs, next.updatedBy],
+        );
+        await insertAuditRow(conn, predictionModelUpdatedEvent(before, next, actor));
+        return { ...next };
+      });
+    },
+    async recordPredictionFeature(input, actor, now: Date = new Date()) {
+      return withShopTx(async (conn) => {
+        const party = normalizePredictionPartySize(input.partySize);
+        const orderId = input.orderId ? String(input.orderId) : null;
+        let station: QueueStation | null = null;
+        if (input.station) station = normalizeStation(input.station);
+        let orderJobs: { station: string; isRemake: number; isPriority: number }[] = [];
+        if (orderId !== null) {
+          const [jRows] = (await conn.query(
+            "SELECT station, is_remake, is_priority FROM queue_jobs WHERE order_id = ? AND status != 'cancelled'",
+            [orderId],
+          )) as [Record<string, unknown>[], unknown];
+          orderJobs = (jRows as Record<string, unknown>[]).map((r) => ({
+            station: String(r["station"]),
+            isRemake: Number(r["is_remake"] ?? 0),
+            isPriority: Number(r["is_priority"] ?? 0),
+          }));
+        }
+        if (!station && orderJobs.length > 0) {
+          let slowest: QueueStation | null = null;
+          let slowestWait = -1;
+          for (const st of ["kitchen", "drink"] as QueueStation[]) {
+            if (!orderJobs.some((j) => j.station === st)) continue;
+            const [cRows] = (await conn.query(
+              "SELECT COUNT(*) AS c FROM queue_jobs WHERE station = ? AND status IN ('queued','claimed','preparing') AND ready_at <= ?",
+              [st, toMysqlDatetime(now.toISOString())],
+            )) as [Record<string, unknown>[], unknown];
+            const ahead = Number((cRows as Record<string, unknown>[])[0]?.["c"] ?? 0);
+            const w = computeStationWaitMin(st, ahead, party);
+            if (w > slowestWait) {
+              slowestWait = w;
+              slowest = st;
+            }
+          }
+          station = slowest;
+        }
+        let queueAhead = 0;
+        let unitsAhead = 0;
+        if (station) {
+          const [cRows] = (await conn.query(
+            "SELECT COUNT(*) AS c, COALESCE(SUM(quantity - ready_qty), 0) AS u FROM queue_jobs WHERE station = ? AND status IN ('queued','claimed','preparing') AND ready_at <= ?",
+            [station, toMysqlDatetime(now.toISOString())],
+          )) as [Record<string, unknown>[], unknown];
+          queueAhead = Number((cRows as Record<string, unknown>[])[0]?.["c"] ?? 0);
+          unitsAhead = Math.max(0, Number((cRows as Record<string, unknown>[])[0]?.["u"] ?? 0));
+        }
+        const parts = bangkokHourParts(now);
+        const source: PredictionSource = input.source === "model" ? "model" : "baseline";
+        const predictedMin =
+          source === "model" && typeof input.predictedMin === "number" ? Math.max(0, Math.round(input.predictedMin)) : null;
+        const id = randomUUID();
+        await conn.query(
+          "INSERT INTO prediction_features (id, order_id, station, party_size, queue_ahead, units_ahead, hour_of_day, day_of_week, is_remake, is_priority, slot_key, baseline_min, predicted_min, model_version, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          [
+            id,
+            orderId,
+            station,
+            party,
+            queueAhead,
+            unitsAhead,
+            parts.hourOfDay,
+            parts.dayOfWeek,
+            orderJobs.some((j) => j.isRemake === 1) ? 1 : 0,
+            orderJobs.some((j) => j.isPriority === 1) ? 1 : 0,
+            station ? predictionSlotKey(station, now) : null,
+            Math.max(0, Math.round(input.baselineMin)),
+            predictedMin,
+            input.modelVersion ? String(input.modelVersion) : PREDICTION_BASELINE_VERSION,
+            source,
+          ],
+        );
+        const [rows] = (await conn.query("SELECT * FROM prediction_features WHERE id = ? LIMIT 1", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const feature = rowToPredictionFeature(rows[0]!);
+        await insertAuditRow(conn, predictionRequestedEvent(feature, actor));
+        return feature;
+      });
+    },
+    async listPredictionFeatures(limit: number) {
+      const capped = Math.min(Math.max(limit || 50, 1), 200);
+      const [rows] = (await pool.query("SELECT * FROM prediction_features ORDER BY created_at DESC LIMIT ?", [
+        capped,
+      ])) as [Record<string, unknown>[], unknown];
+      return (rows as Record<string, unknown>[]).map(rowToPredictionFeature);
+    },
+    async completePredictionFeature(id: string, actualMin: number, actor: ShopActor, now: Date = new Date()) {
+      return withShopTx(async (conn) => {
+        const key = String(id).trim();
+        const [rows] = (await conn.query("SELECT * FROM prediction_features WHERE id = ? LIMIT 1 FOR UPDATE", [
+          key,
+        ])) as [Record<string, unknown>[], unknown];
+        if (rows.length === 0) throw new NotFoundError("ไม่พบข้อมูลพยากรณ์");
+        const current = rowToPredictionFeature(rows[0]!);
+        if (current.completedAt !== null) return { feature: current, deduplicated: true };
+        const actual = normalizeActualMinutes(actualMin);
+        await conn.query("UPDATE prediction_features SET actual_min = ?, completed_at = ? WHERE id = ?", [
+          actual,
+          toMysqlDatetime(now.toISOString()),
+          key,
+        ]);
+        const [after] = (await conn.query("SELECT * FROM prediction_features WHERE id = ? LIMIT 1", [key])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const next = rowToPredictionFeature(after[0]!);
+        await insertAuditRow(conn, predictionCompletedEvent(next, actor));
+        return { feature: next, deduplicated: false };
+      });
+    },
+    async getPredictionAccuracy(now: Date = new Date()) {
+      const [rows] = (await pool.query(
+        "SELECT baseline_min, predicted_min, source, actual_min FROM prediction_features WHERE actual_min IS NOT NULL",
+      )) as [Record<string, unknown>[], unknown];
+      const [mRows] = (await pool.query("SELECT threshold_minutes FROM prediction_models WHERE id = 'default' LIMIT 1")) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      const threshold = mRows.length === 0 ? PREDICTION_DEFAULT_THRESHOLD_MINUTES : Number(mRows[0]!["threshold_minutes"]);
+      const r = evaluateAccuracySamples(
+        (rows as Record<string, unknown>[]).map((x) => ({
+          baselineMin: Number(x["baseline_min"]),
+          predictedMin: x["predicted_min"] == null ? null : Number(x["predicted_min"]),
+          source: String(x["source"]) === "model" ? ("model" as const) : ("baseline" as const),
+          actualMin: Number(x["actual_min"]),
+        })),
+        threshold,
+      );
+      return {
+        samples: r.samples,
+        maeBaseline: r.maeBaseline,
+        maeModel: r.maeModel,
+        meetsThreshold: r.meetsThreshold,
+        thresholdMinutes: threshold,
+        gatheringSamples: r.samples < 500,
+        fixtures: evaluateFixtureAccuracy(threshold),
+        evaluatedAt: now.toISOString(),
+      };
+    },
+    async evaluatePredictions(actor: ShopActor, now: Date = new Date()) {
+      return withShopTx(async (conn) => {
+        const accuracy = await mysqlStore.getPredictionAccuracy(now);
+        await conn.query("UPDATE prediction_models SET updated_at = CURRENT_TIMESTAMP WHERE id = 'default'");
+        await insertAuditRow(conn, predictionEvaluatedEvent(accuracy.samples, accuracy.maeBaseline, accuracy.maeModel, actor));
+        return accuracy;
       });
     },
     async close() {

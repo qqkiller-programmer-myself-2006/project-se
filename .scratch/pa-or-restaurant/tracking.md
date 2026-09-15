@@ -194,6 +194,32 @@
 - ไม่รวมตาม scope (งาน ticket ถัดไป): capacity/พยากรณ์โมเดลเต็ม (13),
   backup/security/observability/release E2E (14)
 
+### Ticket 13 — Capacity และการพยากรณ์เวลารอ
+
+- สถานะ: resolved (2026-09-15, implement โดย Muse Spark)
+- ผลตรวจ (exact):
+  - API focused capacity 7/7
+  - API full 233 passed/29 skipped (เดิม 226 + ใหม่ 7; MySQL int ข้าม — ไม่มี `TEST_DATABASE_URL`)
+  - Web focused capacity-dashboard 6/6
+  - Web full 185 passed (เดิม 179 + ใหม่ 6)
+  - API/Web typecheck passed
+  - API tsc build passed
+  - Vite build passed 75 modules (เดิม 74 + 1 หน้าใหม่)
+- ไม่แตะไฟล์งานอื่นที่ค้างมาก่อน (excluded จาก commit ตาม ticket):
+  `apps/api/package.json`, `package-lock.json`, `apps/api/.gitignore`, `apps/api/generated/`,
+  `apps/api/prisma.config.ts`, `apps/api/prisma/`, `apps/api/src/db/`, `experiments/`,
+  `__pycache__`; Tickets 01–12 ไม่ regression (full suites ข้างบน)
+- สิ่งที่สร้าง: types (PredictionSource/CapacityOverview/WaitEstimate/PreorderSlotCheck/PredictionModel/Feature/Accuracy + audit actions prediction_*),
+  `apps/api/src/predict/{validation,adapter,audit-events}.ts`, Store seams (memory + MySQL) +
+  `db/migrations/014_capacity_wait_predictions.sql`, `apps/api/src/routes/capacity.ts` + wiring app.ts,
+  Web `CapacityDashboard` + เวลารอใน `QueueTrack` + api client + nav/routes, tests API/Web
+- งานที่ข้าม (บันทึกตาม ticket — ไม่ทำให้ ticket ล้ม):
+  MySQL runtime จริง (มี migration + seams แล้ว แต่ไม่มี `TEST_DATABASE_URL`),
+  external ML provider/API key/Python training (D09 — provider/วิธีฝึกยังไม่เลือก; เกณฑ์ 500 งานยังไม่ครบ),
+  Docker/MySQL runtime, LINE/payment/storage จริง,
+  browser E2E จริง (Playwright/Taste — ไม่มี reference URL ภายนอก)
+- ไม่รวมตาม scope (งาน ticket ถัดไป): backup/security/observability/release E2E (14)
+
 ## Roadmap หลัง Ticket 06
 
 - Ticket 07: ตัวเลือกเมนู สูตร และสต๊อก

@@ -4,6 +4,7 @@ import {
   api,
   type OrderDetail,
   type QueueJob,
+  type WaitEstimate,
 } from "../lib/api";
 import {
   Alert,
@@ -49,6 +50,22 @@ export default function QueueTrackPage() {
   const [trackedNumber, setTrackedNumber] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Ticket 13: เวลารอโดยประมาณของคำสั่งซื้อ (enhancement — ล้มเหลวเงียบ ไม่บังสถานะคิวหลัก)
+  const [waitEstimate, setWaitEstimate] = useState<WaitEstimate | null>(null);
+  const [waitLoading, setWaitLoading] = useState(false);
+
+  async function loadWait(orderId: string, guestPhone?: string) {
+    setWaitLoading(true);
+    try {
+      const res = await api.capacityWaitOrder(orderId, 2, guestPhone);
+      const estimate = (res as { estimate?: WaitEstimate }).estimate;
+      setWaitEstimate(estimate && typeof estimate.rangeMin === "number" ? estimate : null);
+    } catch {
+      setWaitEstimate(null);
+    } finally {
+      setWaitLoading(false);
+    }
+  }
 
   async function loadMyOrders() {
     setOrdersLoading(true);
@@ -69,11 +86,13 @@ export default function QueueTrackPage() {
     }
     setLoading(true);
     setError(null);
+    setWaitEstimate(null);
     try {
       const found = await api.orderLookup(orderNumber.trim(), phone.trim());
       const res = await api.queueOrder(found.order.id, phone.trim());
       setJobs(res.jobs);
       setTrackedNumber(res.orderNumber);
+      if (res.jobs.length > 0) void loadWait(found.order.id, phone.trim());
     } catch (err) {
       setError(err instanceof Error ? err.message : "ติดตามคิวไม่สำเร็จ");
     } finally {
@@ -84,10 +103,12 @@ export default function QueueTrackPage() {
   async function trackOrder(order: OrderDetail) {
     setLoading(true);
     setError(null);
+    setWaitEstimate(null);
     try {
       const res = await api.queueOrder(order.id);
       setJobs(res.jobs);
       setTrackedNumber(res.orderNumber);
+      if (res.jobs.length > 0) void loadWait(order.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "ติดตามคิวไม่สำเร็จ");
     } finally {
@@ -176,6 +197,24 @@ export default function QueueTrackPage() {
       {!loading && !error && trackedNumber && (
         <Panel label={`สถานะคิว ${trackedNumber}`}>
           <h2 className="text-base font-bold text-ink-900">คำสั่งซื้อ {trackedNumber}</h2>
+          {jobs.length > 0 && (
+            <div className="mt-3 rounded-xl border border-brand-200 bg-brand-50 p-3" aria-live="polite">
+              {waitLoading ? (
+                <Spinner label="กำลังประมาณเวลารอ…" />
+              ) : waitEstimate ? (
+                <>
+                  <p className="text-base font-bold text-brand-800">
+                    {waitEstimate.rangeMin === waitEstimate.rangeMax
+                      ? `เวลารอโดยประมาณ ${waitEstimate.rangeMin} นาที`
+                      : `เวลารอโดยประมาณ ${waitEstimate.rangeMin}–${waitEstimate.rangeMax} นาที`}
+                  </p>
+                  <p className="mt-1 text-xs text-ink-600">
+                    {waitEstimate.source === "model" ? `โมเดล ${waitEstimate.modelVersion}` : "เวลามาตรฐาน"} · {waitEstimate.nonGuarantee}
+                  </p>
+                </>
+              ) : null}
+            </div>
+          )}
           {jobs.length === 0 ? (
             <p className="mt-2 text-sm text-ink-600">คำสั่งซื้อนี้ยังไม่เข้าคิว (อาจรอชำระเงิน) ชำระสำเร็จแล้วงานจะขึ้นที่นี่อัตโนมัติ</p>
           ) : (

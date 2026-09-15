@@ -30,6 +30,7 @@ import RewardsPage from "./pages/Rewards";
 import AdminRewardsPage from "./pages/AdminRewards";
 import FinanceDashboardPage from "./pages/FinanceDashboard";
 import FinanceEntriesPage from "./pages/FinanceEntries";
+import CapacityDashboardPage from "./pages/CapacityDashboard";
 import AdminNotificationsPage from "./pages/AdminNotifications";
 import MyNotificationsPage from "./pages/MyNotifications";
 
@@ -204,6 +205,11 @@ export default function App() {
               </NavLink>
             )}
             {isManager && (
+              <NavLink to="/capacity/dashboard" className={({ isActive }) => navClass(isActive)}>
+                กำลังผลิต/เวลารอ
+              </NavLink>
+            )}
+            {isManager && (
               <NavLink to="/finance/entries" className={({ isActive }) => navClass(isActive)}>
                 รายรับ/รายจ่าย
               </NavLink>
@@ -278,6 +284,7 @@ export default function App() {
           <Route path="/notifications" element={<MyNotificationsPage />} />
           {isManager && <Route path="/finance/dashboard" element={<FinanceDashboardPage />} />}
           {isManager && <Route path="/finance/entries" element={<FinanceEntriesPage />} />}
+          {isManager && <Route path="/capacity/dashboard" element={<CapacityDashboardPage />} />}
           {isManager && <Route path="/admin/menu" element={<MenuAdminPage />} />}
           {isManager && <Route path="/admin/inventory" element={<InventoryPage />} />}
           {isManager && <Route path="/shop" element={<ShopPage />} />}
