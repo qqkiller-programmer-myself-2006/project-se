@@ -74,7 +74,22 @@ export function ReservationTableScene({
       </p>
 
       <div className="reservation-table-scene__viewport">
-        <div className="reservation-table-scene__backdrop" aria-hidden="true" />
+        <div className="reservation-table-scene__backdrop" aria-hidden="true">
+          <img
+            className="reservation-table-scene__backdrop-primary"
+            src="/venue/latest/real-counter-seating.jpg"
+            alt=""
+            loading="lazy"
+            decoding="async"
+          />
+          <img
+            className="reservation-table-scene__backdrop-secondary"
+            src="/venue/latest/real-outdoor-seating.jpg"
+            alt=""
+            loading="lazy"
+            decoding="async"
+          />
+        </div>
         <div className="reservation-table-scene__floor" aria-hidden="true" />
         <div className="reservation-table-scene__tables" role="group" aria-label="เลือกโต๊ะจากแบบจำลอง">
           {tables.map((table) => {

@@ -6,6 +6,7 @@ import { Alert, Badge, Panel } from "../../components/ui";
 import { DepthHero, MotionReveal, Skeleton, StaggerItem, StaggerList, TiltCard } from "../../components/motion";
 import { ConnectionBanner, DemoBadge } from "../../components/demo";
 import { Icon, FoodMotif } from "../../components/icons";
+import { RealMenuPhotoGallery } from "../../components/RealMenuPhotoGallery";
 
 function fmtPrice(n: number): string {
   return `${n.toLocaleString("th-TH", { maximumFractionDigits: 2 })} บาท`;
@@ -99,6 +100,8 @@ export default function MenuPublicPage() {
           </div>
         ) : null}
       </DepthHero>
+
+      <RealMenuPhotoGallery />
 
       {demo ? <ConnectionBanner onRetry={() => void load()} /> : null}
 
