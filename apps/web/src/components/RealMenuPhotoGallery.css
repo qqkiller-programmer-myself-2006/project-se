@@ -141,6 +141,10 @@
   .real-menu-gallery__selector {
     min-height: 6.5rem;
   }
+
+  .real-menu-gallery__controls {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

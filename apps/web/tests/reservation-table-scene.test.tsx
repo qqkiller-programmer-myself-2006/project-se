@@ -4,19 +4,25 @@ import { describe, expect, it, vi } from "vitest";
 import { ReservationTableScene } from "../src/components/ReservationTableScene";
 
 describe("แบบจำลองโต๊ะสามมิติสำหรับการจอง", () => {
-  it("แสดงหัวข้อ คำชี้แจง ฉากจากรูปจริง สถานะ และโต๊ะครบ 7 โต๊ะ", () => {
+  it("แสดงหัวข้อ คำชี้แจง ฉากจากรูปจริง โซนครบ และโต๊ะครบ 8 โต๊ะ", () => {
     const { container } = render(<ReservationTableScene partySize={4} recommendedTableId="table-b2" />);
 
     expect(screen.getByRole("heading", { name: "แบบจำลองโต๊ะภายในร้าน" })).toBeInTheDocument();
     expect(screen.getByText(/ไม่ใช่ผังที่วัดตามขนาดจริง/)).toBeInTheDocument();
     expect(screen.getByText("กำลังดูโต๊ะสำหรับ 4 คน")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /รองรับ \d+ คน/ })).toHaveLength(7);
+    expect(screen.getAllByRole("button", { name: /รองรับ \d+ คน/ })).toHaveLength(8);
     expect(screen.getByRole("button", { name: /B2.+โต๊ะที่ระบบแนะนำ/ })).toBeInTheDocument();
     expect(screen.getByLabelText("คำอธิบายสถานะโต๊ะ")).toHaveTextContent("ว่าง");
     expect(screen.getByLabelText("คำอธิบายสถานะโต๊ะ")).toHaveTextContent("ไม่ว่าง");
     expect(screen.getByLabelText("คำอธิบายสถานะโต๊ะ")).toHaveTextContent("เลือกอยู่");
     expect(container.querySelector('img[src="/venue/latest/real-counter-seating.jpg"]')).toBeInTheDocument();
     expect(container.querySelector('img[src="/venue/latest/real-outdoor-seating.jpg"]')).toBeInTheDocument();
+    const zones = screen.getByLabelText("โซนที่นั่งในแบบจำลอง");
+    expect(zones).toHaveTextContent("โซนหน้าร้าน");
+    expect(zones).toHaveTextContent("โซนกลางร้าน");
+    expect(zones).toHaveTextContent("โซนด้านใน");
+    expect(zones).toHaveTextContent("โซนระเบียง");
+    expect(screen.getByRole("button", { name: /D1 โซนระเบียง/ })).toBeInTheDocument();
   });
 
   it("คลิกเลือกโต๊ะแล้วแสดงสรุปและ aria-pressed", async () => {

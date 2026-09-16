@@ -26,8 +26,9 @@ const tables: TableFixture[] = [
   { id: "table-b1", name: "B1", capacity: 4, zone: "โซนกลางร้าน", status: "available", x: "8%", y: "48%", depth: 16, turn: 5 },
   { id: "table-b2", name: "B2", capacity: 4, zone: "โซนกลางร้าน", status: "available", x: "42%", y: "44%", depth: 18, turn: -3 },
   { id: "table-b3", name: "B3", capacity: 4, zone: "โซนกลางร้าน", status: "occupied", x: "72%", y: "48%", depth: 14, turn: 5 },
-  { id: "table-c1", name: "C1", capacity: 6, zone: "โซนด้านใน", status: "available", x: "20%", y: "72%", depth: 34, turn: -4 },
-  { id: "table-c2", name: "C2", capacity: 8, zone: "โซนด้านใน", status: "available", x: "62%", y: "70%", depth: 38, turn: 3 },
+  { id: "table-c1", name: "C1", capacity: 6, zone: "โซนด้านใน", status: "available", x: "8%", y: "72%", depth: 34, turn: -4 },
+  { id: "table-c2", name: "C2", capacity: 8, zone: "โซนด้านใน", status: "available", x: "38%", y: "70%", depth: 38, turn: 3 },
+  { id: "table-d1", name: "D1", capacity: 4, zone: "โซนระเบียง", status: "available", x: "68%", y: "72%", depth: 36, turn: -2 },
 ];
 
 function statusText(table: TableFixture, selected: boolean): string {
@@ -91,6 +92,12 @@ export function ReservationTableScene({
           />
         </div>
         <div className="reservation-table-scene__floor" aria-hidden="true" />
+        <div className="reservation-table-scene__zone-labels" aria-label="โซนที่นั่งในแบบจำลอง">
+          <span className="is-front">โซนหน้าร้าน</span>
+          <span className="is-middle">โซนกลางร้าน</span>
+          <span className="is-inside">โซนด้านใน</span>
+          <span className="is-terrace">โซนระเบียง</span>
+        </div>
         <div className="reservation-table-scene__tables" role="group" aria-label="เลือกโต๊ะจากแบบจำลอง">
           {tables.map((table) => {
             const isSelected = table.id === selectedId;

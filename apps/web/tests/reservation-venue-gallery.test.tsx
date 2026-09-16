@@ -11,7 +11,7 @@ describe("แกลเลอรีบรรยากาศร้านสำห�
   });
 
   it("แสดงภาพหลัก คำบรรยาย และตัวเลือกครบ 5 มุม", () => {
-    render(<ReservationVenueGallery />);
+    const { container } = render(<ReservationVenueGallery />);
 
     expect(screen.getByRole("heading", { name: "ดูบรรยากาศก่อนเลือกโต๊ะ" })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "พื้นที่นั่งรับประทานอาหารภายในร้านป้าอ้อ" })).toHaveAttribute(
@@ -20,6 +20,15 @@ describe("แกลเลอรีบรรยากาศร้านสำห�
     );
     expect(screen.getByText("ภาพที่ 1 จาก 5 · ห้องอาหาร")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /^ดู.+ ภาพที่ \d$/ })).toHaveLength(5);
+    for (const src of [
+      "/venue/reservations/dining-room.jpg",
+      "/venue/reservations/storefront-seating.jpg",
+      "/venue/reservations/counter.jpg",
+      "/venue/reservations/drink-menu.jpg",
+      "/venue/reservations/food-menu.jpg",
+    ]) {
+      expect(container.querySelector(`img[src="${src}"]`)).toBeInTheDocument();
+    }
   });
 
   it("เลือกภาพจากปุ่มและเลื่อนก่อนหน้าหรือถัดไปได้", async () => {
