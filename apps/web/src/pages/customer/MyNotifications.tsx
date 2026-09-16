@@ -16,7 +16,7 @@ import {
 import { Skeleton, StaggerItem, StaggerList } from "../../components/motion";
 import { ConnectionBanner, DemoBadge } from "../../components/demo";
 import { Icon } from "../../components/icons";
-import { DEMO_NOTIFICATIONS, isOfflineError } from "../../lib/demo";
+import { DEMO_NOTIFICATIONS, isDemoModeEnabled, isOfflineError, shouldFallbackToDemo } from "../../lib/demo";
 
 function statusTone(s: NotificationStatus): "brand" | "success" | "danger" | "neutral" {
   if (s === "sent") return "success";
@@ -58,11 +58,18 @@ export default function MyNotificationsPage() {
     setDemo(false);
     try {
       const out = await api.myNotifications(50);
-      setItems(out.items);
-      setConsentEnabled(out.consentEnabled);
-      setLineLinked(out.lineLinked);
+      if (out.items.length === 0 && isDemoModeEnabled()) {
+        setItems(DEMO_NOTIFICATIONS);
+        setConsentEnabled(out.consentEnabled);
+        setLineLinked(out.lineLinked);
+        setDemo(true);
+      } else {
+        setItems(out.items);
+        setConsentEnabled(out.consentEnabled);
+        setLineLinked(out.lineLinked);
+      }
     } catch (err) {
-      if (isOfflineError(err)) {
+      if (shouldFallbackToDemo(err)) {
         setItems(DEMO_NOTIFICATIONS);
         setConsentEnabled(true);
         setLineLinked(false);

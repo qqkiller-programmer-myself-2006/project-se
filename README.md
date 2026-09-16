@@ -63,6 +63,25 @@ npm run dev:api    # http://localhost:4000 (โหลด .env ที่ root อ
 npm run dev:web    # http://localhost:5173 (proxy /api ไป :4000)
 ```
 
+### 3.1 โหมดสาธิตฝั่งเว็บ (dev-only, ไม่แตะ `.env` จริง)
+
+```powershell
+# เปิดเฉพาะตอนพัฒนา UI — ไม่ต้องมี API/DB ก็ดูดีไซน์ครบ 7 หน้าลูกค้าได้
+$env:VITE_DEMO_MODE = "true"; npm run dev:web    # http://localhost:5173
+# หรือใส่ในไฟล์ local ของ shell ตัวเอง (ห้าม commit ค่าจริง): VITE_DEMO_MODE=true
+```
+
+- เมื่อ `VITE_DEMO_MODE=true` หน้า `/menu` `/cart` `/orders` `/track`
+  `/reservations` `/rewards` `/notifications` จะแสดงข้อมูลตัวอย่างจาก
+  `apps/web/src/lib/demo.ts` พร้อมป้าย `โหมดสาธิต · ข้อมูลตัวอย่าง`
+  (ส่วนหัวเชลล์ + แบนเนอร์เชื่อมต่อ) แม้ API ว่างเปล่าหรือตอบ error ใด ๆ
+- ปิด flag (`false`/ไม่ตั้ง) = พฤติกรรม API จริงล้วน (คง fallback ออฟไลน์เดิม
+  เฉพาะ network ล้มเหลวเท่านั้น)
+- ปลอดภัย: guard คู่ (`VITE_DEMO_MODE` + `import.meta.env.DEV`/`MODE !== "production"`)
+  ทำให้ production build ไม่มีทางเข้าโหมดสาธิต; เฉพาะ READ fallback เท่านั้น
+  ทุก mutation (สั่งซื้อ/จอง/แลกแต้ม/ชำระเงิน) ยังเรียก API จริงพร้อม CSRF/auth —
+  fixtures ไม่มี secret หรือ PII จริง
+
 ### 4. สร้าง Owner คนแรก (บังคับระบุ credentials ชัดเจน)
 
 ```powershell

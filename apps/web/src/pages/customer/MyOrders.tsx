@@ -6,7 +6,7 @@ import { Alert, Panel, inputClass, primaryButtonClass, secondaryButtonClass } fr
 import { DepthHero, MotionReveal, Skeleton } from "../../components/motion";
 import { ConnectionBanner, DemoBadge } from "../../components/demo";
 import { Icon } from "../../components/icons";
-import { DEMO_ORDERS, isOfflineError } from "../../lib/demo";
+import { DEMO_ORDERS, isDemoModeEnabled, shouldFallbackToDemo } from "../../lib/demo";
 
 /**
  * หน้าคำสั่งซื้อของฉัน (Ticket 05):
@@ -35,8 +35,10 @@ export default function MyOrdersPage() {
       try {
         me = (await api.customerMe()).customer;
       } catch (sessionErr) {
-        // Offline: show deterministic demo orders instead of an empty page.
-        if (isOfflineError(sessionErr)) {
+        // Offline always falls back; demo mode also falls back on ANY session
+        // failure (e.g. 401/empty) so the page stays inspectable. Real auth is
+        // never bypassed — mutations still require server session.
+        if (shouldFallbackToDemo(sessionErr)) {
           setCustomer(null);
           setSessionChecked(true);
           setOrders(DEMO_ORDERS);
@@ -49,15 +51,25 @@ export default function MyOrdersPage() {
       setSessionChecked(true);
       if (me) {
         try {
-          setOrders((await api.myOrders()).orders);
+          const fetched = (await api.myOrders()).orders;
+          if (fetched.length === 0 && isDemoModeEnabled()) {
+            setOrders(DEMO_ORDERS);
+            setDemo(true);
+          } else {
+            setOrders(fetched);
+          }
         } catch (ordersErr) {
-          if (isOfflineError(ordersErr)) {
+          if (shouldFallbackToDemo(ordersErr)) {
             setOrders(DEMO_ORDERS);
             setDemo(true);
           } else {
             throw ordersErr;
           }
         }
+      } else if (isDemoModeEnabled()) {
+        // Dev-only: logged-out + empty API still shows demo fixtures with label.
+        setOrders(DEMO_ORDERS);
+        setDemo(true);
       } else {
         setOrders([]);
       }
@@ -85,7 +97,8 @@ export default function MyOrdersPage() {
       setLookupOrder((await api.orderLookup(lookupNumber.trim(), lookupPhone.trim())).order);
     } catch (err) {
       // Offline: match against deterministic demo orders so Guest lookup stays usable.
-      if (isOfflineError(err)) {
+      // Demo mode extends this to any lookup failure.
+      if (shouldFallbackToDemo(err)) {
         const needle = lookupNumber.trim().toLowerCase();
         const found = DEMO_ORDERS.find((o) => o.orderNumber.toLowerCase() === needle);
         if (found) {

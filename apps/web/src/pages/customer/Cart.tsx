@@ -27,7 +27,7 @@ import { Alert, Badge, Panel, inputClass, primaryButtonClass, secondaryButtonCla
 import { DepthHero, MotionReveal, Skeleton, StaggerItem, StaggerList } from "../../components/motion";
 import { ConnectionBanner, DemoBadge } from "../../components/demo";
 import { Icon } from "../../components/icons";
-import { DEMO_MENU_GROUPS, isOfflineError } from "../../lib/demo";
+import { DEMO_MENU_GROUPS, isDemoModeEnabled, isOfflineError, shouldFallbackToDemo } from "../../lib/demo";
 
 function fmtPrice(n: number): string {
   return `${n.toLocaleString("th-TH", { maximumFractionDigits: 2 })} บาท`;
@@ -77,9 +77,15 @@ export default function CartPage() {
       setMenuLoading(true);
       setMenuError(null);
       setDemo(false);
-      setGroups((await api.menuPublic()).groups);
+      const fetched = (await api.menuPublic()).groups;
+      if (fetched.length === 0 && isDemoModeEnabled()) {
+        setGroups(DEMO_MENU_GROUPS);
+        setDemo(true);
+      } else {
+        setGroups(fetched);
+      }
     } catch (err) {
-      if (isOfflineError(err)) {
+      if (shouldFallbackToDemo(err)) {
         setGroups(DEMO_MENU_GROUPS);
         setDemo(true);
         setMenuError(null);

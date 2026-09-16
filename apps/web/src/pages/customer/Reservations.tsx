@@ -12,7 +12,8 @@ import { Alert, Panel, inputClass, primaryButtonClass, secondaryButtonClass } fr
 import { DepthHero, MotionReveal, Skeleton } from "../../components/motion";
 import { ConnectionBanner, DemoBadge } from "../../components/demo";
 import { Icon } from "../../components/icons";
-import { DEMO_RESERVATIONS, isOfflineError } from "../../lib/demo";
+import { ReservationVenueGallery } from "../../components/ReservationVenueGallery";
+import { DEMO_RESERVATIONS, isDemoModeEnabled, isOfflineError, shouldFallbackToDemo } from "../../lib/demo";
 
 function newIdempotencyKey(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
@@ -63,7 +64,7 @@ export default function ReservationsPage() {
       try {
         me = (await api.customerMe()).customer;
       } catch (sessionErr) {
-        if (isOfflineError(sessionErr)) {
+        if (shouldFallbackToDemo(sessionErr)) {
           setCustomer(null);
           setSessionChecked(true);
           setItems(DEMO_RESERVATIONS);
@@ -76,15 +77,24 @@ export default function ReservationsPage() {
       setSessionChecked(true);
       if (me) {
         try {
-          setItems((await api.myReservations()).reservations);
+          const fetched = (await api.myReservations()).reservations;
+          if (fetched.length === 0 && isDemoModeEnabled()) {
+            setItems(DEMO_RESERVATIONS);
+            setDemo(true);
+          } else {
+            setItems(fetched);
+          }
         } catch (listErr) {
-          if (isOfflineError(listErr)) {
+          if (shouldFallbackToDemo(listErr)) {
             setItems(DEMO_RESERVATIONS);
             setDemo(true);
           } else {
             throw listErr;
           }
         }
+      } else if (isDemoModeEnabled()) {
+        setItems(DEMO_RESERVATIONS);
+        setDemo(true);
       } else {
         setItems([]);
       }
@@ -202,6 +212,8 @@ export default function ReservationsPage() {
           </div>
         ) : null}
       </DepthHero>
+
+      <ReservationVenueGallery />
 
       {demo ? <ConnectionBanner onRetry={() => void load()} /> : null}
 

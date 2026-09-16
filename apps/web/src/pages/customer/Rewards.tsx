@@ -24,7 +24,9 @@ import {
   DEMO_LEDGER,
   DEMO_REDEMPTIONS,
   DEMO_REWARDS,
+  isDemoModeEnabled,
   isOfflineError,
+  shouldFallbackToDemo,
 } from "../../lib/demo";
 
 function newIdempotencyKey(): string {
@@ -92,13 +94,27 @@ export default function RewardsPage() {
         api.myRedemptions(),
         api.loyaltyLedger(50),
       ]);
-      setBalance(b.balance);
-      setRewards(rw.rewards);
-      setRedemptions(mine.redemptions);
-      setLedger(led.entries);
+      // Dev-only demo mode: empty API also shows local fixtures (with label).
+      if (
+        isDemoModeEnabled() &&
+        rw.rewards.length === 0 &&
+        mine.redemptions.length === 0 &&
+        led.entries.length === 0
+      ) {
+        setBalance(DEMO_BALANCE);
+        setRewards(DEMO_REWARDS);
+        setRedemptions(DEMO_REDEMPTIONS);
+        setLedger(DEMO_LEDGER);
+        setDemo(true);
+      } else {
+        setBalance(b.balance);
+        setRewards(rw.rewards);
+        setRedemptions(mine.redemptions);
+        setLedger(led.entries);
+      }
     } catch (err) {
-      // Prefer real API; deterministic demo data only when unreachable.
-      if (isOfflineError(err)) {
+      // Prefer real API; offline always falls back, other errors only in demo mode.
+      if (shouldFallbackToDemo(err)) {
         setBalance(DEMO_BALANCE);
         setRewards(DEMO_REWARDS);
         setRedemptions(DEMO_REDEMPTIONS);

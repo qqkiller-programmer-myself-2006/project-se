@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { MENU_KIND_LABELS, api, type MenuKind, type PublicMenuGroupWithOptions } from "../../lib/api";
-import { DEMO_MENU_GROUPS, isOfflineError } from "../../lib/demo";
+import { DEMO_MENU_GROUPS, isDemoModeEnabled, shouldFallbackToDemo } from "../../lib/demo";
 import { Alert, Badge, Panel } from "../../components/ui";
 import { DepthHero, MotionReveal, Skeleton, StaggerItem, StaggerList, TiltCard } from "../../components/motion";
 import { ConnectionBanner, DemoBadge } from "../../components/demo";
@@ -31,10 +31,19 @@ export default function MenuPublicPage() {
       setLoading(true);
       setError(null);
       setDemo(false);
-      setGroups((await api.menuPublic()).groups);
+      const fetched = (await api.menuPublic()).groups;
+      // Dev-only demo mode: empty API also shows local fixtures (with label).
+      // Normal mode keeps the real empty state so operators see the truth.
+      if (fetched.length === 0 && isDemoModeEnabled()) {
+        setGroups(DEMO_MENU_GROUPS);
+        setDemo(true);
+      } else {
+        setGroups(fetched);
+      }
     } catch (err) {
-      // Prefer real API; fall back to deterministic demo data only when unreachable.
-      if (isOfflineError(err)) {
+      // Prefer real API; offline always falls back, other errors only in demo mode.
+      // Mutations still call the real API — demo never bypasses auth/security.
+      if (shouldFallbackToDemo(err)) {
         setGroups(DEMO_MENU_GROUPS);
         setDemo(true);
         setError(null);

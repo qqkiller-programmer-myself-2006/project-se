@@ -32,6 +32,44 @@ export function isOfflineError(err: unknown): boolean {
   return /failed to fetch|networkerror|network error|fetch failed|load failed|timed out|timeout/i.test(msg);
 }
 
+/**
+ * Safe dev-only demo-mode flag.
+ *
+ * Enabled ONLY when ALL hold:
+ * - `VITE_DEMO_MODE === "true"` (explicit opt-in, baked at Vite build time), AND
+ * - non-production runtime (`import.meta.env.DEV === true`,
+ *   `MODE !== "production"`, `PROD !== true`).
+ *
+ * Never true in production builds — even if the flag was baked as "true",
+ * the PROD/MODE guards force it off. Demo mode only swaps READ fallbacks to
+ * local fixtures with a visible label; it never bypasses auth, CSRF, or
+ * mutations (all writes still call the real API and fail without server/auth).
+ */
+export function isDemoModeEnabled(): boolean {
+  try {
+    const env = (import.meta as unknown as { env?: Record<string, unknown> })?.env;
+    if (!env) return false;
+    const flag = String(env["VITE_DEMO_MODE"] ?? "").toLowerCase() === "true";
+    if (!flag) return false;
+    if (env["PROD"] === true) return false;
+    if (typeof env["MODE"] === "string" && env["MODE"] === "production") return false;
+    if (env["DEV"] !== true) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a read failure should fall back to local demo fixtures.
+ * Preserves existing offline behavior; when the dev-only demo flag is on,
+ * ANY read failure (empty API, 500, 401, …) falls back so the UI stays
+ * inspectable. Mutations are never faked — they still surface real errors.
+ */
+export function shouldFallbackToDemo(err: unknown): boolean {
+  return isOfflineError(err) || isDemoModeEnabled();
+}
+
 const T = (iso: string) => iso;
 
 export const DEMO_MENU_GROUPS: PublicMenuGroupWithOptions[] = [

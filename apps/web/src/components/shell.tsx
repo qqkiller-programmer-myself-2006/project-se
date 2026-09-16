@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 import { Link, NavLink } from "react-router-dom";
 import { FoodMotif, Icon, type IconName } from "./icons";
 import { PageEnter } from "./motion";
+import { DemoBadge } from "./demo";
+import { isDemoModeEnabled } from "../lib/demo";
 
 const NAV_BASE =
   "pa-lift pa-press inline-flex min-h-[44px] items-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold transition-colors";
@@ -82,6 +84,11 @@ export function PublicShell({ children }: { children: ReactNode }) {
               </NavLink>
             ))}
           </nav>
+          {isDemoModeEnabled() ? (
+            <div className="mt-3 flex justify-start">
+              <DemoBadge />
+            </div>
+          ) : null}
         </div>
         <div
           aria-hidden="true"

@@ -17,7 +17,7 @@ import {
 } from "../../components/ui";
 import { MotionReveal, Skeleton, StaggerItem, StaggerList } from "../../components/motion";
 import { ConnectionBanner, DemoBadge } from "../../components/demo";
-import { DEMO_NON_GUARANTEE, DEMO_QUEUE_JOBS, isOfflineError } from "../../lib/demo";
+import { DEMO_QUEUE_JOBS, DEMO_NON_GUARANTEE, isDemoModeEnabled, shouldFallbackToDemo } from "../../lib/demo";
 
 function fmtTime(iso: string): string {
   const d = new Date(iso);
@@ -82,8 +82,40 @@ export default function QueueTrackPage() {
     }
   }
 
+  function showDemoQueue() {
+    setJobs(DEMO_QUEUE_JOBS);
+    setTrackedNumber("ORD-DEMO-0001");
+    setWaitEstimate({
+      orderId: "demo-order-1",
+      station: null,
+      partySize: 2,
+      perStation: [],
+      estimatedWaitMin: 15,
+      rangeMin: 10,
+      rangeMax: 20,
+      readyAtSlowest: null,
+      source: "baseline",
+      modelVersion: "demo-baseline",
+      predictedAt: new Date().toISOString(),
+      timeoutMs: 0,
+      nonGuarantee: DEMO_NON_GUARANTEE,
+    });
+    setDemo(true);
+    setError(null);
+  }
+
   async function trackGuest() {
     if (!orderNumber.trim() || !phone.trim()) {
+      // Dev-only shortcut: empty form + demo mode still shows fixtures with label.
+      if (isDemoModeEnabled()) {
+        setLoading(true);
+        try {
+          showDemoQueue();
+        } finally {
+          setLoading(false);
+        }
+        return;
+      }
       setError("กรุณากรอกเลขคำสั่งซื้อและเบอร์โทรที่ใช้สั่งซื้อ");
       return;
     }
@@ -94,31 +126,17 @@ export default function QueueTrackPage() {
     try {
       const found = await api.orderLookup(orderNumber.trim(), phone.trim());
       const res = await api.queueOrder(found.order.id, phone.trim());
+      if (res.jobs.length === 0 && isDemoModeEnabled()) {
+        showDemoQueue();
+        return;
+      }
       setJobs(res.jobs);
       setTrackedNumber(res.orderNumber);
       if (res.jobs.length > 0) void loadWait(found.order.id, phone.trim());
     } catch (err) {
-      // Offline: show deterministic demo queue so the design is inspectable.
-      if (isOfflineError(err)) {
-        setJobs(DEMO_QUEUE_JOBS);
-        setTrackedNumber("ORD-DEMO-0001");
-        setWaitEstimate({
-          orderId: "demo-order-1",
-          station: null,
-          partySize: 2,
-          perStation: [],
-          estimatedWaitMin: 15,
-          rangeMin: 10,
-          rangeMax: 20,
-          readyAtSlowest: null,
-          source: "baseline",
-          modelVersion: "demo-baseline",
-          predictedAt: new Date().toISOString(),
-          timeoutMs: 0,
-          nonGuarantee: DEMO_NON_GUARANTEE,
-        });
-        setDemo(true);
-        setError(null);
+      // Offline always falls back; demo mode falls back on ANY lookup failure.
+      if (shouldFallbackToDemo(err)) {
+        showDemoQueue();
       } else {
         setError(err instanceof Error ? err.message : "ติดตามคิวไม่สำเร็จ");
       }
@@ -194,10 +212,20 @@ export default function QueueTrackPage() {
               </label>
               <input id="track-phone" className={inputClass} inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="08XXXXXXXX" />
             </div>
-            <div className="flex items-end">
+            <div className="flex flex-wrap items-end gap-2">
               <button type="button" onClick={() => void trackGuest()} disabled={loading} className={primaryButtonClass}>
                 {loading ? "กำลังติดตาม…" : "ติดตามคิว"}
               </button>
+              {isDemoModeEnabled() ? (
+                <button
+                  type="button"
+                  onClick={() => showDemoQueue()}
+                  className={secondaryButtonClass}
+                  aria-label="ดูตัวอย่างคิว ORD-DEMO-0001"
+                >
+                  ดูตัวอย่าง
+                </button>
+              ) : null}
             </div>
           </div>
         ) : (

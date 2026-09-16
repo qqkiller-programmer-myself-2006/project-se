@@ -1,0 +1,279 @@
+/* Tactile photo deck inspired by the shop's wood counter. */
+.reservation-venue {
+  position: relative;
+  isolation: isolate;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid rgba(113, 63, 18, 0.2);
+  border-radius: 1.5rem;
+  padding: 1.25rem;
+  background:
+    radial-gradient(circle at 86% 8%, rgba(202, 138, 4, 0.2), transparent 28%),
+    linear-gradient(145deg, #fffdf8 0%, #fff7ed 58%, #fef2f2 100%);
+  box-shadow: 0 24px 55px -38px rgba(69, 10, 10, 0.7);
+}
+
+.reservation-venue::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  opacity: 0.18;
+  background-image: repeating-linear-gradient(90deg, transparent 0 30px, rgba(113, 63, 18, 0.12) 31px 32px);
+  pointer-events: none;
+}
+
+.reservation-venue__heading {
+  display: grid;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+
+.reservation-venue__eyebrow {
+  margin-bottom: 0.25rem;
+  color: var(--color-gold-700);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+}
+
+.reservation-venue__stage {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  min-width: 0;
+  min-height: 19rem;
+  padding: 0.75rem 1rem 1.5rem;
+  perspective: 1100px;
+}
+
+.reservation-venue__card {
+  position: absolute;
+  inset: 0.75rem 1rem 1.5rem;
+  overflow: hidden;
+  border-radius: 1.25rem;
+  background: #29130e;
+  transform-style: preserve-3d;
+  transition:
+    transform var(--motion-slow) var(--motion-ease),
+    opacity var(--motion-base) var(--motion-ease),
+    box-shadow var(--motion-slow) var(--motion-ease);
+}
+
+.reservation-venue__card img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.reservation-venue__card--back-left {
+  opacity: 0.48;
+  transform: translate3d(-4%, 8px, -70px) rotateY(8deg) rotateZ(-1.5deg);
+  box-shadow: -16px 18px 32px -28px rgba(69, 10, 10, 0.75);
+}
+
+.reservation-venue__card--back-right {
+  opacity: 0.54;
+  transform: translate3d(4%, 14px, -46px) rotateY(-7deg) rotateZ(1.5deg);
+  box-shadow: 18px 20px 34px -28px rgba(69, 10, 10, 0.78);
+}
+
+.reservation-venue__card--active {
+  z-index: 2;
+  transform: translateZ(22px) rotateX(0.7deg);
+  box-shadow:
+    0 28px 50px -30px rgba(69, 10, 10, 0.9),
+    0 10px 22px -18px rgba(161, 98, 7, 0.8);
+}
+
+.reservation-venue__caption {
+  position: absolute;
+  inset: auto 0 0;
+  display: grid;
+  gap: 0.2rem;
+  padding: 2.75rem 1rem 0.9rem;
+  color: #fffaf5;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  background: linear-gradient(transparent, rgba(28, 21, 18, 0.92));
+}
+
+.reservation-venue__caption-label {
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.reservation-venue__arrow {
+  position: absolute;
+  z-index: 4;
+  top: 50%;
+  display: inline-flex;
+  width: 2.75rem;
+  min-width: 2.75rem;
+  height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  border-radius: 999px;
+  background: rgba(28, 21, 18, 0.78);
+  color: #fff;
+  font-size: 1.25rem;
+  box-shadow: 0 10px 24px -12px rgba(0, 0, 0, 0.9);
+  backdrop-filter: blur(8px);
+  transform: translateY(-50%);
+  transition: transform var(--motion-fast) var(--motion-ease), background var(--motion-fast) ease;
+}
+
+.reservation-venue__arrow:hover {
+  background: rgba(127, 29, 29, 0.92);
+}
+
+.reservation-venue__arrow:active {
+  transform: translateY(-50%) scale(0.95);
+}
+
+.reservation-venue__arrow--previous {
+  left: 0.15rem;
+}
+
+.reservation-venue__arrow--next {
+  right: 0.15rem;
+}
+
+.reservation-venue__position {
+  margin: 0.15rem 0 0.75rem;
+  text-align: center;
+  color: var(--color-ink-600);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.reservation-venue__selectors {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.reservation-venue__selector {
+  position: relative;
+  display: grid;
+  width: 100%;
+  min-width: 2.75rem;
+  min-height: 5rem;
+  overflow: hidden;
+  border: 2px solid transparent;
+  border-radius: 0.8rem;
+  background: #29130e;
+  color: #fff;
+  box-shadow: 0 7px 16px -12px rgba(69, 10, 10, 0.9);
+  transition: transform var(--motion-fast) var(--motion-ease), border-color var(--motion-fast) ease;
+}
+
+.reservation-venue__selector img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.58;
+}
+
+.reservation-venue__selector span {
+  position: relative;
+  z-index: 1;
+  align-self: end;
+  overflow: hidden;
+  padding: 1.4rem 0.4rem 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 800;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 5px rgba(0, 0, 0, 0.9);
+  background: linear-gradient(transparent, rgba(28, 21, 18, 0.94));
+}
+
+.reservation-venue__selector:hover {
+  transform: translateY(-2px);
+}
+
+.reservation-venue__selector[aria-pressed="true"] {
+  border-color: var(--color-gold-500);
+  box-shadow: 0 0 0 2px #fff7ed, 0 10px 18px -12px rgba(69, 10, 10, 0.95);
+}
+
+.reservation-venue__selector[aria-pressed="true"] img {
+  opacity: 0.86;
+}
+
+@media (min-width: 375px) {
+  .reservation-venue__selectors {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 640px) {
+  .reservation-venue {
+    padding: 1.5rem;
+  }
+
+  .reservation-venue__heading {
+    grid-template-columns: 1fr auto;
+    align-items: end;
+  }
+
+  .reservation-venue__stage {
+    min-height: 27rem;
+    padding-inline: 2.5rem;
+  }
+
+  .reservation-venue__card {
+    inset-inline: 2.5rem;
+  }
+
+  .reservation-venue__caption {
+    padding: 4rem 1.25rem 1.15rem;
+    font-size: 0.9rem;
+  }
+
+  .reservation-venue__caption-label {
+    font-size: 1.1rem;
+  }
+
+  .reservation-venue__arrow--previous {
+    left: 0.8rem;
+  }
+
+  .reservation-venue__arrow--next {
+    right: 0.8rem;
+  }
+
+  .reservation-venue__selectors {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .reservation-venue__selector {
+    min-height: 6rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reservation-venue__card,
+  .reservation-venue__card--back-left,
+  .reservation-venue__card--back-right,
+  .reservation-venue__card--active,
+  .reservation-venue__selector,
+  .reservation-venue__selector:hover {
+    transform: none !important;
+    transition: none !important;
+  }
+
+  .reservation-venue__card--back-left,
+  .reservation-venue__card--back-right {
+    opacity: 0;
+  }
+
+  .reservation-venue__arrow:active {
+    transform: translateY(-50%);
+  }
+}
