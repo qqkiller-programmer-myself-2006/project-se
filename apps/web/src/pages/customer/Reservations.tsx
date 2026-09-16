@@ -13,6 +13,7 @@ import { DepthHero, MotionReveal, Skeleton } from "../../components/motion";
 import { ConnectionBanner, DemoBadge } from "../../components/demo";
 import { Icon } from "../../components/icons";
 import { ReservationVenueGallery } from "../../components/ReservationVenueGallery";
+import { ReservationTableScene } from "../../components/ReservationTableScene";
 import { DEMO_RESERVATIONS, isDemoModeEnabled, isOfflineError, shouldFallbackToDemo } from "../../lib/demo";
 
 function newIdempotencyKey(): string {
@@ -47,6 +48,7 @@ export default function ReservationsPage() {
   const [note, setNote] = useState("");
   const [recommend, setRecommend] = useState<RecommendedTable | null>(null);
   const [recommendChecked, setRecommendChecked] = useState(false);
+  const [selectedSceneTableId, setSelectedSceneTableId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [createOk, setCreateOk] = useState<string | null>(null);
@@ -169,6 +171,7 @@ export default function ReservationsPage() {
       setNote("");
       setRecommend(null);
       setRecommendChecked(false);
+      setSelectedSceneTableId(null);
       setItems((await api.myReservations()).reservations);
     } catch (err) {
       setCreateError(
@@ -214,6 +217,13 @@ export default function ReservationsPage() {
       </DepthHero>
 
       <ReservationVenueGallery />
+
+      <ReservationTableScene
+        partySize={partySize}
+        recommendedTableId={recommend?.id}
+        selectedTableId={selectedSceneTableId}
+        onSelectTable={setSelectedSceneTableId}
+      />
 
       {demo ? <ConnectionBanner onRetry={() => void load()} /> : null}
 
