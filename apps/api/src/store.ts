@@ -6771,10 +6771,426 @@ export function findMigrationFile(name = MIGRATION_FILES[0]!): string {
   throw new Error(`หา migration ${name} ไม่พบ (ค้นแล้ว: ${candidates.join(" | ")})`);
 }
 
-function isDuplicateColumnError(err: unknown): boolean {
-  return (
-    !!err && typeof err === "object" && "code" in err && (err as { code: unknown }).code === "ER_DUP_FIELDNAME"
-  );
+export function isDuplicateColumnError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { code?: unknown; errno?: unknown; sqlMessage?: unknown; message?: unknown };
+  if (e.code === "ER_DUP_FIELDNAME") return true;
+  if (e.errno === 1060) return true;
+  const msg =
+    (typeof e.sqlMessage === "string" && e.sqlMessage) ||
+    (typeof e.message === "string" && e.message) ||
+    "";
+  if (/duplicate\s+column\s+name/i.test(msg)) return true;
+  return false;
+}
+
+/**
+ * แยก SQL ออกเป็น statements โดยไม่ตัด `;` ที่อยู่ใน line comment (`--`/`#`),
+ * block comment (`/* ... *​/`) หรือ string/identifier (`'...'` `"..."` `` `...` ``).
+ * คืน statements ที่ trim แล้ว เฉพาะที่มีโค้ดจริง (ข้าม comment-only/empty)
+ * เพื่อให้ migration ที่มี `;` ในคอมเมนต์ (เช่น 007) ไม่แตกเป็นชิ้น malformed.
+ */
+export function splitSqlStatements(sql: string): string[] {
+  const raw: string[] = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+  let inBacktick = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  let i = 0;
+  const len = sql.length;
+  while (i < len) {
+    const ch = sql[i]!;
+    const next = i + 1 < len ? sql[i + 1]! : "";
+    if (inLineComment) {
+      current += ch;
+      if (ch === "\n") inLineComment = false;
+      i += 1;
+      continue;
+    }
+    if (inBlockComment) {
+      current += ch;
+      if (ch === "*" && next === "/") {
+        current += next;
+        i += 2;
+        inBlockComment = false;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    if (inSingle) {
+      current += ch;
+      if (ch === "\\" && next !== "") {
+        current += next;
+        i += 2;
+        continue;
+      }
+      if (ch === "'") {
+        if (next === "'") {
+          current += next;
+          i += 2;
+          continue;
+        }
+        inSingle = false;
+      }
+      i += 1;
+      continue;
+    }
+    if (inDouble) {
+      current += ch;
+      if (ch === "\\" && next !== "") {
+        current += next;
+        i += 2;
+        continue;
+      }
+      if (ch === '"') {
+        if (next === '"') {
+          current += next;
+          i += 2;
+          continue;
+        }
+        inDouble = false;
+      }
+      i += 1;
+      continue;
+    }
+    if (inBacktick) {
+      current += ch;
+      if (ch === "\\" && next !== "") {
+        current += next;
+        i += 2;
+        continue;
+      }
+      if (ch === "`") {
+        if (next === "`") {
+          current += next;
+          i += 2;
+          continue;
+        }
+        inBacktick = false;
+      }
+      i += 1;
+      continue;
+    }
+    // อยู่นอก string/comment
+    if (ch === "-" && next === "-") {
+      const third = i + 2 < len ? sql[i + 2]! : "";
+      if (third === "" || third === " " || third === "\t" || third === "\n" || third === "\r" || third === "-") {
+        inLineComment = true;
+        current += ch + next;
+        i += 2;
+        continue;
+      }
+    }
+    if (ch === "#") {
+      inLineComment = true;
+      current += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      inBlockComment = true;
+      current += ch + next;
+      i += 2;
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      current += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      current += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === "`") {
+      inBacktick = true;
+      current += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === ";") {
+      raw.push(current);
+      current = "";
+      i += 1;
+      continue;
+    }
+    current += ch;
+    i += 1;
+  }
+  raw.push(current);
+  const out: string[] = [];
+  for (const part of raw) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    if (!statementHasExecutableCode(trimmed)) continue;
+    out.push(trimmed);
+  }
+  return out;
+}
+
+function statementHasExecutableCode(statement: string): boolean {
+  let inSingle = false;
+  let inDouble = false;
+  let inBacktick = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  let code = "";
+  let i = 0;
+  const len = statement.length;
+  while (i < len) {
+    const ch = statement[i]!;
+    const next = i + 1 < len ? statement[i + 1]! : "";
+    if (inLineComment) {
+      if (ch === "\n") inLineComment = false;
+      i += 1;
+      continue;
+    }
+    if (inBlockComment) {
+      if (ch === "*" && next === "/") {
+        i += 2;
+        inBlockComment = false;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    if (inSingle) {
+      code += ch;
+      if (ch === "\\" && next !== "") {
+        code += next;
+        i += 2;
+        continue;
+      }
+      if (ch === "'") {
+        if (next === "'") {
+          code += next;
+          i += 2;
+          continue;
+        }
+        inSingle = false;
+      }
+      i += 1;
+      continue;
+    }
+    if (inDouble) {
+      code += ch;
+      if (ch === "\\" && next !== "") {
+        code += next;
+        i += 2;
+        continue;
+      }
+      if (ch === '"') {
+        if (next === '"') {
+          code += next;
+          i += 2;
+          continue;
+        }
+        inDouble = false;
+      }
+      i += 1;
+      continue;
+    }
+    if (inBacktick) {
+      code += ch;
+      if (ch === "\\" && next !== "") {
+        code += next;
+        i += 2;
+        continue;
+      }
+      if (ch === "`") {
+        if (next === "`") {
+          code += next;
+          i += 2;
+          continue;
+        }
+        inBacktick = false;
+      }
+      i += 1;
+      continue;
+    }
+    if (ch === "-" && next === "-") {
+      const third = i + 2 < len ? statement[i + 2]! : "";
+      if (third === "" || third === " " || third === "\t" || third === "\n" || third === "\r" || third === "-") {
+        inLineComment = true;
+        i += 2;
+        continue;
+      }
+    }
+    if (ch === "#") {
+      inLineComment = true;
+      i += 1;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      inBlockComment = true;
+      i += 2;
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      code += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      code += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === "`") {
+      inBacktick = true;
+      code += ch;
+      i += 1;
+      continue;
+    }
+    code += ch;
+    i += 1;
+  }
+  return code.trim().length > 0;
+}
+
+/** คืนโค้ด SQL โดยตัด comment ออก (คง string ไว้) — ใช้ตรวจชนิด statement */
+function stripSqlComments(statement: string): string {
+  let inSingle = false;
+  let inDouble = false;
+  let inBacktick = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  let code = "";
+  let i = 0;
+  const len = statement.length;
+  while (i < len) {
+    const ch = statement[i]!;
+    const next = i + 1 < len ? statement[i + 1]! : "";
+    if (inLineComment) {
+      if (ch === "\n") {
+        inLineComment = false;
+        code += ch;
+      }
+      i += 1;
+      continue;
+    }
+    if (inBlockComment) {
+      if (ch === "*" && next === "/") {
+        i += 2;
+        inBlockComment = false;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    if (inSingle) {
+      code += ch;
+      if (ch === "\\" && next !== "") {
+        code += next;
+        i += 2;
+        continue;
+      }
+      if (ch === "'") {
+        if (next === "'") {
+          code += next;
+          i += 2;
+          continue;
+        }
+        inSingle = false;
+      }
+      i += 1;
+      continue;
+    }
+    if (inDouble) {
+      code += ch;
+      if (ch === "\\" && next !== "") {
+        code += next;
+        i += 2;
+        continue;
+      }
+      if (ch === '"') {
+        if (next === '"') {
+          code += next;
+          i += 2;
+          continue;
+        }
+        inDouble = false;
+      }
+      i += 1;
+      continue;
+    }
+    if (inBacktick) {
+      code += ch;
+      if (ch === "\\" && next !== "") {
+        code += next;
+        i += 2;
+        continue;
+      }
+      if (ch === "`") {
+        if (next === "`") {
+          code += next;
+          i += 2;
+          continue;
+        }
+        inBacktick = false;
+      }
+      i += 1;
+      continue;
+    }
+    if (ch === "-" && next === "-") {
+      const third = i + 2 < len ? statement[i + 2]! : "";
+      if (third === "" || third === " " || third === "\t" || third === "\n" || third === "\r" || third === "-") {
+        inLineComment = true;
+        i += 2;
+        continue;
+      }
+    }
+    if (ch === "#") {
+      inLineComment = true;
+      i += 1;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      inBlockComment = true;
+      i += 2;
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      code += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      code += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === "`") {
+      inBacktick = true;
+      code += ch;
+      i += 1;
+      continue;
+    }
+    code += ch;
+    i += 1;
+  }
+  return code;
+}
+
+/**
+ * จริงก็ต่อเมื่อเป็น `ALTER TABLE ... ADD [COLUMN] <col>` เท่านั้น
+ * (กันเผลอกลืน error ของ ADD INDEX/CONSTRAINT อื่น ๆ)
+ */
+export function isAlterTableAddColumnStatement(sql: string): boolean {
+  const code = stripSqlComments(sql).trim();
+  if (!/^\s*ALTER\s+TABLE\b/i.test(code)) return false;
+  if (/\bADD\s+(CONSTRAINT|INDEX|KEY|PRIMARY|FOREIGN|UNIQUE|CHECK|FULLTEXT|SPATIAL)\b/i.test(code)) return false;
+  return /\bADD\s+(COLUMN\s+)?[`"']?\w/i.test(code);
 }
 
 // ---- Ticket 05: helpers ระดับ module (ใช้ทั้ง seams ใน createMysqlStore) ----
@@ -7534,16 +7950,13 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
   try {
     for (const file of MIGRATION_FILES) {
       const migration = readFileSync(findMigrationFile(file), "utf8");
-      const statements = migration
-        .split(";")
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
+      const statements = splitSqlStatements(migration);
       for (const sql of statements) {
         try {
           await conn.query(sql);
         } catch (err) {
-          // ALTER ADD COLUMN รันซ้ำได้: มีคอลัมน์แล้ว (1060) ให้ข้าม
-          if (!sql.toUpperCase().startsWith("ALTER TABLE") || !isDuplicateColumnError(err)) throw err;
+          // ALTER TABLE ADD COLUMN รันซ้ำได้: มีคอลัมน์แล้ว (1060) ให้ข้ามเท่านั้น
+          if (!isAlterTableAddColumnStatement(sql) || !isDuplicateColumnError(err)) throw err;
         }
       }
     }
