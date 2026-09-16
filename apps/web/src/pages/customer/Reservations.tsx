@@ -330,7 +330,7 @@ export default function ReservationsPage() {
   const canConfirm = Boolean(customer && selectedTable && reservedAt && !availDemo && !creating);
 
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-5 px-4 py-6 pb-28 sm:px-6">
+    <div className="mx-auto w-full max-w-5xl space-y-5 px-4 py-6 pb-28 sm:px-6">
       <a href="#reservations-main" className="ui-skip-link">
         ข้ามไปยังการจอง
       </a>
@@ -645,7 +645,7 @@ export default function ReservationsPage() {
 
       {selectedTable && !confirmVisible && !created ? (
         <div className="fixed inset-x-0 bottom-0 z-30 border-t border-ink-200 bg-white/95 px-4 py-3 shadow-[0_-8px_24px_-16px_rgba(28,21,18,0.6)] backdrop-blur">
-          <div className="mx-auto flex max-w-4xl items-center justify-between gap-3">
+          <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
             <p className="min-w-0 text-sm leading-tight text-ink-800">
               <strong className="block truncate">
                 โต๊ะ {selectedTable.name} · {partySize} คน

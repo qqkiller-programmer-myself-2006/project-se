@@ -33,7 +33,11 @@ describe("ขั้นเลือกโซนและโต๊ะ", () => {
   it("การ์ดโซนบอกจำนวนโต๊ะว่าง และรายการโต๊ะบอกสถานะชัดเจน", async () => {
     render(<Harness />);
     const zones = screen.getByRole("group", { name: "เลือกโซนที่นั่ง" });
-    expect(within(zones).getByRole("button", { name: /ดูทั้งร้าน/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /ดูทั้งร้าน · ว่าง 3 จาก 5 โต๊ะ/ })).toHaveAttribute("aria-pressed", "true");
+    // การ์ดโซนแสดงรูปจริงของแต่ละโซน
+    expect(zones.querySelectorAll("img")).toHaveLength(4);
+    // ภาพรวมยังไม่แสดงรูปเทียบ
+    expect(screen.queryByText("รูปจริง")).not.toBeInTheDocument();
     expect(within(zones).getByRole("button", { name: "โซนหน้าร้าน (ใต้กันสาด) ว่าง 1/2 โต๊ะ" })).toBeInTheDocument();
     expect(within(zones).getByRole("button", { name: "โซนห้องอาหาร ว่าง 1/2 โต๊ะ" })).toBeInTheDocument();
     expect(within(zones).getByRole("button", { name: "โซนศาลากลางแจ้ง ไม่มีโต๊ะ" })).toBeInTheDocument();
@@ -101,5 +105,36 @@ describe("ขั้นเลือกโซนและโต๊ะ", () => {
       <ReservationTableScene tables={[]} recommendedTableId={null} partySize={2} selectedTableId={null} onSelectTable={() => {}} loading />,
     );
     expect(screen.getByText("กำลังตรวจสอบโต๊ะว่าง…")).toBeInTheDocument();
+  });
+  it("เปิดโซนแล้วเห็นรูปจริงขนาดใหญ่คู่กับแบบจำลอง เปลี่ยนรูปได้ และขยายเต็มจอได้", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: /^โซนหน้าร้าน/ }));
+    expect(screen.getByText("รูปจริง")).toBeInTheDocument();
+    expect(screen.getByText("แบบจำลอง 3 มิติ")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /มองจากในร้านออกไปหน้าร้าน/ })).toHaveAttribute(
+      "src",
+      "/venue/reservations/storefront-seating.jpg",
+    );
+
+    const thumbs = screen.getByRole("group", { name: "รูปอื่นในโซนหน้าร้าน (ใต้กันสาด)" });
+    await user.click(within(thumbs).getByRole("button", { name: /เคาน์เตอร์ชาใต้ข้างทางเข้า/ }));
+    expect(within(thumbs).getByRole("button", { name: /เคาน์เตอร์ชาใต้ข้างทางเข้า/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText(/รูป 2\/3/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^ขยายรูป เคาน์เตอร์ชาใต้/ }));
+    const dialog = screen.getByRole("dialog", { name: /รูปจริง: เคาน์เตอร์ชาใต้/ });
+    expect(within(dialog).getByRole("button", { name: "ปิดรูป" })).toHaveFocus();
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("dialog", { name: /รูปจริง: เมนูเครื่องดื่ม/ })).toBeInTheDocument();
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "รูปถัดไป" }));
+    expect(screen.getByRole("dialog", { name: /มองจากในร้านออกไปหน้าร้าน/ })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^ขยายรูป มองจากในร้าน/ })).toHaveFocus();
+
+    // กลับไปดูทั้งร้าน รูปเทียบหายไป
+    await user.click(screen.getByRole("button", { name: /ดูทั้งร้าน/ }));
+    expect(screen.queryByText("รูปจริง")).not.toBeInTheDocument();
   });
 });

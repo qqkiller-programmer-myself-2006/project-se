@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { TABLE_ZONE_LABELS, type TableAvailability, type TableZone } from "../lib/api";
-import { getZone, placeTables, summarizeZones, venueZones } from "./venueModel";
+import { getZone, getZoneView, placeTables, summarizeZones, venueZones } from "./venueModel";
+import { PhotoLightbox, ZonePhotoViewer } from "./ZonePhotos";
 import "./ReservationTableScene.css";
 
 // three.js มีขนาดใหญ่ — โหลดโมเดลสามมิติเฉพาะเมื่อหน้านี้แสดงผล
@@ -37,7 +38,15 @@ export function ReservationTableScene({
   onSelectTable,
   loading = false,
 }: ReservationTableSceneProps) {
-  const [focusZoneId, setFocusZoneId] = useState<TableZone | null>(null);
+  const [focusZoneId, setFocusZoneIdState] = useState<TableZone | null>(null);
+  const [photoIndex, setPhotoIndex] = useState(0);
+  const [viewNonce, setViewNonce] = useState(0);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  function setFocusZoneId(zone: TableZone | null) {
+    if (zone === focusZoneId) return;
+    setFocusZoneIdState(zone);
+    setPhotoIndex(0);
+  }
   const { placed } = useMemo(() => placeTables(tables), [tables]);
   const summaries = useMemo(() => summarizeZones(tables), [tables]);
   const selected = tables.find((t) => t.id === selectedTableId) ?? null;
@@ -68,21 +77,18 @@ export function ReservationTableScene({
 
   return (
     <div className="table-picker">
-      <div className="table-picker__zones" role="group" aria-label="เลือกโซนที่นั่ง">
+      <div className="table-picker__zones-head">
+        <p className="table-picker__zones-title">แตะรูปโซนที่อยากนั่ง</p>
         <button
           type="button"
-          className="table-picker__zone table-picker__zone--all"
+          className="table-picker__all"
           aria-pressed={focusZoneId === null}
           onClick={() => setFocusZoneId(null)}
         >
-          <span className="table-picker__zone-icon" aria-hidden="true">
-            ⌂
-          </span>
-          <span className="table-picker__zone-text">
-            <strong>ดูทั้งร้าน</strong>
-            <small>{loading ? "กำลังตรวจโต๊ะว่าง…" : `ว่าง ${availableCount} จาก ${tables.length} โต๊ะ`}</small>
-          </span>
+          ดูทั้งร้าน · {loading ? "กำลังตรวจโต๊ะว่าง…" : `ว่าง ${availableCount} จาก ${tables.length} โต๊ะ`}
         </button>
+      </div>
+      <div className="table-picker__zones" role="group" aria-label="เลือกโซนที่นั่ง">
         {venueZones.map((zone) => {
           const s = summaries.find((x) => x.zone === zone.id);
           const available = s?.available ?? 0;
@@ -92,16 +98,29 @@ export function ReservationTableScene({
             <button
               key={zone.id}
               type="button"
-              className={`table-picker__zone${!loading && available === 0 ? " is-full" : ""}`}
+              className={`zone-card${!loading && available === 0 ? " is-full" : ""}`}
               aria-pressed={focusZoneId === zone.id}
               aria-label={`${zone.label} ${loading ? "กำลังตรวจโต๊ะว่าง" : status}`}
               onClick={() => setFocusZoneId(zone.id)}
             >
-              <img src={zone.photo} alt="" width={96} height={72} loading="lazy" decoding="async" />
-              <span className="table-picker__zone-text">
+              <img
+                className={`zone-card__img is-${zone.photos[0]!.orientation}`}
+                src={zone.photos[0]!.src}
+                alt=""
+                width={480}
+                height={360}
+                loading="lazy"
+                decoding="async"
+              />
+              <span className="zone-card__body">
                 <strong>{zone.shortLabel}</strong>
                 <small>{loading ? "กำลังตรวจ…" : status}</small>
               </span>
+              {focusZoneId === zone.id ? (
+                <span className="zone-card__check" aria-hidden="true">
+                  ✓
+                </span>
+              ) : null}
             </button>
           );
         })}
@@ -117,23 +136,49 @@ export function ReservationTableScene({
         )}
       </p>
 
-      <Suspense
-        fallback={
-          <div className="venue-scene-3d venue-scene-3d--fallback" role="status">
-            <p>กำลังโหลดโมเดลสามมิติของร้าน…</p>
-          </div>
-        }
-      >
-        <VenueScene3D
-          tables={placed}
-          zoneSummaries={summaries}
-          focusZoneId={focusZoneId}
-          selectedTableId={selectedTableId}
-          recommendedTableId={recommendedTableId}
-          onTableClick={selectById}
-          onZoneClick={setFocusZoneId}
+      <div className={`table-picker__stage${focused ? " is-compare" : ""}`}>
+        {focused ? (
+          <ZonePhotoViewer
+            zoneLabel={focused.label}
+            photos={focused.photos}
+            index={photoIndex}
+            onIndexChange={setPhotoIndex}
+            onOpen={() => setLightboxOpen(true)}
+            onMatchView={() => setViewNonce((n) => n + 1)}
+          />
+        ) : null}
+        <div className="table-picker__model">
+          <span className="zone-photo__tag is-model">แบบจำลอง 3 มิติ</span>
+          <Suspense
+            fallback={
+              <div className="venue-scene-3d venue-scene-3d--fallback" role="status">
+                <p>กำลังโหลดโมเดลสามมิติของร้าน…</p>
+              </div>
+            }
+          >
+            <VenueScene3D
+              tables={placed}
+              zoneSummaries={summaries}
+              focusZoneId={focusZoneId}
+              view={getZoneView(focusZoneId, photoIndex)}
+              viewKey={`${focusZoneId ?? "all"}:${photoIndex}:${viewNonce}`}
+              selectedTableId={selectedTableId}
+              recommendedTableId={recommendedTableId}
+              onTableClick={selectById}
+              onZoneClick={setFocusZoneId}
+            />
+          </Suspense>
+        </div>
+      </div>
+
+      {lightboxOpen && focused ? (
+        <PhotoLightbox
+          photos={focused.photos}
+          index={photoIndex}
+          onIndexChange={setPhotoIndex}
+          onClose={() => setLightboxOpen(false)}
         />
-      </Suspense>
+      ) : null}
 
       <ul className="table-picker__legend" aria-label="คำอธิบายสีโต๊ะ">
         <li><i className="is-available" aria-hidden="true" />ว่าง เลือกได้</li>

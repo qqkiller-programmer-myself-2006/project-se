@@ -204,7 +204,7 @@ describe("หน้าจองโต๊ะของลูกค้า (3 ขั
     });
     renderPage();
     expect(await screen.findByText(/กำลังแสดงผังตัวอย่าง/)).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /^โต๊ะ [A-Z]\d / })).toHaveLength(12);
+    expect(screen.getAllByRole("button", { name: /^โต๊ะ [A-Z]\d / })).toHaveLength(13);
   });
 
   it("สมาชิกเห็นการจองของตนเองพร้อมรหัสและโต๊ะ", async () => {

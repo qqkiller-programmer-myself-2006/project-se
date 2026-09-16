@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { TableAvailability } from "../src/lib/api";
 import {
   demoAvailability,
-  getZoneFocus,
+  getZoneView,
+  OVERVIEW_VIEW,
   isDemoTableId,
   placeTables,
   summarizeZones,
@@ -14,12 +15,21 @@ function t(name: string, zone: TableAvailability["zone"], status: TableAvailabil
 }
 
 describe("ผังร้านสำหรับโมเดลสามมิติ", () => {
-  it("มี 4 โซนตามลำดับ และทุกโซนมีรูปจริงกับช่องวางโต๊ะ", () => {
+  it("มี 4 โซนตามลำดับ และทุกโซนมีรูปจริง (พร้อมมุมกล้อง) กับช่องวางโต๊ะ", () => {
     expect(venueZones.map((z) => z.id)).toEqual(["front", "dining", "kitchen", "sala"]);
+    const allPhotos = venueZones.flatMap((z) => z.photos.map((p) => p.src));
     for (const zone of venueZones) {
-      expect(zone.photo).toMatch(/^\/venue\//);
+      expect(zone.photos.length).toBeGreaterThan(0);
+      for (const photo of zone.photos) {
+        expect(photo.src).toMatch(/^\/venue\/.+\.jpg$/);
+        expect(photo.alt.length).toBeGreaterThan(10);
+        const { position: p, target: t } = photo.view;
+        expect(Math.hypot(p.x - t.x, p.y - t.y, p.z - t.z)).toBeGreaterThan(2);
+      }
       expect(zone.slots.length).toBeGreaterThan(0);
     }
+    // รูปถ่ายร้านที่ลูกค้าส่งมาต้องถูกใช้ครบทุกรูป
+    expect(new Set(allPhotos).size).toBe(9);
   });
 
   it("ช่องวางโต๊ะในโซนเดียวกันไม่ซ้อนกัน (ห่างกันพอสำหรับโต๊ะพร้อมเก้าอี้)", () => {
@@ -33,12 +43,13 @@ describe("ผังร้านสำหรับโมเดลสามมิ�
   });
 
   it("วางโต๊ะลงช่องตามลำดับ โต๊ะเกินช่องหรือไม่มีโซนไม่ถูกวาง", () => {
-    const tables = [t("S1", "sala"), t("S2", "sala"), t("S3", "sala"), t("X1", null), t("D1", "dining")];
+    const tables = [t("S1", "sala"), t("S2", "sala"), t("S3", "sala"), t("S4", "sala"), t("X1", null), t("D1", "dining")];
     const { placed, unplaced } = placeTables(tables);
-    expect(placed.map((p) => p.name)).toEqual(["S1", "S2", "D1"]);
+    expect(placed.map((p) => p.name)).toEqual(["S1", "S2", "S3", "D1"]);
     expect(placed[0]!.slot).toBe(venueZones[3]!.slots[0]);
-    expect(placed[2]!.slot).toBe(venueZones[1]!.slots[0]);
-    expect(unplaced.map((p) => p.name)).toEqual(["S3", "X1"]);
+    expect(placed[1]!.slot).toBe(venueZones[3]!.slots[1]);
+    expect(placed[3]!.slot).toBe(venueZones[1]!.slots[0]);
+    expect(unplaced.map((p) => p.name)).toEqual(["S4", "X1"]);
   });
 
   it("สรุปจำนวนโต๊ะว่างต่อโซน และแสดงโซนอื่นเฉพาะเมื่อมีโต๊ะไม่มีโซน", () => {
@@ -54,7 +65,7 @@ describe("ผังร้านสำหรับโมเดลสามมิ�
 
   it("ผังตัวอย่างคำนวณที่นั่งไม่พอและโต๊ะแนะนำตามจำนวนคน", () => {
     const demo = demoAvailability(5);
-    expect(demo.tables).toHaveLength(12);
+    expect(demo.tables).toHaveLength(13);
     expect(demo.tables.every((x) => isDemoTableId(x.id))).toBe(true);
     expect(demo.tables.find((x) => x.name === "D1")!.status).toBe("too_small");
     expect(demo.tables.find((x) => x.name === "F2")!.status).toBe("booked");
@@ -62,7 +73,9 @@ describe("ผังร้านสำหรับโมเดลสามมิ�
     expect(isDemoTableId("real-uuid")).toBe(false);
   });
 
-  it("มุมกล้องภาพรวมเมื่อไม่ได้เลือกโซน", () => {
-    expect(getZoneFocus(null).distance).toBeGreaterThan(getZoneFocus("dining").distance);
+  it("มุมกล้องตามรูปที่เลือก และภาพรวมเมื่อไม่ได้เลือกโซน", () => {
+    expect(getZoneView(null)).toBe(OVERVIEW_VIEW);
+    expect(getZoneView("front", 1)).toBe(venueZones[0]!.photos[1]!.view);
+    expect(getZoneView("front", 99)).toBe(venueZones[0]!.photos[0]!.view);
   });
 });
