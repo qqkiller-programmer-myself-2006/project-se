@@ -1,160 +1,198 @@
-import { useMemo, useState, type CSSProperties } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import { TABLE_ZONE_LABELS, type TableAvailability, type TableZone } from "../lib/api";
+import { getZone, placeTables, summarizeZones, venueZones } from "./venueModel";
 import "./ReservationTableScene.css";
 
-type TableFixture = {
-  id: string;
-  name: string;
-  capacity: number;
-  zone: string;
-  status: "available" | "occupied";
-  x: string;
-  y: string;
-  depth: number;
-  turn: number;
-};
+// three.js มีขนาดใหญ่ — โหลดโมเดลสามมิติเฉพาะเมื่อหน้านี้แสดงผล
+const VenueScene3D = lazy(() => import("./VenueScene3D").then((m) => ({ default: m.VenueScene3D })));
 
 type ReservationTableSceneProps = {
-  partySize: number | string;
-  recommendedTableId?: string | null;
-  selectedTableId?: string | null;
-  onSelectTable?: (tableId: string | null) => void;
+  tables: TableAvailability[];
+  recommendedTableId: string | null;
+  partySize: number;
+  selectedTableId: string | null;
+  onSelectTable: (tableId: string | null) => void;
+  loading?: boolean;
 };
 
-const tables: TableFixture[] = [
-  { id: "table-a1", name: "A1", capacity: 2, zone: "โซนหน้าร้าน", status: "available", x: "17%", y: "21%", depth: 4, turn: -5 },
-  { id: "table-a2", name: "A2", capacity: 2, zone: "โซนหน้าร้าน", status: "occupied", x: "55%", y: "18%", depth: 2, turn: 4 },
-  { id: "table-b1", name: "B1", capacity: 4, zone: "โซนกลางร้าน", status: "available", x: "8%", y: "48%", depth: 16, turn: 5 },
-  { id: "table-b2", name: "B2", capacity: 4, zone: "โซนกลางร้าน", status: "available", x: "42%", y: "44%", depth: 18, turn: -3 },
-  { id: "table-b3", name: "B3", capacity: 4, zone: "โซนกลางร้าน", status: "occupied", x: "72%", y: "48%", depth: 14, turn: 5 },
-  { id: "table-c1", name: "C1", capacity: 6, zone: "โซนด้านใน", status: "available", x: "8%", y: "72%", depth: 34, turn: -4 },
-  { id: "table-c2", name: "C2", capacity: 8, zone: "โซนด้านใน", status: "available", x: "38%", y: "70%", depth: 38, turn: 3 },
-  { id: "table-d1", name: "D1", capacity: 4, zone: "โซนระเบียง", status: "available", x: "68%", y: "72%", depth: 36, turn: -2 },
-];
+const STATUS_TEXT: Record<TableAvailability["status"], string> = {
+  available: "ว่าง",
+  booked: "จองแล้ว",
+  too_small: "ที่นั่งไม่พอ",
+};
 
-function statusText(table: TableFixture, selected: boolean): string {
-  if (selected) return "เลือกอยู่";
-  return table.status === "occupied" ? "ไม่ว่าง" : "ว่าง";
+function zoneLabel(zone: TableZone | null): string {
+  return zone ? TABLE_ZONE_LABELS[zone] : "โซนอื่น ๆ";
 }
 
+/**
+ * ขั้นเลือกโซนและโต๊ะ: การ์ดโซน (รูปจริง + จำนวนโต๊ะว่าง) → โมเดลสามมิติ → รายการโต๊ะ
+ * รายการโต๊ะคือช่องทางหลักที่เข้าถึงได้ทุกอุปกรณ์ ส่วนโมเดลสามมิติช่วยให้เห็นตำแหน่งจริง
+ */
 export function ReservationTableScene({
+  tables,
+  recommendedTableId,
   partySize,
-  recommendedTableId = null,
   selectedTableId,
   onSelectTable,
+  loading = false,
 }: ReservationTableSceneProps) {
-  const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
-  const selectedId = selectedTableId === undefined ? internalSelectedId : selectedTableId;
-  const party = Number(partySize);
-  const normalizedPartySize = Number.isFinite(party) && party > 0 ? Math.floor(party) : 1;
-  const selected = useMemo(() => tables.find((table) => table.id === selectedId) ?? null, [selectedId]);
+  const [focusZoneId, setFocusZoneId] = useState<TableZone | null>(null);
+  const { placed } = useMemo(() => placeTables(tables), [tables]);
+  const summaries = useMemo(() => summarizeZones(tables), [tables]);
+  const selected = tables.find((t) => t.id === selectedTableId) ?? null;
+  const recommended = tables.find((t) => t.id === recommendedTableId && t.status === "available") ?? null;
+  const availableCount = tables.filter((t) => t.status === "available").length;
 
-  function selectTable(table: TableFixture) {
-    if (table.status === "occupied") return;
-    const nextId = table.id === selectedId ? null : table.id;
-    setInternalSelectedId(nextId);
-    onSelectTable?.(nextId);
+  // เลือกโต๊ะจากที่อื่น (เช่น "ให้ระบบเลือกให้") → พากล้องไปที่โซนของโต๊ะนั้น
+  const selectedZone = selected?.zone ?? null;
+  useEffect(() => {
+    if (selectedZone) setFocusZoneId(selectedZone);
+  }, [selectedTableId, selectedZone]);
+
+  function toggleTable(table: TableAvailability) {
+    if (table.status !== "available") return;
+    onSelectTable(table.id === selectedTableId ? null : table.id);
   }
 
+  function selectById(id: string) {
+    const table = tables.find((t) => t.id === id);
+    if (table) toggleTable(table);
+  }
+
+  const visibleGroups = summaries
+    .filter((s) => focusZoneId === null || s.zone === focusZoneId)
+    .map((s) => ({ zone: s.zone, tables: tables.filter((t) => (t.zone ?? null) === s.zone) }))
+    .filter((g) => g.tables.length > 0);
+  const focused = getZone(focusZoneId);
+
   return (
-    <section className="reservation-table-scene" aria-labelledby="reservation-table-scene-title">
-      <div className="reservation-table-scene__heading">
-        <div>
-          <p className="reservation-table-scene__eyebrow">ลองเลือกมุมที่นั่ง</p>
-          <h2 id="reservation-table-scene-title" className="font-display text-xl font-bold text-ink-900 sm:text-2xl">
-            แบบจำลองโต๊ะภายในร้าน
-          </h2>
-        </div>
-        <p className="reservation-table-scene__party" aria-live="polite">
-          กำลังดูโต๊ะสำหรับ {normalizedPartySize} คน
-        </p>
+    <div className="table-picker">
+      <div className="table-picker__zones" role="group" aria-label="เลือกโซนที่นั่ง">
+        <button
+          type="button"
+          className="table-picker__zone table-picker__zone--all"
+          aria-pressed={focusZoneId === null}
+          onClick={() => setFocusZoneId(null)}
+        >
+          <span className="table-picker__zone-icon" aria-hidden="true">
+            ⌂
+          </span>
+          <span className="table-picker__zone-text">
+            <strong>ดูทั้งร้าน</strong>
+            <small>{loading ? "กำลังตรวจโต๊ะว่าง…" : `ว่าง ${availableCount} จาก ${tables.length} โต๊ะ`}</small>
+          </span>
+        </button>
+        {venueZones.map((zone) => {
+          const s = summaries.find((x) => x.zone === zone.id);
+          const available = s?.available ?? 0;
+          const total = s?.total ?? 0;
+          const status = total === 0 ? "ไม่มีโต๊ะ" : available === 0 ? "เต็ม" : `ว่าง ${available}/${total} โต๊ะ`;
+          return (
+            <button
+              key={zone.id}
+              type="button"
+              className={`table-picker__zone${!loading && available === 0 ? " is-full" : ""}`}
+              aria-pressed={focusZoneId === zone.id}
+              aria-label={`${zone.label} ${loading ? "กำลังตรวจโต๊ะว่าง" : status}`}
+              onClick={() => setFocusZoneId(zone.id)}
+            >
+              <img src={zone.photo} alt="" width={96} height={72} loading="lazy" decoding="async" />
+              <span className="table-picker__zone-text">
+                <strong>{zone.shortLabel}</strong>
+                <small>{loading ? "กำลังตรวจ…" : status}</small>
+              </span>
+            </button>
+          );
+        })}
       </div>
 
-      <p className="reservation-table-scene__disclaimer">
-        แบบจำลองนี้ใช้ช่วยเลือกโซนที่ชอบเท่านั้น ไม่ใช่ผังที่วัดตามขนาดจริง ตำแหน่งโต๊ะอาจเปลี่ยนตามการจัดร้าน
-        และระบบจะจัดโต๊ะจริงตามข้อมูลว่าง
-      </p>
-
-      <div className="reservation-table-scene__viewport">
-        <div className="reservation-table-scene__backdrop" aria-hidden="true">
-          <img
-            className="reservation-table-scene__backdrop-primary"
-            src="/venue/latest/real-counter-seating.jpg"
-            alt=""
-            loading="lazy"
-            decoding="async"
-          />
-          <img
-            className="reservation-table-scene__backdrop-secondary"
-            src="/venue/latest/real-outdoor-seating.jpg"
-            alt=""
-            loading="lazy"
-            decoding="async"
-          />
-        </div>
-        <div className="reservation-table-scene__floor" aria-hidden="true" />
-        <div className="reservation-table-scene__zone-labels" aria-label="โซนที่นั่งในแบบจำลอง">
-          <span className="is-front">โซนหน้าร้าน</span>
-          <span className="is-middle">โซนกลางร้าน</span>
-          <span className="is-inside">โซนด้านใน</span>
-          <span className="is-terrace">โซนระเบียง</span>
-        </div>
-        <div className="reservation-table-scene__tables" role="group" aria-label="เลือกโต๊ะจากแบบจำลอง">
-          {tables.map((table) => {
-            const isSelected = table.id === selectedId;
-            const isOccupied = table.status === "occupied";
-            const isRecommended = table.id === recommendedTableId;
-            const isTooSmall = table.capacity < normalizedPartySize;
-            const style = {
-              "--table-x": table.x,
-              "--table-y": table.y,
-              "--table-depth": `${table.depth}px`,
-              "--table-turn": `${table.turn}deg`,
-            } as CSSProperties;
-
-            return (
-              <button
-                key={table.id}
-                type="button"
-                className={`reservation-table-scene__table${isSelected ? " is-selected" : ""}${isOccupied ? " is-occupied" : ""}${isRecommended ? " is-recommended" : ""}${isTooSmall ? " is-too-small" : ""}`}
-                style={style}
-                aria-label={`${table.name} ${table.zone} รองรับ ${table.capacity} คน สถานะ${statusText(table, isSelected)}${isRecommended ? " โต๊ะที่ระบบแนะนำ" : ""}${isTooSmall ? ` รองรับไม่พอสำหรับ ${normalizedPartySize} คน` : ""}`}
-                aria-pressed={isSelected}
-                aria-disabled={isOccupied}
-                onClick={() => selectTable(table)}
-              >
-                <span className="reservation-table-scene__tabletop" aria-hidden="true" />
-                <span className="reservation-table-scene__table-name">{table.name}</span>
-                <span className="reservation-table-scene__table-capacity">{table.capacity} คน</span>
-                <span className="reservation-table-scene__table-status">{statusText(table, isSelected)}</span>
-                {isRecommended ? <span className="reservation-table-scene__recommended">แนะนำ</span> : null}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="reservation-table-scene__legend" aria-label="คำอธิบายสถานะโต๊ะ">
-        <span><i className="is-available" aria-hidden="true" />ว่าง</span>
-        <span><i className="is-occupied" aria-hidden="true" />ไม่ว่าง</span>
-        <span><i className="is-selected" aria-hidden="true" />เลือกอยู่</span>
-        <span><i className="is-recommended" aria-hidden="true" />ระบบแนะนำ</span>
-      </div>
-
-      <div className="reservation-table-scene__summary" role="status" aria-live="polite" aria-atomic="true">
-        {selected ? (
+      <p className="table-picker__zone-caption">
+        {focused ? (
           <>
-            <strong>ความต้องการโต๊ะ: {selected.name}</strong>
-            <span>{selected.zone} · รองรับ {selected.capacity} คน</span>
-            {selected.capacity < normalizedPartySize ? (
-              <span className="reservation-table-scene__warning">โต๊ะนี้อาจเล็กเกินไปสำหรับจำนวนผู้ใช้บริการที่ระบุ</span>
-            ) : (
-              <span>บันทึกเป็นความต้องการเบื้องต้นบนหน้านี้ โดยระบบยังเป็นผู้จัดโต๊ะจริงตามข้อมูลว่าง</span>
-            )}
+            <strong>{focused.label}</strong> — {focused.caption}
           </>
         ) : (
-          <span>เลือกโต๊ะในแบบจำลองเพื่อดูโซนและจำนวนที่นั่ง</span>
+          "แตะป้ายโซนบนโมเดลหรือการ์ดด้านบน เพื่อซูมเข้าไปเลือกโต๊ะ"
+        )}
+      </p>
+
+      <Suspense
+        fallback={
+          <div className="venue-scene-3d venue-scene-3d--fallback" role="status">
+            <p>กำลังโหลดโมเดลสามมิติของร้าน…</p>
+          </div>
+        }
+      >
+        <VenueScene3D
+          tables={placed}
+          zoneSummaries={summaries}
+          focusZoneId={focusZoneId}
+          selectedTableId={selectedTableId}
+          recommendedTableId={recommendedTableId}
+          onTableClick={selectById}
+          onZoneClick={setFocusZoneId}
+        />
+      </Suspense>
+
+      <ul className="table-picker__legend" aria-label="คำอธิบายสีโต๊ะ">
+        <li><i className="is-available" aria-hidden="true" />ว่าง เลือกได้</li>
+        <li><i className="is-selected" aria-hidden="true" />โต๊ะที่คุณเลือก</li>
+        <li><i className="is-recommended" aria-hidden="true" />ระบบแนะนำ</li>
+        <li><i className="is-booked" aria-hidden="true" />จองแล้ว</li>
+        <li><i className="is-too_small" aria-hidden="true" />ที่นั่งไม่พอ</li>
+      </ul>
+
+      {recommended && recommended.id !== selectedTableId ? (
+        <button type="button" className="table-picker__recommend" onClick={() => onSelectTable(recommended.id)}>
+          <span aria-hidden="true">★</span> ให้ระบบเลือกให้: โต๊ะ {recommended.name} · {zoneLabel(recommended.zone)} ·{" "}
+          {recommended.capacity} ที่นั่ง
+        </button>
+      ) : null}
+
+      <div className="table-picker__list" role="group" aria-label={`เลือกโต๊ะสำหรับ ${partySize} คน`}>
+        {loading && tables.length === 0 ? (
+          <p className="table-picker__empty" role="status">
+            กำลังตรวจสอบโต๊ะว่าง…
+          </p>
+        ) : visibleGroups.length === 0 ? (
+          <p className="table-picker__empty">
+            {focusZoneId ? "โซนนี้ยังไม่มีโต๊ะให้จอง ลองดูโซนอื่น" : "ยังไม่มีโต๊ะให้จองในขณะนี้"}
+          </p>
+        ) : (
+          visibleGroups.map((group) => (
+            <section key={group.zone ?? "other"} className="table-picker__group" aria-label={zoneLabel(group.zone)}>
+              <h3>{zoneLabel(group.zone)}</h3>
+              <ul>
+                {group.tables.map((table) => {
+                  const isSelected = table.id === selectedTableId;
+                  const isRecommended = table.id === recommendedTableId && table.status === "available";
+                  return (
+                    <li key={table.id}>
+                      <button
+                        type="button"
+                        className={`table-picker__table is-${table.status}${isSelected ? " is-selected" : ""}`}
+                        aria-pressed={isSelected}
+                        aria-disabled={table.status !== "available"}
+                        aria-label={`โต๊ะ ${table.name} ${zoneLabel(table.zone)} ${table.capacity} ที่นั่ง สถานะ${STATUS_TEXT[table.status]}${isRecommended ? " ระบบแนะนำ" : ""}${table.status === "too_small" ? ` ไม่พอสำหรับ ${partySize} คน` : ""}`}
+                        onClick={() => toggleTable(table)}
+                      >
+                        <span className="table-picker__table-name">
+                          {isSelected ? <span aria-hidden="true">✓ </span> : null}
+                          {table.name}
+                        </span>
+                        <span className="table-picker__table-seats">{table.capacity} ที่นั่ง</span>
+                        <span className="table-picker__table-status">{isSelected ? "เลือกแล้ว" : STATUS_TEXT[table.status]}</span>
+                        {isRecommended ? <span className="table-picker__badge">แนะนำ</span> : null}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ))
         )}
       </div>
-    </section>
+    </div>
   );
 }

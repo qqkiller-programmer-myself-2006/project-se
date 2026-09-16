@@ -1,6 +1,6 @@
 # Checklist: ซ้อม migration ก่อน release (Ticket 14)
 
-ใช้ตรวจ migration `db/migrations/001–014` แบบไม่ต้องมี Docker/MySQL
+ใช้ตรวจ migration `db/migrations/001–015` แบบไม่ต้องมี Docker/MySQL
 (รันจริงบนเครื่องที่มี DB ตามขั้นตอนข้อ 4) สคริปต์ตรวจอัตโนมัติ:
 `node scripts/verify-restore.mjs` (exit 0 = ผ่านระดับ static)
 
@@ -21,6 +21,7 @@
 012_finance_entries.sql
 013_line_notifications.sql
 014_capacity_wait_predictions.sql
+015_table_zones.sql
 ```
 
 ลำดับใน `MIGRATION_FILES` (`apps/api/src/store.ts`) ต้องตรงกับรายการนี้
@@ -44,7 +45,7 @@
 
 ## 4. Rehearsal บนฐานจริง (ทำบน staging/ฐานซ้อมเท่านั้น — ห้ามรันบน production ตรง)
 
-- [ ] สร้างฐานเปล่า → รัน migration 001→014 จากศูนย์ → app บูตได้ (`/api/ready` 200)
+- [ ] สร้างฐานเปล่า → รัน migration 001→015 จากศูนย์ → app บูตได้ (`/api/ready` 200)
 - [ ] รัน migration ซ้ำรอบสองบนฐานเดิม → ต้องสำเร็จโดยไม่มี error (idempotent)
 - [ ] รัน `*.int.test.ts` ด้วย `TEST_DATABASE_URL` แยก → ผ่าน (รวม rollback test
       เมื่อ audit เขียนไม่ได้ และ migration รันซ้ำ)

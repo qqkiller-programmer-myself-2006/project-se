@@ -161,6 +161,38 @@ export function createReservationRouter(deps: ReservationRouterDeps): express.Ro
     }
   });
 
+  // ---------- สาธารณะ: ผังสถานะโต๊ะ ณ เวลานัด (ไม่ต้อง login — ไม่มีข้อมูลการจอง/ลูกค้า) ----------
+  router.get("/api/reservations/availability", async (req, res, next) => {
+    try {
+      const parsed = recommendQuerySchema.safeParse(req.query);
+      if (!parsed.success) {
+        res.status(400).json({ error: zodMessage(parsed.error) });
+        return;
+      }
+      let partySize: number;
+      try {
+        partySize = normalizePartySize(parsed.data.partySize);
+      } catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : "จำนวนผู้ใช้บริการไม่ถูกต้อง" });
+        return;
+      }
+      const rawAt = parsed.data.reservedAt;
+      if (typeof rawAt !== "string" || rawAt.trim().length === 0) {
+        res.status(400).json({ error: "กรุณาระบุวันเวลานัดหมาย" });
+        return;
+      }
+      const d = new Date(rawAt);
+      if (Number.isNaN(d.getTime())) {
+        res.status(400).json({ error: "รูปแบบวันเวลานัดไม่ถูกต้อง" });
+        return;
+      }
+      const result = await store.listReservationAvailability(partySize, d.toISOString());
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  });
+
   // ---------- สาธารณะ: รอบโต๊ะที่เปิดอยู่แบบ sanitize (ไม่มีข้อมูลลูกค้า/รหัสจอง) ----------
   router.get("/api/shop/table-rounds", async (_req, res, next) => {
     try {

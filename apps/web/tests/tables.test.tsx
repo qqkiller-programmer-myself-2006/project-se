@@ -120,4 +120,36 @@ describe("หน้าจัดการโต๊ะ (Owner/Admin)", () => {
     await user.click(screen.getAllByRole("button", { name: "งดใช้งาน" })[0]!);
     expect(await screen.findByRole("status")).toHaveTextContent(/งดใช้งานโต๊ะ/);
   });
+  it("เพิ่มโต๊ะพร้อมโซน และแก้โซนของโต๊ะเดิมได้", async () => {
+    const user = userEvent.setup();
+    const bodies: { method: string; body: Record<string, unknown> }[] = [];
+    stubFetch((url, init) => {
+      if (url.includes("/api/tables") && (init?.method === "POST" || init?.method === "PATCH")) {
+        bodies.push({ method: init.method, body: JSON.parse(String(init.body)) });
+        return { ok: true, status: 200, json: async () => ({ table: { ...tables[0], zone: "sala" } }) };
+      }
+      return { ok: true, json: async () => ({ tables: [{ ...tables[0], zone: "dining" }, tables[1]] }) };
+    });
+    render(
+      <MemoryRouter>
+        <TablesPage />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText(/4 ที่นั่ง · โซนห้องอาหาร/)).toBeInTheDocument();
+    expect(screen.getByText(/2 ที่นั่ง · ยังไม่กำหนดโซน/)).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("ชื่อโต๊ะ (ไม่ซ้ำ)"), "S9");
+    await user.selectOptions(screen.getByLabelText("โซนที่นั่ง"), "sala");
+    await user.click(screen.getByRole("button", { name: "เพิ่มโต๊ะ" }));
+    await screen.findByText(/เพิ่มโต๊ะ A1 แล้ว/);
+    expect(bodies[0]).toEqual({ method: "POST", body: { name: "S9", capacity: 4, zone: "sala" } });
+
+    await user.click(screen.getAllByRole("button", { name: "แก้ชื่อ/ความจุ/โซน" })[0]!);
+    const editZone = screen.getAllByLabelText("โซนที่นั่ง")[1]!;
+    expect(editZone).toHaveValue("dining");
+    await user.selectOptions(editZone, "");
+    await user.click(screen.getByRole("button", { name: "บันทึก" }));
+    await screen.findByText(/บันทึกโต๊ะ A1 แล้ว/);
+    expect(bodies[1]).toEqual({ method: "PATCH", body: { name: "A1", capacity: 4, zone: null } });
+  });
 });

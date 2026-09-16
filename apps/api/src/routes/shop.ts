@@ -5,6 +5,7 @@ import express, {
 } from "express";
 import { z } from "zod";
 import type { Store } from "../store.js";
+import { TABLE_ZONES } from "../types.js";
 import {
   bangkokParts,
   effectiveOverride,
@@ -72,6 +73,9 @@ const capacitySchema = z
   .int("ความจุต้องเป็นจำนวนเต็ม 1–50")
   .min(1, "ความจุต้องมากกว่าศูนย์")
   .max(50, "ความจุต้องไม่เกิน 50");
+const zoneSchema = z.enum(TABLE_ZONES, {
+  errorMap: () => ({ message: `โซนต้องเป็นหนึ่งใน ${TABLE_ZONES.join(", ")}` }),
+});
 
 /**
  * รับเฉพาะ ISO 8601 ที่มี timezone ชัดเจน (ลงท้าย Z/z หรือ ±HH:MM)
@@ -307,7 +311,9 @@ export function createShopRouter(deps: ShopRouterDeps): express.Router {
     requireShopManager,
     async (req, res, next) => {
       try {
-        const parsed = z.object({ name: tableNameSchema, capacity: capacitySchema }).safeParse(req.body);
+        const parsed = z
+          .object({ name: tableNameSchema, capacity: capacitySchema, zone: zoneSchema.nullable().optional() })
+          .safeParse(req.body);
         if (!parsed.success) {
           res.status(400).json({ error: zodMessage(parsed.error) });
           return;
@@ -337,6 +343,7 @@ export function createShopRouter(deps: ShopRouterDeps): express.Router {
             name: tableNameSchema.optional(),
             capacity: capacitySchema.optional(),
             isEnabled: z.boolean({ invalid_type_error: "isEnabled ต้องเป็น true/false" }).optional(),
+            zone: zoneSchema.nullable().optional(),
           })
           .safeParse(req.body);
         if (!parsed.success) {
@@ -346,9 +353,10 @@ export function createShopRouter(deps: ShopRouterDeps): express.Router {
         if (
           parsed.data.name === undefined &&
           parsed.data.capacity === undefined &&
-          parsed.data.isEnabled === undefined
+          parsed.data.isEnabled === undefined &&
+          parsed.data.zone === undefined
         ) {
-          res.status(400).json({ error: "กรุณาระบุชื่อ ความจุ หรือสถานะพร้อมใช้งานอย่างน้อย 1 อย่าง" });
+          res.status(400).json({ error: "กรุณาระบุชื่อ ความจุ โซน หรือสถานะพร้อมใช้งานอย่างน้อย 1 อย่าง" });
           return;
         }
         const actor = req.user!;

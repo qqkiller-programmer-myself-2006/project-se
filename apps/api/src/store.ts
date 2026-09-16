@@ -61,6 +61,7 @@ import type {
   Role,
   Session,
   ShopTable,
+  TableZone,
   StationCapacity,
   StockLedgerEntry,
   StockOp,
@@ -69,7 +70,7 @@ import type {
   TableRoundStatus,
   User,
 } from "./types.js";
-import { ConflictError, NotFoundError, RESERVATION_STATUSES } from "./types.js";
+import { ConflictError, NotFoundError, RESERVATION_STATUSES, isTableZone } from "./types.js";
 import {
   DEFAULT_SHOP_NAME,
   defaultWeeklySchedule,
@@ -145,6 +146,8 @@ import {
   normalizeReservedAt,
   normalizeTableId,
   recommendTable,
+  buildTableAvailability,
+  type TableAvailability,
   reservationPayloadHash,
   RESERVATION_SLOT_MINUTES,
 } from "./reservations/validation.js";import {
@@ -373,12 +376,15 @@ export interface ShopOverrideInput {
 export interface CreateTableInput {
   name: string;
   capacity: number;
+  zone?: TableZone | null;
 }
 
 export interface UpdateTablePatch {
   name?: string;
   capacity?: number;
   isEnabled?: boolean;
+  /** null = ล้างโซน, undefined = ไม่เปลี่ยน */
+  zone?: TableZone | null;
 }
 
 /** ผู้กระทำสำหรับ audit ที่ผูกกับ mutation — state เปลี่ยนได้ต้องมี audit นี้เสมอ */
@@ -649,6 +655,11 @@ export interface Store {
   listReservationsByPhone(phone: string, limit?: number): Promise<ReservationDetail[]>;
   /** แนะนำโต๊ะว่างที่เล็กที่สุดซึ่งรองรับจำนวนคนในช่วงเวลานัด */
   recommendReservationTable(partySize: number, reservedAt: string): Promise<ShopTable | null>;
+  /** สถานะโต๊ะที่เปิดใช้งานทุกตัว ณ เวลานัด (ผังเลือกโต๊ะของลูกค้า) + โต๊ะที่ระบบแนะนำ */
+  listReservationAvailability(
+    partySize: number,
+    reservedAt: string,
+  ): Promise<{ tables: TableAvailability[]; recommendedTableId: string | null }>;
   /**
    * ลูกค้ายกเลิกการจองของตนเอง (pending/confirmed เท่านั้น + ก่อนนัด ≥60 นาที)
    * + audit แบบ all-or-nothing
@@ -3502,11 +3513,12 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
           name,
           capacity: input.capacity,
           isEnabled: true,
+          zone: input.zone ?? null,
           createdAt: now,
           updatedAt: now,
         };
         tables.set(table.id, table);
-        await writeAudit(shopTableCreatedEvent(name, input.capacity, actor));
+        await writeAudit(shopTableCreatedEvent(name, input.capacity, actor, table.zone));
         return { ...table };
       } catch (err) {
         restoreShop(backup);
@@ -3529,8 +3541,9 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
         }
         if (patch.capacity !== undefined) t.capacity = patch.capacity;
         if (patch.isEnabled !== undefined) t.isEnabled = patch.isEnabled;
+        if (patch.zone !== undefined) t.zone = patch.zone;
         t.updatedAt = nowIso();
-        await writeAudit(shopTableUpdatedEvent(t.name, t.capacity, t.isEnabled, actor));
+        await writeAudit(shopTableUpdatedEvent(t.name, t.capacity, t.isEnabled, actor, t.zone));
         return { ...t };
       } catch (err) {
         restoreShop(backup);
@@ -6011,6 +6024,12 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
       const found = recommendTable([...tables.values()], n, blocked);
       return found ? { ...found } : null;
     },
+    async listReservationAvailability(partySize, reservedAt) {
+      const n = normalizePartySize(partySize);
+      const d = new Date(reservedAt);
+      if (Number.isNaN(d.getTime())) throw new Error("รูปแบบวันเวลานัดไม่ถูกต้อง");
+      return buildTableAvailability([...tables.values()], n, blockedTablesAt(d.toISOString()));
+    },
     async cancelReservation(id, patch, actor, now = new Date()) {
       return runReservationExclusive(async () => {
         const backup = backupReservations();
@@ -6747,6 +6766,7 @@ const MIGRATION_FILES = [
   "012_finance_entries.sql",
   "013_line_notifications.sql",
   "014_capacity_wait_predictions.sql",
+  "015_table_zones.sql",
 ];
 
 export function findMigrationFile(name = MIGRATION_FILES[0]!): string {
@@ -7985,6 +8005,7 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
       name: String(r["name"]),
       capacity,
       isEnabled: Number(r["is_enabled"]) === 1,
+      zone: isTableZone(r["zone"]) ? r["zone"] : null,
       createdAt: new Date(r["created_at"] as string).toISOString(),
       updatedAt: new Date(r["updated_at"] as string).toISOString(),
     };
@@ -9198,10 +9219,11 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
       return withShopTx(async (conn) => {
         const id = randomUUID();
         try {
-          await conn.query("INSERT INTO shop_tables (id, name, capacity, is_enabled) VALUES (?, ?, ?, 1)", [
+          await conn.query("INSERT INTO shop_tables (id, name, capacity, is_enabled, zone) VALUES (?, ?, ?, 1, ?)", [
             id,
             input.name.trim(),
             input.capacity,
+            input.zone ?? null,
           ]);
         } catch (err: unknown) {
           if (err && typeof err === "object" && "code" in err && (err as { code: string }).code === "ER_DUP_ENTRY") {
@@ -9209,7 +9231,7 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
           }
           throw err;
         }
-        await insertAuditRow(conn, shopTableCreatedEvent(input.name.trim(), input.capacity, actor));
+        await insertAuditRow(conn, shopTableCreatedEvent(input.name.trim(), input.capacity, actor, input.zone ?? null));
         const [rows] = (await conn.query("SELECT * FROM shop_tables WHERE id = ? LIMIT 1", [id])) as [
           Record<string, unknown>[],
           unknown,
@@ -9229,11 +9251,13 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
         const name = patch.name !== undefined ? patch.name.trim() : current.name;
         const capacity = patch.capacity ?? current.capacity;
         const isEnabled = patch.isEnabled ?? current.isEnabled;
+        const zone = patch.zone !== undefined ? patch.zone : current.zone;
         try {
-          await conn.query("UPDATE shop_tables SET name = ?, capacity = ?, is_enabled = ? WHERE id = ?", [
+          await conn.query("UPDATE shop_tables SET name = ?, capacity = ?, is_enabled = ?, zone = ? WHERE id = ?", [
             name,
             capacity,
             isEnabled ? 1 : 0,
+            zone,
             id,
           ]);
         } catch (err: unknown) {
@@ -9242,7 +9266,7 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
           }
           throw err;
         }
-        await insertAuditRow(conn, shopTableUpdatedEvent(name, capacity, isEnabled, actor));
+        await insertAuditRow(conn, shopTableUpdatedEvent(name, capacity, isEnabled, actor, zone));
         const [rows2] = (await conn.query("SELECT * FROM shop_tables WHERE id = ? LIMIT 1", [id])) as [
           Record<string, unknown>[],
           unknown,
@@ -10878,6 +10902,28 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
       }
       const found = recommendTable(tablesList, n, blocked);
       return found ? { ...found } : null;
+    },
+    async listReservationAvailability(partySize: number, reservedAt: string) {
+      const n = normalizePartySize(partySize);
+      const d = new Date(reservedAt);
+      if (Number.isNaN(d.getTime())) throw new Error("รูปแบบวันเวลานัดไม่ถูกต้อง");
+      const iso = d.toISOString();
+      const [tableRows] = (await pool.query("SELECT * FROM shop_tables WHERE is_enabled = 1")) as [
+        Record<string, unknown>[],
+        unknown,
+      ];
+      // เฉพาะการจองที่อาจทับช่วงเวลา (±ช่วงถือครองโต๊ะ) แทนการอ่านทั้งตาราง
+      const windowMs = RESERVATION_SLOT_MINUTES * 60 * 1000;
+      const [activeRows] = (await pool.query(
+        "SELECT table_id, reserved_at FROM reservations WHERE status IN ('pending','confirmed') AND reserved_at > ? AND reserved_at < ?",
+        [toMysqlDatetime(new Date(d.getTime() - windowMs).toISOString()), toMysqlDatetime(new Date(d.getTime() + windowMs).toISOString())],
+      )) as [Record<string, unknown>[], unknown];
+      const blocked = new Set<string>();
+      for (const r of activeRows) {
+        const at = new Date(r["reserved_at"] as string).toISOString();
+        if (isReservationOverlapping(at, iso)) blocked.add(String(r["table_id"]));
+      }
+      return buildTableAvailability(tableRows.map(rowToTable), n, blocked);
     },
     async cancelReservation(id: string, patch: { reason: string }, actor: ShopActor, now: Date = new Date()) {
       return withReservationTx(async (conn) => {

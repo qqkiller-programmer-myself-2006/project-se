@@ -7,6 +7,8 @@ import {
   RESERVATION_REASON_MAX,
   type ReservationStatus,
   type ShopTable,
+  TABLE_ZONES,
+  type TableZone,
 } from "../types.js";
 
 /**
@@ -171,6 +173,47 @@ export function recommendTable(
     .filter((t) => t.isEnabled && t.capacity >= partySize && !blockedTableIds.has(t.id))
     .sort((a, b) => a.capacity - b.capacity || a.name.localeCompare(b.name, "th"));
   return candidates[0] ?? null;
+}
+
+/**
+ * สถานะโต๊ะสำหรับผังให้ลูกค้าเลือก ณ เวลานัดหนึ่ง (เฉพาะโต๊ะที่เปิดใช้งาน):
+ * - booked: มีการจอง active ทับช่วงเวลา
+ * - too_small: ว่างแต่ที่นั่งไม่พอจำนวนคน
+ * - available: เลือกจองได้
+ * ไม่เปิดเผยข้อมูลการจอง/ลูกค้า — มีแค่ id ชื่อ ความจุ โซน และสถานะ
+ */
+export type TableAvailabilityStatus = "available" | "booked" | "too_small";
+
+export interface TableAvailability {
+  id: string;
+  name: string;
+  capacity: number;
+  zone: TableZone | null;
+  status: TableAvailabilityStatus;
+}
+
+export function buildTableAvailability(
+  tables: ShopTable[],
+  partySize: number,
+  blockedTableIds: Set<string>,
+): { tables: TableAvailability[]; recommendedTableId: string | null } {
+  const zoneRank = (zone: TableZone | null): number => (zone ? TABLE_ZONES.indexOf(zone) : TABLE_ZONES.length);
+  const list = tables
+    .filter((t) => t.isEnabled)
+    .sort(
+      (a, b) =>
+        zoneRank(a.zone) - zoneRank(b.zone) ||
+        a.name.localeCompare(b.name, "th", { numeric: true }),
+    )
+    .map<TableAvailability>((t) => ({
+      id: t.id,
+      name: t.name,
+      capacity: t.capacity,
+      zone: t.zone,
+      status: blockedTableIds.has(t.id) ? "booked" : t.capacity < partySize ? "too_small" : "available",
+    }));
+  const recommended = recommendTable(tables, partySize, blockedTableIds);
+  return { tables: list, recommendedTableId: recommended?.id ?? null };
 }
 
 export type ReservationActorKind = "customer" | "manager";

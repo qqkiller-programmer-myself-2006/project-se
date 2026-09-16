@@ -171,8 +171,24 @@ export interface ShopTable {
   capacity: number;
   /** พร้อมใช้งานเชิงปฏิบัติการ (true) / งดใช้งาน (false) — ไม่ใช่สถานะ "ว่าง" */
   isEnabled: boolean;
+  /** โซนที่นั่งในร้าน (ใช้แสดงผังให้ลูกค้าเลือก) — null = ยังไม่กำหนดโซน */
+  zone: TableZone | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** โซนที่นั่งของร้าน (ลำดับนี้คือลำดับที่แสดงให้ลูกค้า) */
+export const TABLE_ZONES = ["front", "dining", "kitchen", "sala"] as const;
+export type TableZone = (typeof TABLE_ZONES)[number];
+export const TABLE_ZONE_LABELS: Record<TableZone, string> = {
+  front: "โซนหน้าร้าน (ใต้กันสาด)",
+  dining: "โซนห้องอาหาร",
+  kitchen: "โซนบาร์หน้าครัว",
+  sala: "โซนศาลากลางแจ้ง",
+};
+
+export function isTableZone(value: unknown): value is TableZone {
+  return typeof value === "string" && (TABLE_ZONES as readonly string[]).includes(value);
 }
 
 /** validation โต๊ะ: ชื่อ 1–64 ตัวอักษร (trim), ความจุ 1–50 */

@@ -28,6 +28,7 @@ const EXPECTED = [
   "012_finance_entries.sql",
   "013_line_notifications.sql",
   "014_capacity_wait_predictions.sql",
+  "015_table_zones.sql",
 ];
 
 const REQUIRED_DOCS = [
@@ -52,7 +53,7 @@ const m = storeSrc.match(/const MIGRATION_FILES = \[([\s\S]*?)\];/);
 const listed = m ? [...m[1].matchAll(/"([^"]+\.sql)"/g)].map((x) => x[1]) : [];
 check(
   JSON.stringify(listed) === JSON.stringify(EXPECTED),
-  `MIGRATION_FILES matches 001-014 in order (found ${listed.length})`,
+  `MIGRATION_FILES matches 001-015 in order (found ${listed.length})`,
 );
 
 // 3) rerunnable + ไม่ destructive + ไม่มี secret

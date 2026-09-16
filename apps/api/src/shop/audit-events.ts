@@ -1,4 +1,5 @@
 import type { AuditInput, ShopActor, ShopOverrideInput } from "../store.js";
+import { TABLE_ZONE_LABELS, type TableZone } from "../types.js";
 
 /**
  * Pure audit-event factories สำหรับ Ticket 02 — Memory และ MySQL ใช้ชุดเดียวกัน
@@ -38,8 +39,17 @@ export function shopOverrideClearedEvent(actor: ShopActor): AuditInput {
   };
 }
 
-export function shopTableCreatedEvent(name: string, capacity: number, actor: ShopActor): AuditInput {
-  return { ...base(actor), action: "shop_table_created", detail: `โต๊ะ ${name} ความจุ ${capacity}` };
+function zoneText(zone: TableZone | null | undefined): string {
+  return zone ? ` ${TABLE_ZONE_LABELS[zone]}` : "";
+}
+
+export function shopTableCreatedEvent(
+  name: string,
+  capacity: number,
+  actor: ShopActor,
+  zone?: TableZone | null,
+): AuditInput {
+  return { ...base(actor), action: "shop_table_created", detail: `โต๊ะ ${name} ความจุ ${capacity}${zoneText(zone)}` };
 }
 
 export function shopTableUpdatedEvent(
@@ -47,10 +57,11 @@ export function shopTableUpdatedEvent(
   capacity: number,
   isEnabled: boolean,
   actor: ShopActor,
+  zone?: TableZone | null,
 ): AuditInput {
   return {
     ...base(actor),
     action: "shop_table_updated",
-    detail: `โต๊ะ ${name} ความจุ ${capacity} ${isEnabled ? "พร้อมใช้งาน" : "งดใช้งาน"}`,
+    detail: `โต๊ะ ${name} ความจุ ${capacity}${zoneText(zone)} ${isEnabled ? "พร้อมใช้งาน" : "งดใช้งาน"}`,
   };
 }

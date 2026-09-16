@@ -80,7 +80,7 @@ describe("โหมดสาธิตเมื่อ API ใช้ไม่ไ�
     // ไอคอนตกแต่งต้องซ่อนจาก accessibility tree (ไม่มีรูปที่ไม่มีชื่อ)
     const imgs = screen.queryAllByRole("img");
     for (const img of imgs) {
-      expect(img).toHaveAttribute("aria-label");
+      expect(img.getAttribute("aria-label") || img.getAttribute("alt")).toBeTruthy();
     }
     // ข้ามไปยังเนื้อหาหลัก + landmark หลัก (หน้าร้านมี main ของเชลล์ + main ของเนื้อหา)
     expect(screen.getByText("ข้ามไปยังเนื้อหาหลัก")).toBeInTheDocument();

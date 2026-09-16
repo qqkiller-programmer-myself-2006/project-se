@@ -82,11 +82,23 @@ export interface ShopConfig {
   expiredOverride: ShopOverride | null;
 }
 
+/** โซนที่นั่งของร้าน (ตรงกับ TABLE_ZONES ฝั่ง API) */
+export const TABLE_ZONES = ["front", "dining", "kitchen", "sala"] as const;
+export type TableZone = (typeof TABLE_ZONES)[number];
+export const TABLE_ZONE_LABELS: Record<TableZone, string> = {
+  front: "โซนหน้าร้าน (ใต้กันสาด)",
+  dining: "โซนห้องอาหาร",
+  kitchen: "โซนบาร์หน้าครัว",
+  sala: "โซนศาลากลางแจ้ง",
+};
+
 export interface ShopTable {
   id: string;
   name: string;
   capacity: number;
   isEnabled: boolean;
+  /** null = ยังไม่กำหนดโซน */
+  zone?: TableZone | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -445,6 +457,17 @@ export interface RecommendedTable {
   id: string;
   name: string;
   capacity: number;
+}
+
+export type TableAvailabilityStatus = "available" | "booked" | "too_small";
+
+/** สถานะโต๊ะ ณ เวลานัด สำหรับผังเลือกโต๊ะ (GET /api/reservations/availability) */
+export interface TableAvailability {
+  id: string;
+  name: string;
+  capacity: number;
+  zone: TableZone | null;
+  status: TableAvailabilityStatus;
 }
 
 // ---------- Ticket 08: การชำระเงิน ใบเสร็จ และคืนเงิน ----------
@@ -1143,9 +1166,13 @@ export const api = {
     req<{ override: ShopOverride }>("/api/shop/override", { method: "POST", body: JSON.stringify(body) }, true),
   clearOverride: () => req<{ ok: boolean; cleared: boolean }>("/api/shop/override", { method: "DELETE" }, true),
   listTables: () => req<{ tables: ShopTable[] }>("/api/tables"),
-  createTable: (name: string, capacity: number) =>
-    req<{ table: ShopTable }>("/api/tables", { method: "POST", body: JSON.stringify({ name, capacity }) }, true),
-  updateTable: (id: string, patch: { name?: string; capacity?: number; isEnabled?: boolean }) =>
+  createTable: (name: string, capacity: number, zone?: TableZone | null) =>
+    req<{ table: ShopTable }>(
+      "/api/tables",
+      { method: "POST", body: JSON.stringify(zone === undefined ? { name, capacity } : { name, capacity, zone }) },
+      true,
+    ),
+  updateTable: (id: string, patch: { name?: string; capacity?: number; isEnabled?: boolean; zone?: TableZone | null }) =>
     req<{ table: ShopTable }>(`/api/tables/${id}`, { method: "PATCH", body: JSON.stringify(patch) }, true),
   shopAudit: () => req<{ items: AuditItem[] }>("/api/audit/shop?limit=100"),
   // Ticket 03: ลูกค้า (session แยกจากพนักงาน ใช้คุกกี้ csid ฝั่ง server)
@@ -1295,6 +1322,10 @@ export const api = {
   reservationRecommend: (partySize: number, reservedAt: string) =>
     req<{ table: RecommendedTable | null }>(
       `/api/reservations/recommend?partySize=${partySize}&reservedAt=${encodeURIComponent(reservedAt)}`,
+    ),
+  reservationAvailability: (partySize: number, reservedAt: string) =>
+    req<{ tables: TableAvailability[]; recommendedTableId: string | null }>(
+      `/api/reservations/availability?partySize=${partySize}&reservedAt=${encodeURIComponent(reservedAt)}`,
     ),
   reservationCreate: (body: { tableId?: string | null; partySize: number; reservedAt: string; note?: string | null; idempotencyKey: string }) =>
     req<{ reservation: ReservationDetail; deduplicated: boolean }>(
