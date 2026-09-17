@@ -306,4 +306,3 @@ quota check/timeout mapping) และไม่มี env contract สำหร�
 2. Owner สมัคร SlipOK + ผูกบัญชี LIFF + รับ branch/API keys แยก env (ข้อ 8 ข้อ 5)
 3. Owner อนุมัติค่าธรรมเนียม + refund โอนมือ + retention/privacy + เกณฑ์ upgrade โควตา (ข้อ 8 ข้อ 6)
 4. Implement ตาม contract ข้อ 5 ใน Ticket 06 (ไม่ทำใน ticket นี้ตามขอบเขต decision/research)
-
