@@ -800,6 +800,13 @@
   padding: 1.25rem;
 }
 
+/* กล่องแทนโมเดลสูงเท่าโมเดลจริง — ถอด/ใส่โมเดลตอนเลื่อนแล้วหน้าไม่กระโดด */
+.venue-scene-3d--placeholder {
+  aspect-ratio: 4 / 3;
+  min-height: 260px;
+  padding: 0;
+}
+
 .venue-scene-3d--fallback p {
   color: var(--color-ink-700);
   font-size: 0.85rem;

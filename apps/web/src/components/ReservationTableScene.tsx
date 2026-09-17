@@ -61,24 +61,21 @@ function scrollToZone(zone: TableZone | "other") {
   el.querySelector<HTMLElement>("h3")?.focus({ preventScroll: true });
 }
 
-/** โหลดโมเดลสามมิติเมื่อส่วนนั้นใกล้เข้ามาในจอ (ไม่สร้าง WebGL ทั้ง 4 โซนพร้อมกันตอนเปิดหน้า) */
+/**
+ * โมเดลสามมิติมีอยู่เฉพาะตอนส่วนนั้นใกล้จอ — เลื่อนออกไปไกลแล้วถอดทิ้ง
+ * (มือถือรับ WebGL context ได้จำกัด ถ้าค้างไว้ครบ 4 โซน context อาจหลุดจนโมเดลหายถาวร)
+ */
 function useNearViewport<T extends Element>(): [boolean, React.RefObject<T>] {
   const ref = useRef<T>(null);
   const [near, setNear] = useState(() => typeof IntersectionObserver === "undefined");
   useEffect(() => {
-    if (near || !ref.current) return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) {
-          setNear(true);
-          io.disconnect();
-        }
-      },
-      { rootMargin: "400px 0px" },
-    );
+    if (typeof IntersectionObserver === "undefined" || !ref.current) return;
+    const io = new IntersectionObserver((entries) => setNear(entries[entries.length - 1]!.isIntersecting), {
+      rootMargin: "600px 0px",
+    });
     io.observe(ref.current);
     return () => io.disconnect();
-  }, [near]);
+  }, []);
   return [near, ref];
 }
 
@@ -224,7 +221,7 @@ function ZoneSection({
           {near ? (
             <Suspense
               fallback={
-                <div className="venue-scene-3d venue-scene-3d--fallback" role="status">
+                <div className="venue-scene-3d venue-scene-3d--fallback venue-scene-3d--placeholder" role="status">
                   <p>กำลังโหลดโมเดลสามมิติ…</p>
                 </div>
               }
@@ -240,8 +237,8 @@ function ZoneSection({
               />
             </Suspense>
           ) : (
-            <div className="venue-scene-3d venue-scene-3d--fallback">
-              <p>เลื่อนลงมาเพื่อโหลดโมเดลสามมิติ</p>
+            <div className="venue-scene-3d venue-scene-3d--fallback venue-scene-3d--placeholder">
+              <p>เลื่อนมาที่ส่วนนี้เพื่อโหลดโมเดลสามมิติ</p>
             </div>
           )}
         </div>

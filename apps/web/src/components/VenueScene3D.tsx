@@ -516,6 +516,8 @@ export function VenueScene3D({
       clearTables();
       for (const d of disposables) d.dispose();
       renderer.dispose();
+      // คืน WebGL context ทันที (ไม่รอ GC) — ส่วนโซนถูกถอด/ใส่ใหม่ตามการเลื่อนหน้า
+      renderer.forceContextLoss();
       if (canvas.parentElement === mount) mount.removeChild(canvas);
     };
   }, []);
