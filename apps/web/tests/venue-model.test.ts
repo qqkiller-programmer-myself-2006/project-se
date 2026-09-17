@@ -3,8 +3,8 @@ import type { TableAvailability } from "../src/lib/api";
 import {
   demoAvailability,
   getZoneView,
-  OVERVIEW_VIEW,
   isDemoTableId,
+  landmarks,
   placeTables,
   summarizeZones,
   venueZones,
@@ -18,6 +18,7 @@ describe("ผังร้านสำหรับโมเดลสามมิ�
   it("มี 4 โซนตามลำดับ และทุกโซนมีรูปจริง (พร้อมมุมกล้อง) กับช่องวางโต๊ะ", () => {
     expect(venueZones.map((z) => z.id)).toEqual(["front", "dining", "kitchen", "sala"]);
     const allPhotos = venueZones.flatMap((z) => z.photos.map((p) => p.src));
+    expect(venueZones.map((z) => z.number)).toEqual([1, 2, 3, 4]);
     for (const zone of venueZones) {
       expect(zone.photos.length).toBeGreaterThan(0);
       for (const photo of zone.photos) {
@@ -32,6 +33,33 @@ describe("ผังร้านสำหรับโมเดลสามมิ�
     expect(new Set(allPhotos).size).toBe(9);
   });
 
+  it("ผังตามแบบของร้าน: โต๊ะหน้าร้าน 2 ห้องอาหาร 6 บาร์หน้าครัว 3 ศาลา 4 และทุกช่องอยู่ในขอบเขตโซน", () => {
+    expect(venueZones.map((z) => [z.id, z.slots.length])).toEqual([
+      ["front", 2],
+      ["dining", 6],
+      ["kitchen", 3],
+      ["sala", 4],
+    ]);
+    for (const zone of venueZones) {
+      const b = zone.bounds;
+      for (const slot of zone.slots) {
+        expect(slot.position.x).toBeGreaterThan(b.x0);
+        expect(slot.position.x).toBeLessThan(b.x1);
+        expect(slot.position.z).toBeGreaterThan(b.z0);
+        expect(slot.position.z).toBeLessThan(b.z1);
+      }
+    }
+  });
+
+  it("จุดสำคัญตามสีในผัง: ครัว บาร์น้ำ น้ำแข็ง/แก้ว ห้องน้ำ อยู่ในโซนที่ถูกต้อง", () => {
+    expect(landmarks.map((l) => [l.id, l.zone])).toEqual([
+      ["kitchen", "kitchen"],
+      ["drinks", "dining"],
+      ["ice", "sala"],
+      ["restroom", "dining"],
+    ]);
+  });
+
   it("ช่องวางโต๊ะในโซนเดียวกันไม่ซ้อนกัน (ห่างกันพอสำหรับโต๊ะพร้อมเก้าอี้)", () => {
     for (const zone of venueZones) {
       zone.slots.forEach((a, i) => {
@@ -43,13 +71,13 @@ describe("ผังร้านสำหรับโมเดลสามมิ�
   });
 
   it("วางโต๊ะลงช่องตามลำดับ โต๊ะเกินช่องหรือไม่มีโซนไม่ถูกวาง", () => {
-    const tables = [t("S1", "sala"), t("S2", "sala"), t("S3", "sala"), t("S4", "sala"), t("X1", null), t("D1", "dining")];
+    const tables = [t("F1", "front"), t("F2", "front"), t("F3", "front"), t("X1", null), t("D1", "dining")];
     const { placed, unplaced } = placeTables(tables);
-    expect(placed.map((p) => p.name)).toEqual(["S1", "S2", "S3", "D1"]);
-    expect(placed[0]!.slot).toBe(venueZones[3]!.slots[0]);
-    expect(placed[1]!.slot).toBe(venueZones[3]!.slots[1]);
-    expect(placed[3]!.slot).toBe(venueZones[1]!.slots[0]);
-    expect(unplaced.map((p) => p.name)).toEqual(["S4", "X1"]);
+    expect(placed.map((p) => p.name)).toEqual(["F1", "F2", "D1"]);
+    expect(placed[0]!.slot).toBe(venueZones[0]!.slots[0]);
+    expect(placed[1]!.slot).toBe(venueZones[0]!.slots[1]);
+    expect(placed[2]!.slot).toBe(venueZones[1]!.slots[0]);
+    expect(unplaced.map((p) => p.name)).toEqual(["F3", "X1"]);
   });
 
   it("สรุปจำนวนโต๊ะว่างต่อโซน และแสดงโซนอื่นเฉพาะเมื่อมีโต๊ะไม่มีโซน", () => {
@@ -65,7 +93,7 @@ describe("ผังร้านสำหรับโมเดลสามมิ�
 
   it("ผังตัวอย่างคำนวณที่นั่งไม่พอและโต๊ะแนะนำตามจำนวนคน", () => {
     const demo = demoAvailability(5);
-    expect(demo.tables).toHaveLength(13);
+    expect(demo.tables).toHaveLength(15);
     expect(demo.tables.every((x) => isDemoTableId(x.id))).toBe(true);
     expect(demo.tables.find((x) => x.name === "D1")!.status).toBe("too_small");
     expect(demo.tables.find((x) => x.name === "F2")!.status).toBe("booked");
@@ -73,9 +101,8 @@ describe("ผังร้านสำหรับโมเดลสามมิ�
     expect(isDemoTableId("real-uuid")).toBe(false);
   });
 
-  it("มุมกล้องตามรูปที่เลือก และภาพรวมเมื่อไม่ได้เลือกโซน", () => {
-    expect(getZoneView(null)).toBe(OVERVIEW_VIEW);
-    expect(getZoneView("front", 1)).toBe(venueZones[0]!.photos[1]!.view);
-    expect(getZoneView("front", 99)).toBe(venueZones[0]!.photos[0]!.view);
+  it("มุมกล้องตามรูปที่เลือก (รูปที่ไม่มีใช้มุมรูปแรก)", () => {
+    expect(getZoneView("dining", 1)).toBe(venueZones[1]!.photos[1]!.view);
+    expect(getZoneView("dining", 99)).toBe(venueZones[1]!.photos[0]!.view);
   });
 });

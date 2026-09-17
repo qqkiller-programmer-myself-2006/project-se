@@ -13,165 +13,403 @@
   min-width: 0;
 }
 
-.table-picker__zones-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
+/* ---------- ผังร้าน (ภาพรวม) ---------- */
+.table-picker__overview {
+  display: grid;
+  gap: 0.7rem;
+  border: 1px solid var(--color-ink-200);
+  border-radius: 1.1rem;
+  padding: 0.85rem;
+  background: #fffdf9;
 }
 
-.table-picker__zones-title {
-  color: var(--color-ink-800);
+.table-picker__overview-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 0.75rem;
+}
+
+.table-picker__overview-head h3 {
+  color: var(--color-ink-900);
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.table-picker__overview-head p {
+  color: var(--tp-available);
   font-size: 0.9rem;
   font-weight: 800;
 }
 
-.table-picker__all {
-  min-height: 40px;
-  border: 2px solid var(--color-ink-200);
-  border-radius: 999px;
-  padding: 0.35rem 0.9rem;
-  background: #fff;
-  color: var(--color-ink-800);
-  font-size: 0.8rem;
+.floor-plan-wrap {
+  overflow-x: auto;
+  margin-inline: -0.25rem;
+  padding-inline: 0.25rem;
+  -webkit-overflow-scrolling: touch;
+}
+
+.floor-plan-tip {
+  color: var(--color-ink-600);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 639px) {
+  /* จอแคบ: ขยายผังให้อ่านชื่อโต๊ะได้ เลื่อนซ้าย-ขวาดูส่วนที่เหลือ */
+  .floor-plan {
+    min-width: 540px;
+  }
+}
+
+.floor-plan {
+  display: block;
+  width: 100%;
+  max-width: 760px;
+  height: auto;
+  margin-inline: auto;
+  font-family: inherit;
+  user-select: none;
+}
+
+.floor-plan__ground {
+  fill: #ece7df;
+}
+
+.floor-plan__parking {
+  fill: #b9b5ae;
+}
+
+.floor-plan__street {
+  fill: #fff;
+  font-size: 0.5px;
   font-weight: 700;
+  text-anchor: middle;
+}
+
+.floor-plan__zone rect {
+  fill: #fbf6ee;
+  stroke: #3b2f28;
+  stroke-width: 0.1;
+  cursor: pointer;
+  transition: fill 0.15s;
+}
+
+.floor-plan__zone.is-front rect {
+  fill: #f1ede6;
+}
+
+.floor-plan__zone.is-sala rect {
+  fill: #efe4cf;
+}
+
+.floor-plan__zone.is-kitchen rect {
+  fill: #f6e9e1;
+}
+
+.floor-plan__zone:hover rect {
+  fill: #fff3d6;
+}
+
+.floor-plan__zone text {
   cursor: pointer;
 }
 
-.table-picker__all[aria-pressed="true"] {
-  border-color: var(--color-ink-900);
-  background: var(--color-ink-900);
-  color: #fff;
+.floor-plan__num {
+  fill: #1c1512;
 }
 
-.table-picker__zones {
+.floor-plan__num-text {
+  fill: #fff;
+  font-size: 0.5px;
+  font-weight: 800;
+  text-anchor: middle;
+}
+
+.floor-plan__zone-label {
+  fill: #1c1512;
+  font-size: 0.5px;
+  font-weight: 800;
+}
+
+.floor-plan__zone-status {
+  fill: #78716c;
+  font-weight: 700;
+}
+
+.floor-plan__zone-status.is-open {
+  fill: #23804a;
+}
+
+.floor-plan__mark {
+  pointer-events: none;
+}
+
+.floor-plan__mark rect {
+  stroke: rgba(0, 0, 0, 0.25);
+  stroke-width: 0.05;
+}
+
+.floor-plan__mark text {
+  fill: #fff;
+  font-size: 0.42px;
+  font-weight: 800;
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+
+.floor-plan__mark.is-kitchen rect { fill: #e5484d; }
+.floor-plan__mark.is-drinks rect { fill: #f2c230; }
+.floor-plan__mark.is-drinks text { fill: #3b2a06; }
+.floor-plan__mark.is-ice rect { fill: #3b73e0; }
+.floor-plan__mark.is-ice text { font-size: 0.32px; }
+.floor-plan__mark.is-restroom rect { fill: #3fa35c; }
+
+.floor-plan__table {
+  cursor: not-allowed;
+}
+
+.floor-plan__table.is-available,
+.floor-plan__table.is-selected {
+  cursor: pointer;
+}
+
+.floor-plan__chairs {
+  stroke-width: 0.07;
+}
+
+.floor-plan__top {
+  fill: rgba(255, 255, 255, 0.35);
+}
+
+.floor-plan__table.is-available .floor-plan__chairs { fill: #2f9e5b; stroke: #1f6f3f; }
+.floor-plan__table.is-available:hover .floor-plan__chairs { fill: #23804a; }
+.floor-plan__table.is-selected .floor-plan__chairs { fill: #b91c1c; stroke: #7f1d1d; }
+.floor-plan__table.is-booked .floor-plan__chairs { fill: #a8a29e; stroke: #78716c; }
+.floor-plan__table.is-too_small .floor-plan__chairs { fill: #fbf3e2; stroke: #a16207; stroke-dasharray: 0.18 0.12; }
+
+.floor-plan__recommend {
+  fill: none;
+  stroke: #d97706;
+  stroke-width: 0.12;
+  stroke-dasharray: 0.3 0.15;
+}
+
+.floor-plan__table-name,
+.floor-plan__table-seats {
+  fill: #fff;
+  font-weight: 800;
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.floor-plan__table-name {
+  font-size: 0.42px;
+}
+
+.floor-plan__table-seats {
+  font-size: 0.28px;
+  font-weight: 600;
+}
+
+.floor-plan__table.is-too_small text {
+  fill: #7c4a03;
+}
+
+/* ปุ่มกระโดดไปยังโซน */
+.zone-jump {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.65rem;
+  gap: 0.5rem;
 }
 
-@media (min-width: 768px) {
-  .table-picker__zones {
+@media (min-width: 900px) {
+  .zone-jump {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
-/* การ์ดโซน: รูปจริงเต็มการ์ด ชื่อโซนและจำนวนโต๊ะว่างบนแถบทึบอ่านง่าย */
-.zone-card {
-  position: relative;
-  display: block;
-  overflow: hidden;
-  aspect-ratio: 4 / 3;
+.zone-jump__btn {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
   min-width: 0;
-  border: 3px solid transparent;
-  border-radius: 1rem;
-  padding: 0;
-  background: var(--color-ink-900);
+  min-height: 52px;
+  border: 2px solid var(--color-ink-200);
+  border-radius: 0.9rem;
+  padding: 0.4rem 0.6rem;
+  background: #fff;
+  color: var(--color-ink-900);
   text-align: left;
   cursor: pointer;
-  box-shadow: 0 10px 22px -16px rgba(28, 21, 18, 0.8);
-  transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
 }
 
-.zone-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 16px 28px -18px rgba(28, 21, 18, 0.9);
+.zone-jump__btn:hover {
+  border-color: var(--color-gold-500);
+  background: var(--color-gold-100);
 }
 
-.zone-card[aria-pressed="true"] {
-  border-color: var(--color-brand-600);
-  box-shadow: 0 0 0 3px var(--color-brand-200), 0 16px 28px -18px rgba(28, 21, 18, 0.9);
-}
-
-.zone-card__img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.zone-card__img.is-portrait {
-  object-position: center 30%;
-}
-
-.zone-card__body {
-  position: absolute;
-  inset: auto 0 0;
+.zone-jump__num,
+.zone-section__num {
   display: grid;
-  gap: 0.1rem;
-  padding: 0.45rem 0.65rem 0.5rem;
-  background: rgba(28, 21, 18, 0.82);
-  color: #fff;
-  line-height: 1.25;
-}
-
-.zone-card__body strong {
-  overflow: hidden;
-  font-size: 0.95rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.zone-card__body small {
-  color: #86efac;
-  font-size: 0.78rem;
-  font-weight: 800;
-}
-
-.zone-card.is-full .zone-card__body small {
-  color: var(--color-ink-300);
-}
-
-.zone-card.is-full .zone-card__img {
-  filter: grayscale(0.7);
-}
-
-.zone-card__check {
-  position: absolute;
-  top: 0.45rem;
-  right: 0.45rem;
-  display: grid;
+  flex: none;
   place-items: center;
   width: 1.9rem;
   height: 1.9rem;
   border-radius: 999px;
-  background: var(--color-brand-600);
+  background: var(--color-ink-900);
   color: #fff;
   font-weight: 800;
 }
 
-.table-picker__zone-caption {
-  color: var(--color-ink-600);
-  font-size: 0.85rem;
+.zone-jump__text {
+  display: grid;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.zone-jump__text strong {
+  overflow: hidden;
+  font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zone-jump__text small {
+  color: var(--tp-available);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.zone-jump__btn.is-full small {
+  color: var(--color-ink-500);
+}
+
+/* ---------- หนึ่งโซนต่อหนึ่งส่วน ---------- */
+.zone-sections {
+  display: grid;
+  gap: 1.1rem;
+}
+
+.zone-section {
+  display: grid;
+  gap: 0.85rem;
+  scroll-margin-top: 5rem;
+  border: 1px solid var(--color-ink-200);
+  border-top: 6px solid var(--zone-accent, var(--color-ink-800));
+  border-radius: 1.1rem;
+  padding: 0.9rem;
+  background: #fff;
+  box-shadow: 0 12px 24px -22px rgba(28, 21, 18, 0.7);
+}
+
+.zone-section.is-front { --zone-accent: #6b7280; }
+.zone-section.is-dining { --zone-accent: #a0612f; }
+.zone-section.is-kitchen { --zone-accent: #e5484d; }
+.zone-section.is-sala { --zone-accent: #8a6a3c; }
+
+.zone-section.has-selection {
+  border-color: var(--tp-selected);
+  box-shadow: 0 0 0 2px var(--color-brand-200), 0 12px 24px -22px rgba(28, 21, 18, 0.7);
+}
+
+.zone-section__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.6rem 0.75rem;
+}
+
+.zone-section__num {
+  width: 2.4rem;
+  height: 2.4rem;
+  background: var(--zone-accent, var(--color-ink-900));
+  font-size: 1.1rem;
+}
+
+.zone-section__heading {
+  flex: 1 1 16rem;
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.zone-section__heading h3 {
+  color: var(--color-ink-900);
+  font-size: 1.15rem;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.zone-section__heading h3:focus {
+  outline: none;
+}
+
+.zone-section__heading p {
+  color: var(--color-ink-700);
+  font-size: 0.88rem;
   line-height: 1.6;
 }
 
-.table-picker__zone-caption strong {
-  color: var(--color-ink-900);
+.zone-section__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
 }
 
-/* ---------- รูปจริงเทียบแบบจำลอง ---------- */
-.table-picker__stage {
+.zone-section__tags li {
+  border-radius: 999px;
+  padding: 0.12rem 0.6rem;
+  background: var(--color-ink-100);
+  color: var(--color-ink-800);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.zone-section__tags li.is-mark { color: #fff; }
+.zone-section__tags li.is-kitchen { background: #e5484d; }
+.zone-section__tags li.is-drinks { background: #f2c230; color: #3b2a06; }
+.zone-section__tags li.is-ice { background: #3b73e0; }
+.zone-section__tags li.is-restroom { background: #3fa35c; }
+
+.zone-section__status {
+  border-radius: 999px;
+  padding: 0.35rem 0.8rem;
+  background: var(--tp-available-bg);
+  color: #1f6f3f;
+  font-size: 0.85rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.zone-section__status.is-full {
+  background: var(--tp-booked-bg);
+  color: var(--color-ink-600);
+}
+
+.zone-section__media {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.85rem;
 }
 
 @media (min-width: 900px) {
-  .table-picker__stage.is-compare {
+  .zone-section__media {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     align-items: start;
   }
-
-  .table-picker__stage.is-compare .table-picker__model {
-    margin-top: 2.6rem;
-  }
 }
 
-.table-picker__model {
-  position: relative;
+.zone-section__model {
+  display: grid;
+  gap: 0.45rem;
   min-width: 0;
+}
+
+.zone-section__model-hint {
+  color: var(--color-ink-600);
+  font-size: 0.75rem;
+  font-weight: 600;
 }
 
 .zone-photo {
@@ -200,13 +438,9 @@
 }
 
 .zone-photo__tag.is-model {
-  position: absolute;
-  top: 0.6rem;
-  left: 0.6rem;
-  z-index: 3;
-  background: rgba(28, 21, 18, 0.78);
+  white-space: nowrap;
+  background: var(--color-ink-900);
   color: #fff;
-  pointer-events: none;
 }
 
 .zone-photo__match {
@@ -304,8 +538,7 @@
   object-fit: cover;
 }
 
-.zone-card:focus-visible,
-.table-picker__all:focus-visible,
+.zone-jump__btn:focus-visible,
 .zone-photo__main:focus-visible,
 .zone-photo__thumb:focus-visible,
 .zone-photo__match:focus-visible,
@@ -400,20 +633,8 @@
 
 .venue-scene-3d__mount {
   width: 100%;
-  height: 360px;
-}
-
-@media (min-width: 640px) {
-  .venue-scene-3d__mount {
-    height: 460px;
-  }
-}
-
-@media (min-width: 900px) {
-  .is-compare .venue-scene-3d__mount {
-    height: auto;
-    aspect-ratio: 4 / 3;
-  }
+  aspect-ratio: 4 / 3;
+  min-height: 260px;
 }
 
 .venue-scene-3d__pins {
@@ -457,30 +678,23 @@
   font-size: 0.85rem;
 }
 
-.venue-pin--zone {
-  padding: 0.35rem 0.75rem;
-  background: var(--color-ink-900);
-  border-color: var(--color-ink-900);
+/* ป้ายจุดสำคัญ (สีตามผังร้าน) — ไม่ใช่ปุ่ม */
+.venue-pin--mark {
+  min-width: 0;
+  border-width: 1px;
+  padding: 0.12rem 0.45rem;
+  font-size: 0.66rem;
+  font-weight: 800;
+  pointer-events: none;
+  cursor: default;
 }
 
-.venue-pin--zone span {
-  color: #a7f3c4;
-  font-weight: 700;
-}
-
-.venue-pin--zone.is-full span {
-  color: var(--color-ink-300);
-}
+.venue-pin--mark.is-kitchen { background: #e5484d; border-color: #e5484d; }
+.venue-pin--mark.is-drinks { background: #f2c230; border-color: #f2c230; color: #3b2a06; }
+.venue-pin--mark.is-ice { background: #3b73e0; border-color: #3b73e0; }
+.venue-pin--mark.is-restroom { background: #3fa35c; border-color: #3fa35c; }
 
 @media (max-width: 639px) {
-  .venue-pin--zone {
-    padding: 0.2rem 0.5rem;
-  }
-
-  .venue-pin--zone strong {
-    font-size: 0.75rem;
-  }
-
   .venue-pin--table {
     min-width: 2.6rem;
     padding: 0.1rem 0.35rem;
@@ -490,11 +704,10 @@
   .venue-pin--table strong {
     font-size: 0.75rem;
   }
-}
 
-.venue-pin--zone:hover {
-  background: var(--color-brand-700);
-  border-color: var(--color-brand-700);
+  .venue-pin--mark {
+    font-size: 0.58rem;
+  }
 }
 
 .venue-pin--table.is-available {
@@ -626,6 +839,10 @@
 .table-picker__legend .is-recommended { border: 3px solid var(--tp-recommended); border-radius: 999px; }
 .table-picker__legend .is-booked { background: var(--tp-booked); }
 .table-picker__legend .is-too_small { border: 2px solid var(--tp-small); background: var(--tp-small-bg); }
+.table-picker__legend .is-mark-kitchen { background: #e5484d; }
+.table-picker__legend .is-mark-drinks { background: #f2c230; }
+.table-picker__legend .is-mark-ice { background: #3b73e0; }
+.table-picker__legend .is-mark-restroom { background: #3fa35c; }
 
 .table-picker__recommend {
   justify-self: start;
@@ -646,19 +863,7 @@
 }
 
 /* ---------- รายการโต๊ะ ---------- */
-.table-picker__list {
-  display: grid;
-  gap: 0.9rem;
-}
-
-.table-picker__group h3 {
-  margin-bottom: 0.45rem;
-  color: var(--color-ink-800);
-  font-size: 0.85rem;
-  font-weight: 800;
-}
-
-.table-picker__group ul {
+.table-picker__tables {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
   gap: 0.5rem;
@@ -756,7 +961,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .zone-card,
+  .floor-plan__zone rect,
   .table-picker__table,
   .venue-scene-3d__hint {
     transition: none;

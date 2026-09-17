@@ -1,6 +1,16 @@
-import { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { TABLE_ZONE_LABELS, type TableAvailability, type TableZone } from "../lib/api";
-import { getZone, getZoneView, placeTables, summarizeZones, venueZones } from "./venueModel";
+import { VenueFloorPlan } from "./VenueFloorPlan";
+import {
+  getZoneView,
+  landmarks,
+  placeTables,
+  summarizeZones,
+  venueZones,
+  type PlacedTable,
+  type VenueZone,
+  type ZoneSummary,
+} from "./venueModel";
 import { PhotoLightbox, ZonePhotoViewer } from "./ZonePhotos";
 import "./ReservationTableScene.css";
 
@@ -26,9 +36,222 @@ function zoneLabel(zone: TableZone | null): string {
   return zone ? TABLE_ZONE_LABELS[zone] : "โซนอื่น ๆ";
 }
 
+function zoneSectionId(zone: TableZone | "other"): string {
+  return `zone-section-${zone}`;
+}
+
+function statusText(summary: ZoneSummary | undefined, loading: boolean): string {
+  if (loading) return "กำลังตรวจ…";
+  if (!summary || summary.total === 0) return "ไม่มีโต๊ะ";
+  if (summary.available === 0) return "เต็ม";
+  return `ว่าง ${summary.available}/${summary.total} โต๊ะ`;
+}
+
+function prefersReducedMotion(): boolean {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function"
+    ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    : false;
+}
+
+function scrollToZone(zone: TableZone | "other") {
+  const el = document.getElementById(zoneSectionId(zone));
+  if (!el) return;
+  el.scrollIntoView?.({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
+  el.querySelector<HTMLElement>("h3")?.focus({ preventScroll: true });
+}
+
+/** โหลดโมเดลสามมิติเมื่อส่วนนั้นใกล้เข้ามาในจอ (ไม่สร้าง WebGL ทั้ง 4 โซนพร้อมกันตอนเปิดหน้า) */
+function useNearViewport<T extends Element>(): [boolean, React.RefObject<T>] {
+  const ref = useRef<T>(null);
+  const [near, setNear] = useState(() => typeof IntersectionObserver === "undefined");
+  useEffect(() => {
+    if (near || !ref.current) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setNear(true);
+          io.disconnect();
+        }
+      },
+      { rootMargin: "400px 0px" },
+    );
+    io.observe(ref.current);
+    return () => io.disconnect();
+  }, [near]);
+  return [near, ref];
+}
+
+type TableListProps = {
+  label: string;
+  tables: TableAvailability[];
+  partySize: number;
+  selectedTableId: string | null;
+  recommendedTableId: string | null;
+  onToggle: (table: TableAvailability) => void;
+};
+
+function TableList({ label, tables, partySize, selectedTableId, recommendedTableId, onToggle }: TableListProps) {
+  if (tables.length === 0) {
+    return <p className="table-picker__empty">โซนนี้ยังไม่มีโต๊ะให้จอง ลองดูโซนอื่น</p>;
+  }
+  return (
+    <ul className="table-picker__tables" aria-label={label}>
+      {tables.map((table) => {
+        const isSelected = table.id === selectedTableId;
+        const isRecommended = table.id === recommendedTableId && table.status === "available";
+        return (
+          <li key={table.id}>
+            <button
+              type="button"
+              className={`table-picker__table is-${table.status}${isSelected ? " is-selected" : ""}`}
+              aria-pressed={isSelected}
+              aria-disabled={table.status !== "available"}
+              aria-label={`โต๊ะ ${table.name} ${zoneLabel(table.zone)} ${table.capacity} ที่นั่ง สถานะ${STATUS_TEXT[table.status]}${isRecommended ? " ระบบแนะนำ" : ""}${table.status === "too_small" ? ` ไม่พอสำหรับ ${partySize} คน` : ""}`}
+              onClick={() => onToggle(table)}
+            >
+              <span className="table-picker__table-name">
+                {isSelected ? <span aria-hidden="true">✓ </span> : null}
+                {table.name}
+              </span>
+              <span className="table-picker__table-seats">{table.capacity} ที่นั่ง</span>
+              <span className="table-picker__table-status">{isSelected ? "เลือกแล้ว" : STATUS_TEXT[table.status]}</span>
+              {isRecommended ? <span className="table-picker__badge">แนะนำ</span> : null}
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+type ZoneSectionProps = {
+  zone: VenueZone;
+  zoneTables: TableAvailability[];
+  placed: PlacedTable[];
+  summary: ZoneSummary | undefined;
+  loading: boolean;
+  partySize: number;
+  selectedTableId: string | null;
+  recommendedTableId: string | null;
+  onToggle: (table: TableAvailability) => void;
+  onSelectId: (tableId: string) => void;
+};
+
+/** หนึ่งโซน = หนึ่งส่วนของหน้าเว็บ: หัวข้อ · รูปจริงคู่โมเดลสามมิติ · โต๊ะในโซน */
+function ZoneSection({
+  zone,
+  zoneTables,
+  placed,
+  summary,
+  loading,
+  partySize,
+  selectedTableId,
+  recommendedTableId,
+  onToggle,
+  onSelectId,
+}: ZoneSectionProps) {
+  const [photoIndex, setPhotoIndex] = useState(0);
+  const [viewNonce, setViewNonce] = useState(0);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [near, modelRef] = useNearViewport<HTMLDivElement>();
+  const titleId = `${zoneSectionId(zone.id)}-title`;
+  const full = !loading && (summary?.available ?? 0) === 0;
+  const hasSelection = zoneTables.some((t) => t.id === selectedTableId);
+  const zoneMarks = landmarks.filter((l) => l.zone === zone.id);
+
+  return (
+    <section
+      id={zoneSectionId(zone.id)}
+      className={`zone-section is-${zone.id}${hasSelection ? " has-selection" : ""}`}
+      aria-labelledby={titleId}
+    >
+      <header className="zone-section__head">
+        <span className="zone-section__num" aria-hidden="true">
+          {zone.number}
+        </span>
+        <div className="zone-section__heading">
+          <h3 id={titleId} tabIndex={-1}>
+            {zone.label}
+          </h3>
+          <p>{zone.caption}</p>
+          <ul className="zone-section__tags" aria-label="จุดเด่นของโซน">
+            {zone.highlights.map((h) => (
+              <li key={h}>{h}</li>
+            ))}
+            {zoneMarks.map((l) => (
+              <li key={l.id} className={`is-mark is-${l.id}`}>
+                {l.label}
+              </li>
+            ))}
+          </ul>
+        </div>
+        <span className={`zone-section__status${full ? " is-full" : ""}`}>{statusText(summary, loading)}</span>
+      </header>
+
+      <div className="zone-section__media">
+        <ZonePhotoViewer
+          zoneLabel={zone.label}
+          photos={zone.photos}
+          index={photoIndex}
+          onIndexChange={setPhotoIndex}
+          onOpen={() => setLightboxOpen(true)}
+          onMatchView={() => setViewNonce((n) => n + 1)}
+        />
+        <div className="zone-section__model" ref={modelRef}>
+          <div className="zone-photo__head">
+            <span className="zone-photo__tag is-model">แบบจำลอง 3 มิติ</span>
+            <span className="zone-section__model-hint">แตะป้ายโต๊ะบนโมเดลเพื่อเลือก</span>
+          </div>
+          {near ? (
+            <Suspense
+              fallback={
+                <div className="venue-scene-3d venue-scene-3d--fallback" role="status">
+                  <p>กำลังโหลดโมเดลสามมิติ…</p>
+                </div>
+              }
+            >
+              <VenueScene3D
+                tables={placed}
+                focusZoneId={zone.id}
+                view={getZoneView(zone.id, photoIndex)}
+                viewKey={`${photoIndex}:${viewNonce}`}
+                selectedTableId={selectedTableId}
+                recommendedTableId={recommendedTableId}
+                onTableClick={onSelectId}
+              />
+            </Suspense>
+          ) : (
+            <div className="venue-scene-3d venue-scene-3d--fallback">
+              <p>เลื่อนลงมาเพื่อโหลดโมเดลสามมิติ</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <TableList
+        label={`โต๊ะใน${zone.label}`}
+        tables={zoneTables}
+        partySize={partySize}
+        selectedTableId={selectedTableId}
+        recommendedTableId={recommendedTableId}
+        onToggle={onToggle}
+      />
+
+      {lightboxOpen ? (
+        <PhotoLightbox
+          photos={zone.photos}
+          index={photoIndex}
+          onIndexChange={setPhotoIndex}
+          onClose={() => setLightboxOpen(false)}
+        />
+      ) : null}
+    </section>
+  );
+}
+
 /**
- * ขั้นเลือกโซนและโต๊ะ: การ์ดโซน (รูปจริง + จำนวนโต๊ะว่าง) → โมเดลสามมิติ → รายการโต๊ะ
- * รายการโต๊ะคือช่องทางหลักที่เข้าถึงได้ทุกอุปกรณ์ ส่วนโมเดลสามมิติช่วยให้เห็นตำแหน่งจริง
+ * ขั้นเลือกโซนและโต๊ะ: ผังร้าน (ภาพรวม) → ส่วนละหนึ่งโซน (รูปจริง + โมเดลสามมิติ + โต๊ะ)
+ * รายการโต๊ะในแต่ละโซนคือช่องทางหลักที่เข้าถึงได้ทุกอุปกรณ์
  */
 export function ReservationTableScene({
   tables,
@@ -38,26 +261,11 @@ export function ReservationTableScene({
   onSelectTable,
   loading = false,
 }: ReservationTableSceneProps) {
-  const [focusZoneId, setFocusZoneIdState] = useState<TableZone | null>(null);
-  const [photoIndex, setPhotoIndex] = useState(0);
-  const [viewNonce, setViewNonce] = useState(0);
-  const [lightboxOpen, setLightboxOpen] = useState(false);
-  function setFocusZoneId(zone: TableZone | null) {
-    if (zone === focusZoneId) return;
-    setFocusZoneIdState(zone);
-    setPhotoIndex(0);
-  }
   const { placed } = useMemo(() => placeTables(tables), [tables]);
   const summaries = useMemo(() => summarizeZones(tables), [tables]);
-  const selected = tables.find((t) => t.id === selectedTableId) ?? null;
   const recommended = tables.find((t) => t.id === recommendedTableId && t.status === "available") ?? null;
   const availableCount = tables.filter((t) => t.status === "available").length;
-
-  // เลือกโต๊ะจากที่อื่น (เช่น "ให้ระบบเลือกให้") → พากล้องไปที่โซนของโต๊ะนั้น
-  const selectedZone = selected?.zone ?? null;
-  useEffect(() => {
-    if (selectedZone) setFocusZoneId(selectedZone);
-  }, [selectedTableId, selectedZone]);
+  const others = tables.filter((t) => !t.zone);
 
   function toggleTable(table: TableAvailability) {
     if (table.status !== "available") return;
@@ -69,174 +277,116 @@ export function ReservationTableScene({
     if (table) toggleTable(table);
   }
 
-  const visibleGroups = summaries
-    .filter((s) => focusZoneId === null || s.zone === focusZoneId)
-    .map((s) => ({ zone: s.zone, tables: tables.filter((t) => (t.zone ?? null) === s.zone) }))
-    .filter((g) => g.tables.length > 0);
-  const focused = getZone(focusZoneId);
+  function pickRecommended() {
+    if (!recommended) return;
+    onSelectTable(recommended.id);
+    scrollToZone(recommended.zone ?? "other");
+  }
 
   return (
     <div className="table-picker">
-      <div className="table-picker__zones-head">
-        <p className="table-picker__zones-title">แตะรูปโซนที่อยากนั่ง</p>
-        <button
-          type="button"
-          className="table-picker__all"
-          aria-pressed={focusZoneId === null}
-          onClick={() => setFocusZoneId(null)}
-        >
-          ดูทั้งร้าน · {loading ? "กำลังตรวจโต๊ะว่าง…" : `ว่าง ${availableCount} จาก ${tables.length} โต๊ะ`}
-        </button>
-      </div>
-      <div className="table-picker__zones" role="group" aria-label="เลือกโซนที่นั่ง">
-        {venueZones.map((zone) => {
-          const s = summaries.find((x) => x.zone === zone.id);
-          const available = s?.available ?? 0;
-          const total = s?.total ?? 0;
-          const status = total === 0 ? "ไม่มีโต๊ะ" : available === 0 ? "เต็ม" : `ว่าง ${available}/${total} โต๊ะ`;
-          return (
-            <button
-              key={zone.id}
-              type="button"
-              className={`zone-card${!loading && available === 0 ? " is-full" : ""}`}
-              aria-pressed={focusZoneId === zone.id}
-              aria-label={`${zone.label} ${loading ? "กำลังตรวจโต๊ะว่าง" : status}`}
-              onClick={() => setFocusZoneId(zone.id)}
-            >
-              <img
-                className={`zone-card__img is-${zone.photos[0]!.orientation}`}
-                src={zone.photos[0]!.src}
-                alt=""
-                width={480}
-                height={360}
-                loading="lazy"
-                decoding="async"
-              />
-              <span className="zone-card__body">
-                <strong>{zone.shortLabel}</strong>
-                <small>{loading ? "กำลังตรวจ…" : status}</small>
-              </span>
-              {focusZoneId === zone.id ? (
-                <span className="zone-card__check" aria-hidden="true">
-                  ✓
-                </span>
-              ) : null}
-            </button>
-          );
-        })}
-      </div>
-
-      <p className="table-picker__zone-caption">
-        {focused ? (
-          <>
-            <strong>{focused.label}</strong> — {focused.caption}
-          </>
-        ) : (
-          "แตะป้ายโซนบนโมเดลหรือการ์ดด้านบน เพื่อซูมเข้าไปเลือกโต๊ะ"
-        )}
-      </p>
-
-      <div className={`table-picker__stage${focused ? " is-compare" : ""}`}>
-        {focused ? (
-          <ZonePhotoViewer
-            zoneLabel={focused.label}
-            photos={focused.photos}
-            index={photoIndex}
-            onIndexChange={setPhotoIndex}
-            onOpen={() => setLightboxOpen(true)}
-            onMatchView={() => setViewNonce((n) => n + 1)}
-          />
-        ) : null}
-        <div className="table-picker__model">
-          <span className="zone-photo__tag is-model">แบบจำลอง 3 มิติ</span>
-          <Suspense
-            fallback={
-              <div className="venue-scene-3d venue-scene-3d--fallback" role="status">
-                <p>กำลังโหลดโมเดลสามมิติของร้าน…</p>
-              </div>
-            }
-          >
-            <VenueScene3D
-              tables={placed}
-              zoneSummaries={summaries}
-              focusZoneId={focusZoneId}
-              view={getZoneView(focusZoneId, photoIndex)}
-              viewKey={`${focusZoneId ?? "all"}:${photoIndex}:${viewNonce}`}
-              selectedTableId={selectedTableId}
-              recommendedTableId={recommendedTableId}
-              onTableClick={selectById}
-              onZoneClick={setFocusZoneId}
-            />
-          </Suspense>
+      <div className="table-picker__overview">
+        <div className="table-picker__overview-head">
+          <h3>ผังร้าน</h3>
+          <p role="status">
+            {loading ? "กำลังตรวจโต๊ะว่าง…" : `ว่าง ${availableCount} จาก ${tables.length} โต๊ะ`}
+          </p>
         </div>
+        <div className="floor-plan-wrap">
+          <VenueFloorPlan
+            tables={placed}
+            summaries={summaries}
+            selectedTableId={selectedTableId}
+            recommendedTableId={recommendedTableId}
+            onTableClick={selectById}
+            onZoneClick={scrollToZone}
+          />
+        </div>
+        <p className="floor-plan-tip">แตะโต๊ะสีเขียวบนผังเพื่อเลือก หรือแตะโซนเพื่อเลื่อนไปดูรูปจริงและโมเดลสามมิติ</p>
+        <ul className="table-picker__legend" aria-label="คำอธิบายสีบนผัง">
+          <li><i className="is-available" aria-hidden="true" />ว่าง เลือกได้</li>
+          <li><i className="is-selected" aria-hidden="true" />โต๊ะที่คุณเลือก</li>
+          <li><i className="is-recommended" aria-hidden="true" />ระบบแนะนำ</li>
+          <li><i className="is-booked" aria-hidden="true" />จองแล้ว</li>
+          <li><i className="is-too_small" aria-hidden="true" />ที่นั่งไม่พอ</li>
+          <li><i className="is-mark-kitchen" aria-hidden="true" />ครัว</li>
+          <li><i className="is-mark-drinks" aria-hidden="true" />บาร์น้ำ</li>
+          <li><i className="is-mark-ice" aria-hidden="true" />น้ำแข็ง/แก้ว</li>
+          <li><i className="is-mark-restroom" aria-hidden="true" />ห้องน้ำ</li>
+        </ul>
+        <nav className="zone-jump" aria-label="ไปที่โซน">
+          {venueZones.map((zone) => {
+            const s = summaries.find((x) => x.zone === zone.id);
+            return (
+              <button
+                key={zone.id}
+                type="button"
+                className={`zone-jump__btn${!loading && (s?.available ?? 0) === 0 ? " is-full" : ""}`}
+                aria-label={`ไปที่${zone.label} ${statusText(s, loading)}`}
+                onClick={() => scrollToZone(zone.id)}
+              >
+                <span className="zone-jump__num" aria-hidden="true">
+                  {zone.number}
+                </span>
+                <span className="zone-jump__text">
+                  <strong>{zone.shortLabel}</strong>
+                  <small>{statusText(s, loading)}</small>
+                </span>
+              </button>
+            );
+          })}
+        </nav>
       </div>
-
-      {lightboxOpen && focused ? (
-        <PhotoLightbox
-          photos={focused.photos}
-          index={photoIndex}
-          onIndexChange={setPhotoIndex}
-          onClose={() => setLightboxOpen(false)}
-        />
-      ) : null}
-
-      <ul className="table-picker__legend" aria-label="คำอธิบายสีโต๊ะ">
-        <li><i className="is-available" aria-hidden="true" />ว่าง เลือกได้</li>
-        <li><i className="is-selected" aria-hidden="true" />โต๊ะที่คุณเลือก</li>
-        <li><i className="is-recommended" aria-hidden="true" />ระบบแนะนำ</li>
-        <li><i className="is-booked" aria-hidden="true" />จองแล้ว</li>
-        <li><i className="is-too_small" aria-hidden="true" />ที่นั่งไม่พอ</li>
-      </ul>
 
       {recommended && recommended.id !== selectedTableId ? (
-        <button type="button" className="table-picker__recommend" onClick={() => onSelectTable(recommended.id)}>
+        <button type="button" className="table-picker__recommend" onClick={pickRecommended}>
           <span aria-hidden="true">★</span> ให้ระบบเลือกให้: โต๊ะ {recommended.name} · {zoneLabel(recommended.zone)} ·{" "}
           {recommended.capacity} ที่นั่ง
         </button>
       ) : null}
 
-      <div className="table-picker__list" role="group" aria-label={`เลือกโต๊ะสำหรับ ${partySize} คน`}>
-        {loading && tables.length === 0 ? (
-          <p className="table-picker__empty" role="status">
-            กำลังตรวจสอบโต๊ะว่าง…
-          </p>
-        ) : visibleGroups.length === 0 ? (
-          <p className="table-picker__empty">
-            {focusZoneId ? "โซนนี้ยังไม่มีโต๊ะให้จอง ลองดูโซนอื่น" : "ยังไม่มีโต๊ะให้จองในขณะนี้"}
-          </p>
-        ) : (
-          visibleGroups.map((group) => (
-            <section key={group.zone ?? "other"} className="table-picker__group" aria-label={zoneLabel(group.zone)}>
-              <h3>{zoneLabel(group.zone)}</h3>
-              <ul>
-                {group.tables.map((table) => {
-                  const isSelected = table.id === selectedTableId;
-                  const isRecommended = table.id === recommendedTableId && table.status === "available";
-                  return (
-                    <li key={table.id}>
-                      <button
-                        type="button"
-                        className={`table-picker__table is-${table.status}${isSelected ? " is-selected" : ""}`}
-                        aria-pressed={isSelected}
-                        aria-disabled={table.status !== "available"}
-                        aria-label={`โต๊ะ ${table.name} ${zoneLabel(table.zone)} ${table.capacity} ที่นั่ง สถานะ${STATUS_TEXT[table.status]}${isRecommended ? " ระบบแนะนำ" : ""}${table.status === "too_small" ? ` ไม่พอสำหรับ ${partySize} คน` : ""}`}
-                        onClick={() => toggleTable(table)}
-                      >
-                        <span className="table-picker__table-name">
-                          {isSelected ? <span aria-hidden="true">✓ </span> : null}
-                          {table.name}
-                        </span>
-                        <span className="table-picker__table-seats">{table.capacity} ที่นั่ง</span>
-                        <span className="table-picker__table-status">{isSelected ? "เลือกแล้ว" : STATUS_TEXT[table.status]}</span>
-                        {isRecommended ? <span className="table-picker__badge">แนะนำ</span> : null}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </section>
-          ))
-        )}
+      {loading && tables.length === 0 ? (
+        <p className="table-picker__empty" role="status">
+          กำลังตรวจสอบโต๊ะว่าง…
+        </p>
+      ) : null}
+
+      <div className="zone-sections" role="group" aria-label={`เลือกโต๊ะสำหรับ ${partySize} คน`}>
+        {venueZones.map((zone) => (
+          <ZoneSection
+            key={zone.id}
+            zone={zone}
+            zoneTables={tables.filter((t) => t.zone === zone.id)}
+            placed={placed}
+            summary={summaries.find((s) => s.zone === zone.id)}
+            loading={loading}
+            partySize={partySize}
+            selectedTableId={selectedTableId}
+            recommendedTableId={recommendedTableId}
+            onToggle={toggleTable}
+            onSelectId={selectById}
+          />
+        ))}
+        {others.length > 0 ? (
+          <section id={zoneSectionId("other")} className="zone-section is-other" aria-labelledby="zone-section-other-title">
+            <header className="zone-section__head">
+              <div className="zone-section__heading">
+                <h3 id="zone-section-other-title" tabIndex={-1}>
+                  โซนอื่น ๆ
+                </h3>
+                <p>โต๊ะที่ยังไม่ได้วางบนผัง เลือกจองได้ตามปกติ พนักงานจะพาไปที่โต๊ะ</p>
+              </div>
+            </header>
+            <TableList
+              label="โต๊ะในโซนอื่น ๆ"
+              tables={others}
+              partySize={partySize}
+              selectedTableId={selectedTableId}
+              recommendedTableId={recommendedTableId}
+              onToggle={toggleTable}
+            />
+          </section>
+        ) : null}
       </div>
     </div>
   );

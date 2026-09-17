@@ -29,53 +29,85 @@ function Harness({ onSelect = () => {} }: { onSelect?: (id: string | null) => vo
   );
 }
 
-describe("ขั้นเลือกโซนและโต๊ะ", () => {
-  it("การ์ดโซนบอกจำนวนโต๊ะว่าง และรายการโต๊ะบอกสถานะชัดเจน", async () => {
+
+function section(name: RegExp | string) {
+  return screen.getByRole("region", { name });
+}
+
+describe("ขั้นเลือกโซนและโต๊ะ (หนึ่งโซนต่อหนึ่งส่วน)", () => {
+  it("มีผังร้าน ปุ่มไปที่โซน และแยกส่วนละโซนพร้อมจำนวนโต๊ะว่าง", async () => {
     render(<Harness />);
-    const zones = screen.getByRole("group", { name: "เลือกโซนที่นั่ง" });
-    expect(screen.getByRole("button", { name: /ดูทั้งร้าน · ว่าง 3 จาก 5 โต๊ะ/ })).toHaveAttribute("aria-pressed", "true");
-    // การ์ดโซนแสดงรูปจริงของแต่ละโซน
-    expect(zones.querySelectorAll("img")).toHaveLength(4);
-    // ภาพรวมยังไม่แสดงรูปเทียบ
-    expect(screen.queryByText("รูปจริง")).not.toBeInTheDocument();
-    expect(within(zones).getByRole("button", { name: "โซนหน้าร้าน (ใต้กันสาด) ว่าง 1/2 โต๊ะ" })).toBeInTheDocument();
-    expect(within(zones).getByRole("button", { name: "โซนห้องอาหาร ว่าง 1/2 โต๊ะ" })).toBeInTheDocument();
-    expect(within(zones).getByRole("button", { name: "โซนศาลากลางแจ้ง ไม่มีโต๊ะ" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "ผังร้าน" })).toBeInTheDocument();
+    expect(screen.getByText("ว่าง 3 จาก 5 โต๊ะ")).toBeInTheDocument();
 
-    const list = screen.getByRole("group", { name: "เลือกโต๊ะสำหรับ 3 คน" });
-    expect(within(list).getAllByRole("button")).toHaveLength(5);
-    expect(within(list).getByRole("button", { name: /โต๊ะ F2 .*สถานะจองแล้ว/ })).toHaveAttribute("aria-disabled", "true");
-    expect(within(list).getByRole("button", { name: /โต๊ะ D1 .*ไม่พอสำหรับ 3 คน/ })).toHaveAttribute("aria-disabled", "true");
-    expect(within(list).getByRole("button", { name: /โต๊ะ D2 .*ระบบแนะนำ/ })).toBeInTheDocument();
-    expect(within(list).getByRole("region", { name: "โซนอื่น ๆ" })).toBeInTheDocument();
+    const jump = screen.getByRole("navigation", { name: "ไปที่โซน" });
+    expect(within(jump).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([
+      "ไปที่โซนหน้าร้าน (ใต้กันสาด) ว่าง 1/2 โต๊ะ",
+      "ไปที่โซนห้องอาหาร ว่าง 1/2 โต๊ะ",
+      "ไปที่โซนบาร์หน้าครัว ไม่มีโต๊ะ",
+      "ไปที่โซนศาลากลางแจ้ง ไม่มีโต๊ะ",
+    ]);
+    expect(within(jump).getAllByRole("button")[0]).toHaveTextContent("1หน้าร้านว่าง 1/2 โต๊ะ");
 
-    // jsdom ไม่มี WebGL → แสดงข้อความสำรองแทนโมเดล
-    expect(await screen.findByText(/อุปกรณ์นี้แสดงโมเดลสามมิติไม่ได้/)).toBeInTheDocument();
+    // ส่วนละหนึ่งโซน + โซนอื่น ๆ สำหรับโต๊ะที่ยังไม่กำหนดโซน
+    const regions = within(screen.getByRole("group", { name: "เลือกโต๊ะสำหรับ 3 คน" })).getAllByRole("region");
+    expect(regions.map((r) => r.id)).toEqual([
+      "zone-section-front",
+      "zone-section-dining",
+      "zone-section-kitchen",
+      "zone-section-sala",
+      "zone-section-other",
+    ]);
+
+    const front = section("โซนหน้าร้าน (ใต้กันสาด)");
+    expect(within(front).getByText("ติดทางเข้า")).toBeInTheDocument();
+    expect(within(front).getByRole("img", { name: /มองจากในร้านออกไปหน้าร้าน/ })).toHaveAttribute(
+      "src",
+      "/venue/reservations/storefront-seating.jpg",
+    );
+    const frontTables = within(front).getByRole("list", { name: "โต๊ะในโซนหน้าร้าน (ใต้กันสาด)" });
+    expect(within(frontTables).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      expect.stringContaining("F1"),
+      expect.stringContaining("F2"),
+    ]);
+    expect(within(frontTables).getByRole("button", { name: /โต๊ะ F2 .*สถานะจองแล้ว/ })).toHaveAttribute("aria-disabled", "true");
+
+    const dining = section("โซนห้องอาหาร");
+    expect(within(dining).getByText("บาร์น้ำ ชาใต้")).toBeInTheDocument();
+    expect(within(dining).getByText("ห้องน้ำ")).toBeInTheDocument();
+    expect(within(dining).getByRole("button", { name: /โต๊ะ D1 .*ไม่พอสำหรับ 3 คน/ })).toHaveAttribute("aria-disabled", "true");
+    expect(within(dining).getByRole("button", { name: /โต๊ะ D2 .*ระบบแนะนำ/ })).toBeInTheDocument();
+
+    expect(within(section("โซนบาร์หน้าครัว")).getByText("โซนนี้ยังไม่มีโต๊ะให้จอง ลองดูโซนอื่น")).toBeInTheDocument();
+    expect(within(section("โซนศาลากลางแจ้ง")).getByText("น้ำแข็ง · แก้วน้ำ")).toBeInTheDocument();
+    expect(within(section("โซนอื่น ๆ")).getByRole("button", { name: /โต๊ะ X1 / })).toBeInTheDocument();
+
+    // jsdom ไม่มี WebGL → ทุกโซนแสดงข้อความสำรองแทนโมเดล
+    expect(await screen.findAllByText(/อุปกรณ์นี้แสดงโมเดลสามมิติไม่ได้/)).toHaveLength(4);
   });
 
-  it("กดโซนแล้วเหลือเฉพาะโต๊ะในโซนนั้น", async () => {
+  it("ปุ่มไปที่โซนเลื่อนหน้าไปยังส่วนของโซนนั้น", async () => {
     const user = userEvent.setup();
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
     render(<Harness />);
-    await user.click(screen.getByRole("button", { name: /^โซนห้องอาหาร/ }));
-    expect(screen.getByRole("button", { name: /^โซนห้องอาหาร/ })).toHaveAttribute("aria-pressed", "true");
-    const list = screen.getByRole("group", { name: "เลือกโต๊ะสำหรับ 3 คน" });
-    expect(within(list).getAllByRole("button").map((b) => b.textContent)).toEqual([
-      expect.stringContaining("D1"),
-      expect.stringContaining("D2"),
-    ]);
-    expect(screen.getByText(/ห้องอาหารในร้าน/)).toBeInTheDocument();
+    await user.click(
+      within(screen.getByRole("navigation", { name: "ไปที่โซน" })).getByRole("button", { name: /โซนศาลากลางแจ้ง/ }),
+    );
+    expect(scroll).toHaveBeenCalledTimes(1);
+    expect(scroll.mock.contexts[0]).toBe(document.getElementById("zone-section-sala"));
+    expect(screen.getByRole("heading", { name: "โซนศาลากลางแจ้ง" })).toHaveFocus();
   });
 
   it("เลือก/ยกเลิกโต๊ะว่างได้ทั้งคลิกและคีย์บอร์ด แต่โต๊ะไม่ว่างเลือกไม่ได้", async () => {
     const user = userEvent.setup();
     const onSelect = vi.fn();
     render(<Harness onSelect={onSelect} />);
-    const f1 = screen.getByRole("button", { name: /โต๊ะ F1 / });
-    await user.click(f1);
+    await user.click(screen.getByRole("button", { name: /โต๊ะ F1 / }));
     expect(onSelect).toHaveBeenLastCalledWith("t-f1");
     expect(screen.getByRole("button", { name: /โต๊ะ F1 / })).toHaveAttribute("aria-pressed", "true");
-    // เลือกแล้วกล้องพาไปที่โซนของโต๊ะ
-    expect(screen.getByRole("button", { name: /^โซนหน้าร้าน/ })).toHaveAttribute("aria-pressed", "true");
+    // ส่วนของโซนที่มีโต๊ะที่เลือกถูกเน้น
+    expect(document.getElementById("zone-section-front")).toHaveClass("has-selection");
 
     await user.click(screen.getByRole("button", { name: /โต๊ะ F1 / }));
     expect(onSelect).toHaveBeenLastCalledWith(null);
@@ -98,6 +130,7 @@ describe("ขั้นเลือกโซนและโต๊ะ", () => {
     await user.click(screen.getByRole("button", { name: /ให้ระบบเลือกให้: โต๊ะ D2/ }));
     expect(onSelect).toHaveBeenLastCalledWith("t-d2");
     expect(screen.queryByRole("button", { name: /ให้ระบบเลือกให้/ })).not.toBeInTheDocument();
+    expect(document.getElementById("zone-section-dining")).toHaveClass("has-selection");
   });
 
   it("ระหว่างโหลดบอกสถานะกำลังตรวจสอบ", () => {
@@ -105,36 +138,33 @@ describe("ขั้นเลือกโซนและโต๊ะ", () => {
       <ReservationTableScene tables={[]} recommendedTableId={null} partySize={2} selectedTableId={null} onSelectTable={() => {}} loading />,
     );
     expect(screen.getByText("กำลังตรวจสอบโต๊ะว่าง…")).toBeInTheDocument();
+    expect(screen.getAllByText("กำลังตรวจ…")).not.toHaveLength(0);
   });
-  it("เปิดโซนแล้วเห็นรูปจริงขนาดใหญ่คู่กับแบบจำลอง เปลี่ยนรูปได้ และขยายเต็มจอได้", async () => {
+
+  it("แต่ละโซนมีรูปจริงขนาดใหญ่ เปลี่ยนรูปได้ และขยายเต็มจอได้", async () => {
     const user = userEvent.setup();
     render(<Harness />);
-    await user.click(screen.getByRole("button", { name: /^โซนหน้าร้าน/ }));
-    expect(screen.getByText("รูปจริง")).toBeInTheDocument();
-    expect(screen.getByText("แบบจำลอง 3 มิติ")).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: /มองจากในร้านออกไปหน้าร้าน/ })).toHaveAttribute(
-      "src",
-      "/venue/reservations/storefront-seating.jpg",
-    );
+    const dining = section("โซนห้องอาหาร");
+    expect(within(dining).getByText("รูปจริง")).toBeInTheDocument();
+    expect(within(dining).getByText("แบบจำลอง 3 มิติ")).toBeInTheDocument();
 
-    const thumbs = screen.getByRole("group", { name: "รูปอื่นในโซนหน้าร้าน (ใต้กันสาด)" });
-    await user.click(within(thumbs).getByRole("button", { name: /เคาน์เตอร์ชาใต้ข้างทางเข้า/ }));
-    expect(within(thumbs).getByRole("button", { name: /เคาน์เตอร์ชาใต้ข้างทางเข้า/ })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByText(/รูป 2\/3/)).toBeInTheDocument();
+    const thumbs = within(dining).getByRole("group", { name: "รูปอื่นในโซนห้องอาหาร" });
+    await user.click(within(thumbs).getByRole("button", { name: /บาร์น้ำชาใต้ชิดผนังขวา/ }));
+    expect(within(thumbs).getByRole("button", { name: /บาร์น้ำชาใต้ชิดผนังขวา/ })).toHaveAttribute("aria-pressed", "true");
+    expect(within(dining).getByText(/รูป 2\/5/)).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /^ขยายรูป เคาน์เตอร์ชาใต้/ }));
-    const dialog = screen.getByRole("dialog", { name: /รูปจริง: เคาน์เตอร์ชาใต้/ });
+    await user.click(within(dining).getByRole("button", { name: /^ขยายรูป บาร์น้ำชาใต้/ }));
+    const dialog = screen.getByRole("dialog", { name: /รูปจริง: บาร์น้ำชาใต้/ });
     expect(within(dialog).getByRole("button", { name: "ปิดรูป" })).toHaveFocus();
     await user.keyboard("{ArrowRight}");
     expect(screen.getByRole("dialog", { name: /รูปจริง: เมนูเครื่องดื่ม/ })).toBeInTheDocument();
-    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "รูปถัดไป" }));
-    expect(screen.getByRole("dialog", { name: /มองจากในร้านออกไปหน้าร้าน/ })).toBeInTheDocument();
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "รูปก่อนหน้า" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "รูปก่อนหน้า" }));
+    expect(screen.getByRole("dialog", { name: /มองจากทางเข้าเข้าไปในห้องอาหาร/ })).toBeInTheDocument();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^ขยายรูป มองจากในร้าน/ })).toHaveFocus();
-
-    // กลับไปดูทั้งร้าน รูปเทียบหายไป
-    await user.click(screen.getByRole("button", { name: /ดูทั้งร้าน/ }));
-    expect(screen.queryByText("รูปจริง")).not.toBeInTheDocument();
+    expect(within(dining).getByRole("button", { name: /^ขยายรูป มองจากทางเข้า/ })).toHaveFocus();
+    // รูปของโซนอื่นไม่เปลี่ยนตาม
+    expect(within(section("โซนหน้าร้าน (ใต้กันสาด)")).getByRole("button", { name: /^ขยายรูป มองจากในร้าน/ })).toBeInTheDocument();
   });
 });

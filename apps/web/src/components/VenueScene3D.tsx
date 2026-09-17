@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import type { TableZone } from "../lib/api";
-import { venueZones, type CameraView, type PlacedTable, type ZoneSummary } from "./venueModel";
-import { buildFurniture, buildScenery, type Track } from "./venueScenery";
+import { getZone, landmarks, type CameraView, type LandmarkKind, type PlacedTable } from "./venueModel";
+import { buildFurniture, buildScenery, type Fadeable, type Track } from "./venueScenery";
 
 export type VenueScene3DProps = {
+  /** โต๊ะทั้งร้าน (โซนอื่นแสดงจาง ๆ เป็นบริบท) */
   tables: PlacedTable[];
-  zoneSummaries: ZoneSummary[];
-  focusZoneId: TableZone | null;
+  /** โซนที่ส่วนนี้ของหน้าเว็บแสดง — เลือกได้เฉพาะโต๊ะในโซนนี้ */
+  focusZoneId: TableZone;
   /** มุมกล้องเป้าหมาย (เช่น มุมเดียวกับรูปจริงที่เลือก) */
   view: CameraView;
   /** เปลี่ยนค่านี้เพื่อสั่งให้กล้องไปที่ view อีกครั้ง */
@@ -15,7 +16,6 @@ export type VenueScene3DProps = {
   selectedTableId: string | null;
   recommendedTableId: string | null;
   onTableClick: (tableId: string) => void;
-  onZoneClick: (zoneId: TableZone) => void;
 };
 
 type TableVisual = {
@@ -31,19 +31,19 @@ type SceneState = {
   tables: PlacedTable[];
   selected: string | null;
   recommended: string | null;
-  focus: TableZone | null;
+  focus: TableZone;
 };
 
 type SceneApi = {
   setTables: (tables: PlacedTable[]) => void;
   applyStates: (state: SceneState) => void;
-  setView: (view: CameraView, zoomed: boolean) => void;
+  setView: (view: CameraView) => void;
   zoomBy: (factor: number) => void;
   invalidate: () => void;
 };
 
 const MIN_RADIUS = 3;
-const MAX_RADIUS = 48;
+const MAX_RADIUS = 30;
 // มุมกล้องตั้งไว้สำหรับ canvas กว้าง ~4:3 — จอแคบต้องถอยกล้องออกเล็กน้อย
 const DESIGN_ASPECT = 1.33;
 
@@ -70,14 +70,12 @@ function tableLayoutKey(tables: PlacedTable[]): string {
 
 export function VenueScene3D({
   tables,
-  zoneSummaries,
   focusZoneId,
   view,
   viewKey,
   selectedTableId,
   recommendedTableId,
   onTableClick,
-  onZoneClick,
 }: VenueScene3DProps) {
   const mountRef = useRef<HTMLDivElement>(null);
   const [failed, setFailed] = useState(false);
@@ -89,8 +87,8 @@ export function VenueScene3D({
   onTableClickRef.current = onTableClick;
   const stateRef = useRef<SceneState>({ tables, selected: selectedTableId, recommended: recommendedTableId, focus: focusZoneId });
   stateRef.current = { tables, selected: selectedTableId, recommended: recommendedTableId, focus: focusZoneId };
-  const viewRef = useRef({ view, zoomed: focusZoneId !== null });
-  viewRef.current = { view, zoomed: focusZoneId !== null };
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const layoutKey = tableLayoutKey(tables);
   const statusKey = tables.map((t) => t.status).join(",");
 
@@ -101,7 +99,7 @@ export function VenueScene3D({
 
     let renderer: THREE.WebGLRenderer;
     try {
-      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "low-power" });
       if (!renderer.getContext()) throw new Error("no webgl");
     } catch {
       setFailed(true);
@@ -117,7 +115,7 @@ export function VenueScene3D({
     const height = () => Math.max(1, mount.clientHeight || 300);
     const reducedMotion = prefersReducedMotion();
 
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
     renderer.setSize(width(), height());
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -133,7 +131,7 @@ export function VenueScene3D({
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0xdfe9ee);
-    scene.fog = new THREE.Fog(0xdfe9ee, 40, 80);
+    scene.fog = new THREE.Fog(0xdfe9ee, 30, 70);
     const camera = new THREE.PerspectiveCamera(50, width() / height(), 0.1, 200);
 
     // render เฉพาะเมื่อมีการเปลี่ยนแปลง (ไม่วนตลอดเวลา — ประหยัดแบตมือถือ)
@@ -147,6 +145,49 @@ export function VenueScene3D({
     const orbit: Orbit = { target: new THREE.Vector3(), radius: 20, theta: 0, phi: 1 };
     let tween: null | { from: Orbit; to: Orbit; start: number } = null;
 
+    let fadeables: Fadeable[] = [];
+    const side = new THREE.Vector3();
+    /** ผนัง/หลังคาที่บังระหว่างกล้องกับจุดที่มองจะจางลง (แบบบ้านตุ๊กตา) */
+    function updateFades() {
+      const cam = camera.position;
+      const target = orbit.target;
+      for (const f of fadeables) {
+        let hide = false;
+        let faded = 0.1;
+        if (f.kind === "wall") {
+          const a = side.copy(cam).sub(f.point).dot(f.normal);
+          const b = side.copy(target).sub(f.point).dot(f.normal);
+          hide = a * b < 0 && Math.abs(a) > 0.1;
+        } else {
+          faded = f.minOpacity ?? 0.22;
+          // กล้องอยู่เหนือชายคาและแนวสายตาผ่านเหนือหลังคา หรือเส้นสายตาทะลุหลังคา
+          const { rect } = f;
+          const inside = (x: number, z: number) => x > rect.x0 && x < rect.x1 && z > rect.z0 && z < rect.z1;
+          if (cam.y > f.y) {
+            for (let i = 0; i <= 12 && !hide; i++) {
+              const t = i / 12;
+              hide = inside(cam.x + (target.x - cam.x) * t, cam.z + (target.z - cam.z) * t);
+            }
+          } else if (Math.abs(target.y - cam.y) > 1e-3) {
+            const t = (f.y - cam.y) / (target.y - cam.y);
+            if (t > 0 && t < 1) hide = inside(cam.x + (target.x - cam.x) * t, cam.z + (target.z - cam.z) * t);
+          }
+        }
+        for (const m of f.materials) {
+          const base = (m.userData["baseOpacity"] as number | undefined) ?? 1;
+          const opacity = hide ? Math.min(base, faded) : base;
+          if (m.opacity === opacity) continue;
+          const transparent = hide || base < 1;
+          if (m.transparent !== transparent) {
+            m.transparent = transparent;
+            m.needsUpdate = true;
+          }
+          m.opacity = opacity;
+          m.depthWrite = !hide;
+        }
+      }
+    }
+
     function placeCamera() {
       const { target, radius, theta, phi } = orbit;
       camera.position.set(
@@ -155,17 +196,18 @@ export function VenueScene3D({
         target.z + radius * Math.sin(phi) * Math.cos(theta),
       );
       camera.lookAt(target);
+      updateFades();
     }
     function applyCamera() {
       placeCamera();
       invalidate();
     }
 
-    function orbitFromView(v: CameraView, zoomed: boolean): Orbit {
+    function orbitFromView(v: CameraView): Orbit {
       const target = new THREE.Vector3(v.target.x, v.target.y, v.target.z);
       const offset = new THREE.Vector3(v.position.x, v.position.y, v.position.z).sub(target);
       const length = offset.length();
-      const fit = Math.min(zoomed ? 1.25 : 1.7, Math.max(1, DESIGN_ASPECT / camera.aspect));
+      const fit = Math.min(1.3, Math.max(1, DESIGN_ASPECT / camera.aspect));
       return {
         target,
         radius: Math.min(MAX_RADIUS, length * fit),
@@ -174,8 +216,8 @@ export function VenueScene3D({
       };
     }
 
-    function setView(v: CameraView, zoomed: boolean, instant = false) {
-      const to = orbitFromView(v, zoomed);
+    function setView(v: CameraView, instant = false) {
+      const to = orbitFromView(v);
       if (instant || reducedMotion) {
         tween = null;
         Object.assign(orbit, to);
@@ -198,19 +240,24 @@ export function VenueScene3D({
 
     // ---------- แสง (แดดบ่ายอ่อน ๆ + ไฟในร้าน) ----------
     scene.add(new THREE.HemisphereLight(0xfdf6ea, 0x7d6b58, 1.15));
-    const sun = new THREE.DirectionalLight(0xfff0d8, 1.6);
-    sun.position.set(10, 16, 9);
+    const sun = new THREE.DirectionalLight(0xfff0d8, 1.5);
+    sun.position.set(9, 18, 12);
+    sun.target.position.set(0.5, 0, -1);
+    scene.add(sun.target);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
-    Object.assign(sun.shadow.camera, { left: -16, right: 16, top: 16, bottom: -16, near: 1, far: 50 });
+    sun.shadow.mapSize.set(1536, 1536);
+    Object.assign(sun.shadow.camera, { left: -15, right: 15, top: 15, bottom: -15, near: 1, far: 60 });
     sun.shadow.camera.updateProjectionMatrix();
     sun.shadow.bias = -0.0005;
     scene.add(sun);
-    const indoor = new THREE.PointLight(0xfff4e0, 6, 12, 1.6);
-    indoor.position.set(0, 2.9, -1.5);
-    scene.add(indoor);
+    // ไฟในร้านแต่ละโซน (โทนอุ่น)
+    for (const [lx, ly, lz] of [[4.6, 2.8, -3.6], [-4.4, 2.8, -2.4], [-4.35, 2.6, 3.6], [4.7, 2.5, 1.9]] as const) {
+      const light = new THREE.PointLight(0xfff1dc, 4.5, 9, 1.6);
+      light.position.set(lx, ly, lz);
+      scene.add(light);
+    }
 
-    buildScenery({ scene, track, onTextureLoad: invalidate });
+    fadeables = buildScenery({ scene, track, onTextureLoad: invalidate }).fadeables;
 
     // ---------- โต๊ะ (สร้างใหม่เมื่อโครงสร้างชุดโต๊ะเปลี่ยน) ----------
     const tableRoot = new THREE.Group();
@@ -285,7 +332,7 @@ export function VenueScene3D({
         v.table = latest.get(v.table.id) ?? v.table;
         const { status, zone, id } = v.table;
         const isSelected = id === selected;
-        const dimmed = focus !== null && zone !== focus;
+        const dimmed = zone !== focus;
         const halo = isSelected ? HALO.selected : HALO[status];
         v.haloMaterial.color.setHex(halo.color);
         v.haloMaterial.opacity = dimmed ? 0 : halo.opacity;
@@ -299,16 +346,14 @@ export function VenueScene3D({
 
     // ---------- ป้ายลอย (HTML) ติดตามตำแหน่งโต๊ะ/โซน ----------
     const pins = pinsRef.current;
-    const zoneAnchors = new Map(
-      venueZones.map((z) => [z.id, new THREE.Vector3(z.labelAnchor.x, z.labelAnchor.y, z.labelAnchor.z)] as const),
-    );
+    const markAnchors = new Map(landmarks.map((l) => [l.id, new THREE.Vector3(l.anchor.x, l.anchor.y, l.anchor.z)]));
     const projected = new THREE.Vector3();
     function positionPins() {
       const w = width();
       const h = height();
       for (const [key, el] of pins) {
-        if (key.startsWith("zone:")) {
-          const anchor = zoneAnchors.get(key.slice(5) as TableZone);
+        if (key.startsWith("mark:")) {
+          const anchor = markAnchors.get(key.slice(5) as LandmarkKind);
           if (!anchor) continue;
           projected.copy(anchor);
         } else {
@@ -361,7 +406,7 @@ export function VenueScene3D({
       for (const hit of raycaster.intersectObjects(pickMeshes, false)) {
         const id = hit.object.userData["tableId"] as string | undefined;
         const v = id ? visuals.find((x) => x.table.id === id) : undefined;
-        if (v) return v.table;
+        if (v && v.table.zone === stateRef.current.focus) return v.table;
       }
       return null;
     }
@@ -450,10 +495,10 @@ export function VenueScene3D({
     resizeObserver?.observe(mount);
     window.addEventListener("resize", handleResize);
 
-    apiRef.current = { setTables, applyStates, setView: (v, zoomed) => setView(v, zoomed), zoomBy, invalidate };
+    apiRef.current = { setTables, applyStates, setView: (v) => setView(v), zoomBy, invalidate };
     setTables(stateRef.current.tables);
     applyStates(stateRef.current);
-    setView(viewRef.current.view, viewRef.current.zoomed, true);
+    setView(viewRef.current, true);
 
     return () => {
       disposed = true;
@@ -487,7 +532,7 @@ export function VenueScene3D({
   }, [statusKey, selectedTableId, recommendedTableId, focusZoneId]);
 
   useEffect(() => {
-    apiRef.current?.setView(viewRef.current.view, viewRef.current.zoomed);
+    apiRef.current?.setView(viewRef.current);
   }, [viewKey]);
 
   if (failed) {
@@ -503,8 +548,9 @@ export function VenueScene3D({
     else pinsRef.current.delete(key);
     apiRef.current?.invalidate();
   };
-  const focusedZone = venueZones.find((z) => z.id === focusZoneId);
-  const zoneTables = focusZoneId ? tables.filter((t) => t.zone === focusZoneId) : [];
+  const focusedZone = getZone(focusZoneId);
+  const zoneTables = tables.filter((t) => t.zone === focusZoneId);
+  const zoneMarks = landmarks.filter((l) => l.zone === focusZoneId);
 
   return (
     <div className="venue-scene-3d">
@@ -512,56 +558,43 @@ export function VenueScene3D({
         ref={mountRef}
         className="venue-scene-3d__mount"
         role="img"
-        aria-label={focusedZone ? `แบบจำลองสามมิติของร้าน กำลังดู${focusedZone.label}` : "แบบจำลองสามมิติของร้าน แสดงทุกโซน"}
+        aria-label={`แบบจำลองสามมิติของ${focusedZone?.label ?? "ร้าน"} แสดงตำแหน่งโต๊ะ ${zoneTables.length} ตัว`}
       />
-      {/* ป้ายบนโมเดลเป็นทางลัดสำหรับเมาส์/นิ้ว — ผู้ใช้คีย์บอร์ดและโปรแกรมอ่านจอใช้รายการโต๊ะด้านล่าง */}
+      {/* ป้ายบนโมเดลเป็นทางลัดสำหรับเมาส์/นิ้ว — ผู้ใช้คีย์บอร์ดและโปรแกรมอ่านจอใช้รายการโต๊ะของโซน */}
       <div className="venue-scene-3d__pins" aria-hidden="true">
-        {focusZoneId === null
-          ? zoneSummaries.map((s) => {
-              const zone = s.zone ? venueZones.find((z) => z.id === s.zone) : undefined;
-              if (!zone) return null;
-              return (
-                <button
-                  key={`zone:${zone.id}`}
-                  ref={pinRef(`zone:${zone.id}`)}
-                  type="button"
-                  tabIndex={-1}
-                  className={`venue-pin venue-pin--zone${s.available === 0 ? " is-full" : ""}`}
-                  onClick={() => onZoneClick(zone.id)}
-                >
-                  <strong>{zone.shortLabel}</strong>
-                  <span>{s.total === 0 ? "ไม่มีโต๊ะ" : s.available === 0 ? "เต็ม" : `ว่าง ${s.available} โต๊ะ`}</span>
-                </button>
-              );
-            })
-          : zoneTables.map((t) => {
-              const isSelected = t.id === selectedTableId;
-              const isRecommended = t.id === recommendedTableId && t.status === "available";
-              return (
-                <button
-                  key={`table:${t.id}`}
-                  ref={pinRef(`table:${t.id}`)}
-                  type="button"
-                  tabIndex={-1}
-                  disabled={t.status !== "available"}
-                  className={`venue-pin venue-pin--table is-${t.status}${isSelected ? " is-selected" : ""}`}
-                  onClick={() => onTableClick(t.id)}
-                >
-                  {isRecommended && !isSelected ? <em>แนะนำ</em> : null}
-                  <strong>
-                    {isSelected ? "✓ " : ""}
-                    {t.name}
-                  </strong>
-                  <span>
-                    {t.status === "booked"
-                      ? "จองแล้ว"
-                      : t.status === "too_small"
-                        ? `${t.capacity} ที่ ไม่พอ`
-                        : `${t.capacity} ที่นั่ง`}
-                  </span>
-                </button>
-              );
-            })}
+        {zoneMarks.map((l) => (
+          <span key={`mark:${l.id}`} ref={pinRef(`mark:${l.id}`)} className={`venue-pin venue-pin--mark is-${l.id}`}>
+            {l.label}
+          </span>
+        ))}
+        {zoneTables.map((t) => {
+          const isSelected = t.id === selectedTableId;
+          const isRecommended = t.id === recommendedTableId && t.status === "available";
+          return (
+            <button
+              key={`table:${t.id}`}
+              ref={pinRef(`table:${t.id}`)}
+              type="button"
+              tabIndex={-1}
+              disabled={t.status !== "available"}
+              className={`venue-pin venue-pin--table is-${t.status}${isSelected ? " is-selected" : ""}`}
+              onClick={() => onTableClick(t.id)}
+            >
+              {isRecommended && !isSelected ? <em>แนะนำ</em> : null}
+              <strong>
+                {isSelected ? "✓ " : ""}
+                {t.name}
+              </strong>
+              <span>
+                {t.status === "booked"
+                  ? "จองแล้ว"
+                  : t.status === "too_small"
+                    ? `${t.capacity} ที่ ไม่พอ`
+                    : `${t.capacity} ที่นั่ง`}
+              </span>
+            </button>
+          );
+        })}
       </div>
       <div className="venue-scene-3d__controls">
         <button type="button" aria-label="ซูมเข้า" onClick={() => apiRef.current?.zoomBy(0.8)}>
