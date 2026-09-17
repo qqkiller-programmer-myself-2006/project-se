@@ -28,6 +28,8 @@ export interface OrderRouterDeps {
   store: Store;
   middleware: OrderMiddleware;
   clientIp: (req: Request) => string;
+  /** นาฬิกาของแอป (ทดสอบฉีดเวลาได้) — createdAt ของคำสั่งซื้อต้องตรงกับนาฬิกาเดียวกับ loyalty */
+  clock?: () => Date;
 }
 
 function zodMessage(err: z.ZodError): string {
@@ -79,6 +81,7 @@ const listQuerySchema = z.object({
  */
 export function createOrderRouter(deps: OrderRouterDeps): express.Router {
   const { store, middleware, clientIp } = deps;
+  const clock = deps.clock ?? (() => new Date());
   const { requireAuth, requireCsrf, requireShopManager } = middleware;
   const router = express.Router();
 
@@ -145,7 +148,7 @@ export function createOrderRouter(deps: OrderRouterDeps): express.Router {
         return;
       }
       const b = parsed.data;
-      const now = new Date();
+      const now = clock();
       // normalize ด้วย domain rules — error ไทยชัดเจน (ห้ามส่ง stack ภายใน)
       let input: {
         customerId: string | null;

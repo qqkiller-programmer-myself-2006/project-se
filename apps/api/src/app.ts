@@ -664,6 +664,7 @@ export function createApp(opts: AppOptions): express.Express {
       store,
       middleware: { requireAuth, requireCsrf, requireShopManager },
       clientIp,
+      clock,
     }),
   );
 
