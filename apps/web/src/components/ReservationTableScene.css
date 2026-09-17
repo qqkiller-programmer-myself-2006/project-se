@@ -406,12 +406,6 @@
   min-width: 0;
 }
 
-.zone-section__model-hint {
-  color: var(--color-ink-600);
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-
 .zone-photo {
   display: grid;
   gap: 0.45rem;

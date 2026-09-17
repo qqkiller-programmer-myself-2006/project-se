@@ -2,6 +2,7 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { TABLE_ZONE_LABELS, type TableAvailability, type TableZone } from "../lib/api";
 import { VenueFloorPlan } from "./VenueFloorPlan";
 import {
+  getZoneOverview,
   getZoneView,
   landmarks,
   placeTables,
@@ -152,6 +153,8 @@ function ZoneSection({
 }: ZoneSectionProps) {
   const [photoIndex, setPhotoIndex] = useState(0);
   const [viewNonce, setViewNonce] = useState(0);
+  // เริ่มที่มุมภาพรวมของโซน (เห็นโต๊ะครบ) · เลือกรูปแล้วค่อยหมุนไปมุมเดียวกับรูป
+  const [matched, setMatched] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [near, modelRef] = useNearViewport<HTMLDivElement>();
   const titleId = `${zoneSectionId(zone.id)}-title`;
@@ -193,14 +196,30 @@ function ZoneSection({
           zoneLabel={zone.label}
           photos={zone.photos}
           index={photoIndex}
-          onIndexChange={setPhotoIndex}
+          onIndexChange={(i) => {
+            setPhotoIndex(i);
+            setMatched(true);
+          }}
           onOpen={() => setLightboxOpen(true)}
-          onMatchView={() => setViewNonce((n) => n + 1)}
+          onMatchView={() => {
+            setMatched(true);
+            setViewNonce((n) => n + 1);
+          }}
         />
         <div className="zone-section__model" ref={modelRef}>
           <div className="zone-photo__head">
             <span className="zone-photo__tag is-model">แบบจำลอง 3 มิติ</span>
-            <span className="zone-section__model-hint">แตะป้ายโต๊ะบนโมเดลเพื่อเลือก</span>
+            <button
+              type="button"
+              className="zone-photo__match"
+              aria-pressed={!matched}
+              onClick={() => {
+                setMatched(false);
+                setViewNonce((n) => n + 1);
+              }}
+            >
+              ภาพรวมโซน
+            </button>
           </div>
           {near ? (
             <Suspense
@@ -213,8 +232,8 @@ function ZoneSection({
               <VenueScene3D
                 tables={placed}
                 focusZoneId={zone.id}
-                view={getZoneView(zone.id, photoIndex)}
-                viewKey={`${photoIndex}:${viewNonce}`}
+                view={matched ? getZoneView(zone.id, photoIndex) : getZoneOverview(zone.id)}
+                viewKey={`${matched ? photoIndex : "overview"}:${viewNonce}`}
                 selectedTableId={selectedTableId}
                 recommendedTableId={recommendedTableId}
                 onTableClick={onSelectId}

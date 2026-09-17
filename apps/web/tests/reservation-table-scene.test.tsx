@@ -61,10 +61,11 @@ describe("ขั้นเลือกโซนและโต๊ะ (หนึ�
 
     const front = section("โซนหน้าร้าน (ใต้กันสาด)");
     expect(within(front).getByText("ติดทางเข้า")).toBeInTheDocument();
-    expect(within(front).getByRole("img", { name: /มองจากในร้านออกไปหน้าร้าน/ })).toHaveAttribute(
+    expect(within(front).getByRole("img", { name: /โต๊ะไม้ท็อปส้มขาดำหน้าร้าน/ })).toHaveAttribute(
       "src",
-      "/venue/reservations/storefront-seating.jpg",
+      "/venue/site/front-dining-view.jpg",
     );
+    expect(within(front).getByRole("button", { name: "ภาพรวมโซน" })).toHaveAttribute("aria-pressed", "true");
     const frontTables = within(front).getByRole("list", { name: "โต๊ะในโซนหน้าร้าน (ใต้กันสาด)" });
     expect(within(frontTables).getAllByRole("button").map((b) => b.textContent)).toEqual([
       expect.stringContaining("F1"),
@@ -152,6 +153,10 @@ describe("ขั้นเลือกโซนและโต๊ะ (หนึ�
     await user.click(within(thumbs).getByRole("button", { name: /บาร์น้ำชาใต้ชิดผนังขวา/ }));
     expect(within(thumbs).getByRole("button", { name: /บาร์น้ำชาใต้ชิดผนังขวา/ })).toHaveAttribute("aria-pressed", "true");
     expect(within(dining).getByText(/รูป 2\/5/)).toBeInTheDocument();
+    // เลือกรูปแล้วโมเดลหมุนไปมุมของรูป (ไม่ใช่ภาพรวมแล้ว) · กดภาพรวมโซนเพื่อกลับ
+    expect(within(dining).getByRole("button", { name: "ภาพรวมโซน" })).toHaveAttribute("aria-pressed", "false");
+    await user.click(within(dining).getByRole("button", { name: "ภาพรวมโซน" }));
+    expect(within(dining).getByRole("button", { name: "ภาพรวมโซน" })).toHaveAttribute("aria-pressed", "true");
 
     await user.click(within(dining).getByRole("button", { name: /^ขยายรูป บาร์น้ำชาใต้/ }));
     const dialog = screen.getByRole("dialog", { name: /รูปจริง: บาร์น้ำชาใต้/ });
@@ -165,6 +170,6 @@ describe("ขั้นเลือกโซนและโต๊ะ (หนึ�
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(within(dining).getByRole("button", { name: /^ขยายรูป มองจากทางเข้า/ })).toHaveFocus();
     // รูปของโซนอื่นไม่เปลี่ยนตาม
-    expect(within(section("โซนหน้าร้าน (ใต้กันสาด)")).getByRole("button", { name: /^ขยายรูป มองจากในร้าน/ })).toBeInTheDocument();
+    expect(within(section("โซนหน้าร้าน (ใต้กันสาด)")).getByRole("button", { name: /^ขยายรูป โต๊ะหน้าร้านติดประตู/ })).toBeInTheDocument();
   });
 });

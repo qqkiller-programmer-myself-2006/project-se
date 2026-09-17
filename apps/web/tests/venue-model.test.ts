@@ -23,14 +23,20 @@ describe("ผังร้านสำหรับโมเดลสามมิ�
       expect(zone.photos.length).toBeGreaterThan(0);
       for (const photo of zone.photos) {
         expect(photo.src).toMatch(/^\/venue\/.+\.jpg$/);
+        expect(photo.caption.length).toBeGreaterThan(5);
         expect(photo.alt.length).toBeGreaterThan(10);
         const { position: p, target: t } = photo.view;
         expect(Math.hypot(p.x - t.x, p.y - t.y, p.z - t.z)).toBeGreaterThan(2);
       }
       expect(zone.slots.length).toBeGreaterThan(0);
     }
-    // รูปถ่ายร้านที่ลูกค้าส่งมาต้องถูกใช้ครบทุกรูป
-    expect(new Set(allPhotos).size).toBe(9);
+    // รูปถ่ายร้านที่เจ้าของร้านส่งมาต้องถูกใช้ครบทุกรูป (ชุดแรก 9 + ชุดสำรวจหน้างาน 10)
+    expect(new Set(allPhotos).size).toBe(19);
+    expect(allPhotos.filter((src) => src.startsWith("/venue/site/"))).toHaveLength(10);
+    for (const zone of venueZones) {
+      const { position: p, target: t } = zone.overview;
+      expect(p.y).toBeGreaterThan(t.y + 4);
+    }
   });
 
   it("ผังตามแบบของร้าน: โต๊ะหน้าร้าน 2 ห้องอาหาร 6 บาร์หน้าครัว 3 ศาลา 4 และทุกช่องอยู่ในขอบเขตโซน", () => {
