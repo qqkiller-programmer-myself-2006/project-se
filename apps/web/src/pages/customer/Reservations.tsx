@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import {
   RESERVATION_STATUS_LABELS,
@@ -15,11 +15,13 @@ import { ConnectionBanner, DemoBadge } from "../../components/demo";
 import { Icon } from "../../components/icons";
 import { ReservationVenueGallery } from "../../components/ReservationVenueGallery";
 import { ReservationTableScene } from "../../components/ReservationTableScene";
+import { ReservationConfirmDialog } from "../../components/ReservationConfirmDialog";
 import { demoAvailability, isDemoTableId } from "../../components/venueModel";
 import { DEMO_RESERVATIONS, isDemoModeEnabled, isOfflineError, shouldFallbackToDemo } from "../../lib/demo";
 import {
   buildBookingDays,
   buildTimeSlots,
+  firstOpenDay,
   formatBookingDateTime,
   pickDefaultSlot,
   slotToDate,
@@ -108,8 +110,9 @@ export default function ReservationsPage() {
 
   // เวลาเดินไปจนช่องที่เลือกหมดสิทธิ์จอง → เลื่อนไปช่องแรกที่ยังจองได้
   useEffect(() => {
-    if (days.length > 0 && !days.some((d) => d.key === dateKey)) {
-      setDateKey(days[0]!.key);
+    const open = firstOpenDay(days);
+    if (open && !days.some((d) => d.key === dateKey && !d.closed)) {
+      setDateKey(open.key);
       return;
     }
     if (times.length > 0 && !times.includes(time)) setTime(times[0]!);
@@ -184,6 +187,9 @@ export default function ReservationsPage() {
   const [cancelId, setCancelId] = useState<string | null>(null);
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [confirmVisible, setConfirmVisible] = useState(false);
+  // ป๊อปอัปยืนยันจำนวนคนและเวลาอีกครั้ง — เปิดเมื่อแตะโต๊ะ; ปิดเองเมื่อโต๊ะที่เลือกหลุด (เช่น เวลาใหม่ถูกจองแล้ว)
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const showDialog = Boolean(dialogOpen && selectedTable && !created);
 
   useEffect(() => {
     const el = document.getElementById("reserve-confirm");
@@ -260,7 +266,16 @@ export default function ReservationsPage() {
     setSelectionNotice(null);
     setCreateError(null);
     setCreated(null);
+    setDialogOpen(Boolean(id));
   }
+
+  function openDialog() {
+    setCreateError(null);
+    setDialogOpen(true);
+  }
+
+  // คงตัวเดิมข้ามการ render — ป๊อปอัปใช้เป็น dependency ของตัวฟังปุ่ม Esc
+  const closeDialog = useCallback(() => setDialogOpen(false), []);
 
   async function create() {
     if (creating) return;
@@ -289,6 +304,8 @@ export default function ReservationsPage() {
       setCreated(res.reservation);
       setNote("");
       setSelectedTableId(null);
+      setDialogOpen(false);
+      document.getElementById("reserve-confirm")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
       setAvailVersion((v) => v + 1);
       try {
         setItems((await api.myReservations()).reservations);
@@ -327,7 +344,19 @@ export default function ReservationsPage() {
 
   const whenText = reservedAt ? formatBookingDateTime(reservedAt) : "ยังไม่ได้เลือกเวลา";
   const zoneText = selectedTable?.zone ? TABLE_ZONE_LABELS[selectedTable.zone] : selectedTable ? "โซนอื่น ๆ" : "—";
-  const canConfirm = Boolean(customer && selectedTable && reservedAt && !availDemo && !creating);
+  const canConfirm = Boolean(customer && selectedTable && reservedAt && !creating);
+  const loginNotice = (
+    <Alert tone="info" role="status">
+      กรุณา
+      <Link to="/customer/login" className="font-semibold text-brand-700 underline underline-offset-2">
+        เข้าสู่ระบบบัญชีลูกค้า
+      </Link>
+      ก่อนยืนยันการจอง (Guest จองโต๊ะไม่ได้) หรือ
+      <Link to="/register" className="font-semibold text-brand-700 underline underline-offset-2">
+        สมัครสมาชิก
+      </Link>
+    </Alert>
+  );
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-5 px-4 py-6 pb-28 sm:px-6">
@@ -406,15 +435,16 @@ export default function ReservationsPage() {
                     <button
                       key={day.key}
                       type="button"
-                      className={chipClass}
+                      className={`${chipClass} disabled:cursor-not-allowed disabled:border-dashed disabled:bg-ink-100 disabled:text-ink-500 disabled:hover:border-ink-200`}
                       aria-pressed={day.key === dateKey}
+                      disabled={day.closed}
                       onClick={() => {
                         setDateKey(day.key);
                         setCreated(null);
                       }}
                     >
                       <span className="block leading-tight">{day.label}</span>
-                      <span className="block text-xs font-normal opacity-80">{day.dateLabel}</span>
+                      <span className="block text-xs font-normal opacity-80">{day.closed ? "ปิดรับจองแล้ว" : day.dateLabel}</span>
                     </button>
                   ))}
                 </div>
@@ -521,50 +551,30 @@ export default function ReservationsPage() {
                   {selectedTable ? `โต๊ะ ${selectedTable.name} (${selectedTable.capacity} ที่นั่ง)` : "ยังไม่ได้เลือก — แตะโต๊ะสีเขียวในขั้นที่ 2"}
                 </dd>
               </div>
+              {note.trim() ? (
+                <div className="flex justify-between gap-3 sm:col-span-2 sm:block">
+                  <dt className="text-ink-600">หมายเหตุ</dt>
+                  <dd className="font-semibold text-ink-900">{note.trim()}</dd>
+                </div>
+              ) : null}
             </dl>
 
-            <div>
-              <label htmlFor="res-note" className="mb-1 block text-sm font-semibold text-ink-800">
-                หมายเหตุถึงร้าน (ถ้ามี)
-              </label>
-              <input
-                id="res-note"
-                className={inputClass}
-                value={note}
-                maxLength={200}
-                onChange={(e) => setNote(e.target.value)}
-                placeholder="เช่น มีเด็กเล็ก ขอเก้าอี้เสริม"
-              />
-            </div>
-
-            {createError ? (
+            {createError && !showDialog ? (
               <Alert tone="error" role="alert">
                 {createError}
               </Alert>
             ) : null}
 
-            {sessionChecked && !customer ? (
-              <Alert tone="info" role="status">
-                กรุณา
-                <Link to="/customer/login" className="font-semibold text-brand-700 underline underline-offset-2">
-                  เข้าสู่ระบบบัญชีลูกค้า
-                </Link>
-                ก่อนยืนยันการจอง (Guest จองโต๊ะไม่ได้) หรือ
-                <Link to="/register" className="font-semibold text-brand-700 underline underline-offset-2">
-                  สมัครสมาชิก
-                </Link>
-              </Alert>
-            ) : null}
+            {sessionChecked && !customer && !showDialog ? loginNotice : null}
 
             {customer ? (
               <button
                 type="button"
-                onClick={() => void create()}
+                onClick={openDialog}
                 disabled={!canConfirm}
-                aria-busy={creating}
                 className={`${primaryButtonClass} w-full text-base sm:w-auto`}
               >
-                {creating ? "กำลังจอง…" : selectedTable ? `ยืนยันจองโต๊ะ ${selectedTable.name}` : "เลือกโต๊ะก่อนยืนยัน"}
+                {selectedTable ? `ตรวจสอบก่อนจองโต๊ะ ${selectedTable.name}` : "เลือกโต๊ะก่อนยืนยัน"}
               </button>
             ) : null}
           </div>
@@ -643,7 +653,40 @@ export default function ReservationsPage() {
         <ReservationVenueGallery />
       </main>
 
-      {selectedTable && !confirmVisible && !created ? (
+      {showDialog && selectedTable ? (
+        <ReservationConfirmDialog
+          tableName={selectedTable.name}
+          capacity={selectedTable.capacity}
+          zoneLabel={zoneText}
+          partySize={partySize}
+          partyMin={PARTY_MIN}
+          onPartyChange={(next) => changeParty(Math.min(next, selectedTable.capacity))}
+          days={days}
+          dateKey={dateKey}
+          onDateChange={(key) => {
+            setDateKey(key);
+            setCreated(null);
+          }}
+          times={times}
+          time={time}
+          onTimeChange={(t) => {
+            setTime(t);
+            setCreated(null);
+          }}
+          whenText={whenText}
+          note={note}
+          onNoteChange={setNote}
+          checking={availLoading}
+          creating={creating}
+          error={createError}
+          canBook={Boolean(customer)}
+          blocked={sessionChecked && !customer ? loginNotice : null}
+          onConfirm={() => void create()}
+          onClose={closeDialog}
+        />
+      ) : null}
+
+      {selectedTable && !confirmVisible && !created && !showDialog ? (
         <div className="fixed inset-x-0 bottom-0 z-30 border-t border-ink-200 bg-white/95 px-4 py-3 shadow-[0_-8px_24px_-16px_rgba(28,21,18,0.6)] backdrop-blur">
           <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
             <p className="min-w-0 text-sm leading-tight text-ink-800">
@@ -655,7 +698,7 @@ export default function ReservationsPage() {
             <button
               type="button"
               className={primaryButtonClass}
-              onClick={() => document.getElementById("reserve-confirm")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+              onClick={openDialog}
             >
               ไปยืนยัน
             </button>

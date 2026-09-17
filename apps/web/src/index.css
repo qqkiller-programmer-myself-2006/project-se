@@ -309,7 +309,8 @@ body {
   }
 }
 .pa-page-enter {
-  animation: pa-page-in var(--motion-base) var(--motion-ease) both;
+  /* backwards: ไม่ค้าง transform หลังจบแอนิเมชัน — ไม่งั้น position: fixed ของลูก (ป๊อปอัป แถบล่าง) จะยึดกล่องนี้แทนหน้าจอ */
+  animation: pa-page-in var(--motion-base) var(--motion-ease) backwards;
 }
 
 /* Scroll entrance reveal (IntersectionObserver adds .is-visible) */

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildBookingDays,
   buildTimeSlots,
+  firstOpenDay,
   pickDefaultSlot,
   slotToDate,
   toDateKey,
@@ -20,13 +21,18 @@ describe("ช่องวันเวลาสำหรับจองโต๊�
     expect(buildTimeSlots("2026-09-21", now)).toEqual([]);
   });
 
-  it("รายการวันข้ามวันนี้เมื่อไม่เหลือเวลาจอง และตั้งชื่อวันที่อ่านง่าย", () => {
-    const late = new Date(2026, 8, 17, 18, 30);
+  it("วันนี้ยังแสดงแม้หมดเวลาจอง (ปิดรับ) และตั้งชื่อวันที่อ่านง่าย", () => {
+    const late = new Date(2026, 8, 17, 21, 59);
     const days = buildBookingDays(late);
-    expect(days[0]!.key).toBe("2026-09-18");
-    expect(days[0]!.label).toBe("พรุ่งนี้");
+    expect(days.map((d) => d.label)).toEqual(["วันนี้", "พรุ่งนี้", "มะรืนนี้", "อีก 3 วัน"]);
+    expect(days[0]).toMatchObject({ key: "2026-09-17", closed: true });
+    expect(days.slice(1).every((d) => !d.closed)).toBe(true);
+    expect(firstOpenDay(days)!.key).toBe("2026-09-18");
+    expect(new Set(days.map((d) => d.dateLabel)).size).toBe(4);
     const morning = buildBookingDays(new Date(2026, 8, 17, 8, 0));
     expect(morning.map((d) => d.label).slice(0, 3)).toEqual(["วันนี้", "พรุ่งนี้", "มะรืนนี้"]);
+    expect(morning[0]!.closed).toBeUndefined();
+    expect(firstOpenDay(morning)!.key).toBe("2026-09-17");
   });
 
   it("ช่องเริ่มต้นเว้นอย่างน้อย 2 ชั่วโมง", () => {

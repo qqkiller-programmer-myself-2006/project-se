@@ -14,6 +14,8 @@ export interface BookingDay {
   key: string;
   label: string;
   dateLabel: string;
+  /** วันนี้แต่หมดเวลาจองแล้ว — ยังแสดงให้เห็น แต่เลือกไม่ได้ */
+  closed?: boolean;
 }
 
 const pad = (n: number): string => String(n).padStart(2, "0");
@@ -48,17 +50,28 @@ export function buildTimeSlots(dateKey: string, now: Date): string[] {
 
 const DAY_NAMES = ["วันนี้", "พรุ่งนี้", "มะรืนนี้"];
 
-/** วันที่ยังมีช่องเวลาให้จอง (วันนี้ถึงอีก 3 วัน) */
+/**
+ * วันนี้ถึงอีก 3 วัน — วันนี้แสดงเสมอ (ถ้าหมดเวลาจองจะเป็น closed)
+ * วันอื่นที่ไม่มีช่องเวลาเหลือจะไม่แสดง
+ */
 export function buildBookingDays(now: Date): BookingDay[] {
   const days: BookingDay[] = [];
   for (let offset = 0; offset <= RESERVATION_MAX_ADVANCE_DAYS; offset += 1) {
     const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
     const key = toDateKey(d);
-    if (buildTimeSlots(key, now).length === 0) continue;
+    const closed = buildTimeSlots(key, now).length === 0;
+    if (closed && offset > 0) continue;
     const dateLabel = d.toLocaleDateString("th-TH", { weekday: "short", day: "numeric", month: "short" });
-    days.push({ key, label: DAY_NAMES[offset] ?? dateLabel, dateLabel });
+    const day: BookingDay = { key, label: DAY_NAMES[offset] ?? `อีก ${offset} วัน`, dateLabel };
+    if (closed) day.closed = true;
+    days.push(day);
   }
   return days;
+}
+
+/** วันแรกที่ยังเลือกจองได้ */
+export function firstOpenDay(days: BookingDay[]): BookingDay | undefined {
+  return days.find((d) => !d.closed);
 }
 
 /** ช่องแรกที่จองได้โดยเว้นอย่างน้อย 2 ชั่วโมง (ถ้าไม่มีก็ใช้ช่องแรกที่จองได้) */
