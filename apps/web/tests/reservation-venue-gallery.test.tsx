@@ -3,65 +3,69 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ReservationVenueGallery } from "../src/components/ReservationVenueGallery";
+import { venueZones } from "../src/components/venueModel";
 import ReservationsPage from "../src/pages/customer/Reservations";
 
-describe("แกลเลอรีบรรยากาศร้านสำหรับจองโต๊ะ", () => {
+const allPhotos = venueZones.flatMap((zone) => zone.photos);
+
+describe("แกลเลอรีรูปตำแหน่งโต๊ะในหน้าจอง", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it("แสดงภาพหลัก คำบรรยาย และตัวเลือกครบ 5 มุม", () => {
+  it("แสดงเฉพาะรูปตำแหน่งโต๊ะของทุกโซน ไม่มีรูปเมนูหรือลานจอดรถ", () => {
     const { container } = render(<ReservationVenueGallery />);
 
-    expect(screen.getByRole("heading", { name: "ดูบรรยากาศก่อนเลือกโต๊ะ" })).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "พื้นที่นั่งรับประทานอาหารภายในร้านป้าอ้อ" })).toHaveAttribute(
-      "src",
-      "/venue/reservations/dining-room.jpg",
-    );
-    expect(screen.getByText("ภาพที่ 1 จาก 5 · ห้องอาหาร")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /^ดู.+ ภาพที่ \d$/ })).toHaveLength(5);
+    expect(screen.getByRole("heading", { name: "ดูตำแหน่งโต๊ะก่อนจอง" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: allPhotos[0]!.alt })).toHaveAttribute("src", "/venue/site/front-dining-view.jpg");
+    expect(screen.getByText(`ภาพที่ 1 จาก ${allPhotos.length} · โซน 1 หน้าร้าน`)).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /^ดูโซน .+ ภาพที่ \d+$/ })).toHaveLength(allPhotos.length);
+    for (const photo of allPhotos) {
+      expect(container.querySelector(`img[src="${photo.src}"]`)).toBeInTheDocument();
+    }
     for (const src of [
-      "/venue/reservations/dining-room.jpg",
-      "/venue/reservations/storefront-seating.jpg",
-      "/venue/reservations/counter.jpg",
       "/venue/reservations/drink-menu.jpg",
       "/venue/reservations/food-menu.jpg",
+      "/venue/latest/real-menu-board.jpg",
+      "/venue/latest/real-menu-counter.jpg",
+      "/venue/site/parking-lot.jpg",
     ]) {
-      expect(container.querySelector(`img[src="${src}"]`)).toBeInTheDocument();
+      expect(container.querySelector(`img[src="${src}"]`)).not.toBeInTheDocument();
     }
   });
 
   it("เลือกภาพจากปุ่มและเลื่อนก่อนหน้าหรือถัดไปได้", async () => {
     const user = userEvent.setup();
     render(<ReservationVenueGallery />);
+    const total = allPhotos.length;
 
-    const drinkMenu = screen.getByRole("button", { name: "ดูเมนูเครื่องดื่ม ภาพที่ 4" });
-    await user.click(drinkMenu);
-    expect(drinkMenu).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("img", { name: "เมนูเครื่องดื่มที่เคาน์เตอร์ร้านป้าอ้อ" })).toBeInTheDocument();
-    expect(screen.getByText("ภาพที่ 4 จาก 5 · เมนูเครื่องดื่ม")).toBeInTheDocument();
+    const dining = screen.getByRole("button", { name: "ดูโซน 2 ห้องอาหาร ภาพที่ 5" });
+    await user.click(dining);
+    expect(dining).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("img", { name: /ห้องอาหารของร้านป้าอ้อ/ })).toHaveAttribute("src", "/venue/reservations/dining-room.jpg");
+    expect(screen.getByText(`ภาพที่ 5 จาก ${total} · โซน 2 ห้องอาหาร`)).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "ดูภาพบรรยากาศถัดไป" }));
-    expect(screen.getByText("ภาพที่ 5 จาก 5 · เมนูอาหาร")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "ดูรูปตำแหน่งโต๊ะถัดไป" }));
+    expect(screen.getByText(`ภาพที่ 6 จาก ${total} · โซน 3 บาร์หน้าครัว`)).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "ดูภาพบรรยากาศก่อนหน้า" }));
-    expect(screen.getByText("ภาพที่ 4 จาก 5 · เมนูเครื่องดื่ม")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "ดูรูปตำแหน่งโต๊ะก่อนหน้า" }));
+    expect(screen.getByText(`ภาพที่ 5 จาก ${total} · โซน 2 ห้องอาหาร`)).toBeInTheDocument();
   });
 
-  it("ใช้คีย์บอร์ดเลือกภาพและเลื่อนไปภาพถัดไปได้", async () => {
+  it("ใช้คีย์บอร์ดเลือกภาพและวนจากภาพสุดท้ายกลับภาพแรกได้", async () => {
     const user = userEvent.setup();
     render(<ReservationVenueGallery />);
+    const total = allPhotos.length;
 
-    const counter = screen.getByRole("button", { name: "ดูเคาน์เตอร์ ภาพที่ 3" });
-    counter.focus();
+    const last = screen.getByRole("button", { name: `ดูโซน 4 ศาลา ภาพที่ ${total}` });
+    last.focus();
     await user.keyboard("{Enter}");
-    expect(counter).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByText("ภาพที่ 3 จาก 5 · เคาน์เตอร์")).toBeInTheDocument();
+    expect(last).toHaveAttribute("aria-pressed", "true");
 
-    const next = screen.getByRole("button", { name: "ดูภาพบรรยากาศถัดไป" });
+    const next = screen.getByRole("button", { name: "ดูรูปตำแหน่งโต๊ะถัดไป" });
     next.focus();
     await user.keyboard("[Space]");
-    expect(screen.getByText("ภาพที่ 4 จาก 5 · เมนูเครื่องดื่ม")).toBeInTheDocument();
+    expect(screen.getByText(`ภาพที่ 1 จาก ${total} · โซน 1 หน้าร้าน`)).toBeInTheDocument();
   });
 
   it("แสดงแกลเลอรีในหน้าจองแม้ลูกค้ายังไม่เข้าสู่ระบบ", async () => {
@@ -80,7 +84,7 @@ describe("แกลเลอรีบรรยากาศร้านสำห�
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole("heading", { name: "ดูบรรยากาศก่อนเลือกโต๊ะ" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "ดูตำแหน่งโต๊ะก่อนจอง" })).toBeInTheDocument();
     expect(await screen.findByText(/เข้าสู่ระบบบัญชีลูกค้า/)).toBeInTheDocument();
   });
 });

@@ -170,13 +170,6 @@ export const venueZones: VenueZone[] = [
         orientation: "landscape",
         view: { position: v(1.5, 2.4, 17.0), target: v(0.8, 1.4, 0.5) },
       },
-      {
-        src: "/venue/site/parking-lot.jpg",
-        alt: "ลานจอดรถลูกรังกว้างหน้าร้าน มีต้นไม้กลางลาน ฝั่งตรงข้ามเป็นอาคารพาณิชย์สองชั้น",
-        caption: "ลานจอดรถกว้างหน้าร้าน จอดได้ทั้งรถยนต์และมอเตอร์ไซค์",
-        orientation: "landscape",
-        view: { position: v(4.0, 1.9, 3.4), target: v(4.5, 1.4, 14.0) },
-      },
     ],
     slots: [
       // หน้าร้านมีโต๊ะเดียว (4 ที่นั่ง) หน้าประตูกระจก
@@ -199,37 +192,6 @@ export const venueZones: VenueZone[] = [
         caption: "มองจากทางเข้าเข้าไปในห้องอาหาร",
         orientation: "landscape",
         view: { position: v(4.6, 3.6, 3.2), target: v(4.4, 0.8, -6.0) },
-      },
-      {
-        src: "/venue/reservations/counter.jpg",
-        alt: "เคาน์เตอร์ไม้พาเลทของชาใต้ ผนังภาพร้านกาแฟอิฐ ชิดผนังขวาของห้องอาหาร",
-        caption: "บาร์น้ำชาใต้ชิดผนังขวา — สั่งชา กาแฟ นมสดได้ที่นี่",
-        orientation: "landscape",
-        view: { position: v(3.8, 2.6, 0.4), target: v(8.7, 1.1, -1.8) },
-      },
-      {
-        src: "/venue/reservations/drink-menu.jpg",
-        alt: "ป้ายเมนูชา กาแฟ และเครื่องดื่มบนบาร์น้ำชาใต้",
-        caption: "เมนูเครื่องดื่มที่บาร์น้ำชาใต้",
-        orientation: "portrait",
-        fit: "contain",
-        view: { position: v(6.4, 2.3, -1.8), target: v(8.7, 1.3, -1.8) },
-      },
-      {
-        src: "/venue/reservations/food-menu.jpg",
-        alt: "ป้ายรายการอาหารตามสั่งที่ติดบนผนังห้องอาหาร",
-        caption: "ป้ายเมนูอาหารตามสั่งบนผนังซ้ายของห้องอาหาร",
-        orientation: "portrait",
-        fit: "contain",
-        view: { position: v(4.2, 2.6, -4.4), target: v(0.2, 1.8, -4.4) },
-      },
-      {
-        src: "/venue/latest/real-menu-board.jpg",
-        alt: "ป้ายเมนูและราคาปรับใหม่ของร้านป้าอ้อ",
-        caption: "ราคาอาหาร: ธรรมดา 45 · หมูกรอบ/ทะเล 50 · พิเศษ 60",
-        orientation: "portrait",
-        fit: "contain",
-        view: { position: v(4.2, 2.6, -2.4), target: v(0.2, 1.8, -2.2) },
       },
     ],
     slots: [
@@ -273,20 +235,6 @@ export const venueZones: VenueZone[] = [
         orientation: "landscape",
         view: { position: v(-3.0, 4.2, 2.4), target: v(-5.0, 0.4, -4.4) },
       },
-      {
-        src: "/venue/latest/real-menu-counter.jpg",
-        alt: "ซุ้มครัวร้านป้าอ้อ มีป้ายเมนูภาพอาหารด้านบนและรายการอาหารด้านหน้า",
-        caption: "ซุ้มครัว — สั่งอาหารตามสั่งได้ที่นี่",
-        orientation: "landscape",
-        view: { position: v(-4.4, 2.6, -0.8), target: v(-4.5, 1.4, -4.6) },
-      },
-      {
-        src: "/venue/site/kitchen-roadside.jpg",
-        alt: "ด้านข้างร้านติดถนน รั้วไม้ระแนงของบาร์หน้าครัว ต้นลีลาวดี และป้ายหรอยจังฮู้",
-        caption: "ด้านติดถนน: รั้วไม้ของบาร์หน้าครัวและป้ายหรอยจังฮู้",
-        orientation: "landscape",
-        view: { position: v(-11.8, 2.1, 4.5), target: v(-8.4, 1.2, -3.0) },
-      },
     ],
     slots: [
       // บาร์ไม้ชิดหน้าต่างซ้าย (เก้าอี้หันออกหน้าต่าง) · โต๊ะพับยาวกลางห้อง · โต๊ะเล็กชิดผนังห้องอาหาร
@@ -311,13 +259,6 @@ export const venueZones: VenueZone[] = [
         caption: "ใต้ศาลา — ชั้นแก้วสีฟ้าและถังน้ำแข็งสีแดงอยู่ขวามือ",
         orientation: "landscape",
         view: { position: v(-4.2, 1.9, -0.9), target: v(-4.6, 0.9, 7.2) },
-      },
-      {
-        src: "/venue/site/sala-ice-station.jpg",
-        alt: "จุดบริการน้ำแข็ง ถังน้ำแข็งสีแดงในคอกไม้ระแนง ชั้นแก้วสีฟ้า ติดถนน",
-        caption: "จุดน้ำแข็งและแก้วน้ำ ตักเองได้ มุมศาลาติดถนน",
-        orientation: "landscape",
-        view: { position: v(-5.0, 2.1, 2.6), target: v(-7.7, 0.9, 0.9) },
       },
       {
         src: "/venue/site/sala-side.jpg",

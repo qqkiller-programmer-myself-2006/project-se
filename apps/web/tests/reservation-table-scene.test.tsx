@@ -142,30 +142,30 @@ describe("ขั้นเลือกโซนและโต๊ะ (หนึ�
   it("แต่ละโซนมีรูปจริงขนาดใหญ่ เปลี่ยนรูปได้ และขยายเต็มจอได้", async () => {
     const user = userEvent.setup();
     render(<Harness />);
-    const dining = section("โซนห้องอาหาร");
-    expect(within(dining).getByText("รูปจริง")).toBeInTheDocument();
-    expect(within(dining).getByText("แบบจำลอง 3 มิติ")).toBeInTheDocument();
+    const kitchen = section("โซนบาร์หน้าครัว");
+    expect(within(kitchen).getByText("รูปจริง")).toBeInTheDocument();
+    expect(within(kitchen).getByText("แบบจำลอง 3 มิติ")).toBeInTheDocument();
 
-    const thumbs = within(dining).getByRole("group", { name: "รูปอื่นในโซนห้องอาหาร" });
-    await user.click(within(thumbs).getByRole("button", { name: /บาร์น้ำชาใต้ชิดผนังขวา/ }));
-    expect(within(thumbs).getByRole("button", { name: /บาร์น้ำชาใต้ชิดผนังขวา/ })).toHaveAttribute("aria-pressed", "true");
-    expect(within(dining).getByText(/รูป 2\/5/)).toBeInTheDocument();
+    const thumbs = within(kitchen).getByRole("group", { name: "รูปอื่นในโซนบาร์หน้าครัว" });
+    await user.click(within(thumbs).getByRole("button", { name: /บาร์ริมหน้าต่าง นั่งมองถนน/ }));
+    expect(within(thumbs).getByRole("button", { name: /บาร์ริมหน้าต่าง นั่งมองถนน/ })).toHaveAttribute("aria-pressed", "true");
+    expect(within(kitchen).getByText(/รูป 2\/3/)).toBeInTheDocument();
     // เลือกรูปแล้วโมเดลหมุนไปมุมของรูป (ไม่ใช่ภาพรวมแล้ว) · กดภาพรวมโซนเพื่อกลับ
-    expect(within(dining).getByRole("button", { name: "ภาพรวมโซน" })).toHaveAttribute("aria-pressed", "false");
-    await user.click(within(dining).getByRole("button", { name: "ภาพรวมโซน" }));
-    expect(within(dining).getByRole("button", { name: "ภาพรวมโซน" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(kitchen).getByRole("button", { name: "ภาพรวมโซน" })).toHaveAttribute("aria-pressed", "false");
+    await user.click(within(kitchen).getByRole("button", { name: "ภาพรวมโซน" }));
+    expect(within(kitchen).getByRole("button", { name: "ภาพรวมโซน" })).toHaveAttribute("aria-pressed", "true");
 
-    await user.click(within(dining).getByRole("button", { name: /^ขยายรูป บาร์น้ำชาใต้/ }));
-    const dialog = screen.getByRole("dialog", { name: /รูปจริง: บาร์น้ำชาใต้/ });
+    await user.click(within(kitchen).getByRole("button", { name: /^ขยายรูป บาร์ริมหน้าต่าง นั่งมองถนน/ }));
+    const dialog = screen.getByRole("dialog", { name: /รูปจริง: บาร์ริมหน้าต่าง นั่งมองถนน/ });
     expect(within(dialog).getByRole("button", { name: "ปิดรูป" })).toHaveFocus();
     await user.keyboard("{ArrowRight}");
-    expect(screen.getByRole("dialog", { name: /รูปจริง: เมนูเครื่องดื่ม/ })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: /รูปจริง: บาร์ริมหน้าต่าง \(ซ้าย\)/ })).toBeInTheDocument();
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "รูปก่อนหน้า" }));
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "รูปก่อนหน้า" }));
-    expect(screen.getByRole("dialog", { name: /มองจากทางเข้าเข้าไปในห้องอาหาร/ })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: /ซุ้มครัว \(ซ้าย\) และโต๊ะพับ/ })).toBeInTheDocument();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(within(dining).getByRole("button", { name: /^ขยายรูป มองจากทางเข้า/ })).toHaveFocus();
+    expect(within(kitchen).getByRole("button", { name: /^ขยายรูป ซุ้มครัว \(ซ้าย\)/ })).toHaveFocus();
     // รูปของโซนอื่นไม่เปลี่ยนตาม
     expect(within(section("โซนหน้าร้าน (ใต้กันสาด)")).getByRole("button", { name: /^ขยายรูป โต๊ะหน้าร้านติดประตู/ })).toBeInTheDocument();
   });

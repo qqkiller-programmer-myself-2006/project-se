@@ -30,9 +30,10 @@ describe("ผังร้านสำหรับโมเดลสามมิ�
       }
       expect(zone.slots.length).toBeGreaterThan(0);
     }
-    // รูปถ่ายร้านที่เจ้าของร้านส่งมาต้องถูกใช้ครบทุกรูป (ชุดแรก 9 + ชุดสำรวจหน้างาน 10)
-    expect(new Set(allPhotos).size).toBe(19);
-    expect(allPhotos.filter((src) => src.startsWith("/venue/site/"))).toHaveLength(10);
+    // หน้าจองแสดงเฉพาะรูปที่เห็นตำแหน่งโต๊ะ — ไม่มีรูปเมนู ลานจอดรถ หรือจุดบริการ
+    expect(new Set(allPhotos).size).toBe(allPhotos.length);
+    expect(venueZones.map((z) => z.photos.length)).toEqual([4, 1, 3, 3]);
+    for (const src of allPhotos) expect(src).not.toMatch(/menu|parking-lot|ice-station|reservations\/counter|roadside/);
     for (const zone of venueZones) {
       const { position: p, target: t } = zone.overview;
       expect(p.y).toBeGreaterThan(t.y + 4);
@@ -112,7 +113,7 @@ describe("ผังร้านสำหรับโมเดลสามมิ�
   });
 
   it("มุมกล้องตามรูปที่เลือก (รูปที่ไม่มีใช้มุมรูปแรก)", () => {
-    expect(getZoneView("dining", 1)).toBe(venueZones[1]!.photos[1]!.view);
+    expect(getZoneView("kitchen", 1)).toBe(venueZones[2]!.photos[1]!.view);
     expect(getZoneView("dining", 99)).toBe(venueZones[1]!.photos[0]!.view);
   });
 });
