@@ -39,9 +39,9 @@ describe("ผังร้านสำหรับโมเดลสามมิ�
     }
   });
 
-  it("ผังตามแบบของร้าน: โต๊ะหน้าร้าน 2 ห้องอาหาร 6 บาร์หน้าครัว 3 ศาลา 4 และทุกช่องอยู่ในขอบเขตโซน", () => {
+  it("ผังตามแบบของร้าน: โต๊ะหน้าร้าน 1 ห้องอาหาร 6 บาร์หน้าครัว 3 ศาลา 4 และทุกช่องอยู่ในขอบเขตโซน", () => {
     expect(venueZones.map((z) => [z.id, z.slots.length])).toEqual([
-      ["front", 2],
+      ["front", 1],
       ["dining", 6],
       ["kitchen", 3],
       ["sala", 4],
@@ -77,13 +77,13 @@ describe("ผังร้านสำหรับโมเดลสามมิ�
   });
 
   it("วางโต๊ะลงช่องตามลำดับ โต๊ะเกินช่องหรือไม่มีโซนไม่ถูกวาง", () => {
-    const tables = [t("F1", "front"), t("F2", "front"), t("F3", "front"), t("X1", null), t("D1", "dining")];
+    const tables = [t("F1", "front"), t("F9", "front"), t("X1", null), t("D1", "dining"), t("D2", "dining")];
     const { placed, unplaced } = placeTables(tables);
-    expect(placed.map((p) => p.name)).toEqual(["F1", "F2", "D1"]);
+    expect(placed.map((p) => p.name)).toEqual(["F1", "D1", "D2"]);
     expect(placed[0]!.slot).toBe(venueZones[0]!.slots[0]);
-    expect(placed[1]!.slot).toBe(venueZones[0]!.slots[1]);
-    expect(placed[2]!.slot).toBe(venueZones[1]!.slots[0]);
-    expect(unplaced.map((p) => p.name)).toEqual(["F3", "X1"]);
+    expect(placed[1]!.slot).toBe(venueZones[1]!.slots[0]);
+    expect(placed[2]!.slot).toBe(venueZones[1]!.slots[1]);
+    expect(unplaced.map((p) => p.name)).toEqual(["F9", "X1"]);
   });
 
   it("สรุปจำนวนโต๊ะว่างต่อโซน และแสดงโซนอื่นเฉพาะเมื่อมีโต๊ะไม่มีโซน", () => {
@@ -97,13 +97,17 @@ describe("ผังร้านสำหรับโมเดลสามมิ�
     expect(summarizeZones([t("X", null)]).at(-1)).toEqual({ zone: null, total: 1, available: 1 });
   });
 
-  it("ผังตัวอย่างคำนวณที่นั่งไม่พอและโต๊ะแนะนำตามจำนวนคน", () => {
+  it("ผังตัวอย่างตรงกับโต๊ะจริง: 14 โต๊ะ ทุกตัว 4 ที่นั่ง ยกเว้น S4 นั่งได้ 6", () => {
     const demo = demoAvailability(5);
-    expect(demo.tables).toHaveLength(15);
+    expect(demo.tables).toHaveLength(14);
+    expect(demo.tables.map((x) => x.name)).not.toContain("F2");
+    expect(demo.tables.filter((x) => x.capacity !== 4).map((x) => [x.name, x.capacity])).toEqual([["S4", 6]]);
+    expect(placeTables(demo.tables).unplaced).toEqual([]);
     expect(demo.tables.every((x) => isDemoTableId(x.id))).toBe(true);
     expect(demo.tables.find((x) => x.name === "D1")!.status).toBe("too_small");
-    expect(demo.tables.find((x) => x.name === "F2")!.status).toBe("booked");
-    expect(demo.recommendedTableId).toBe("demo-d4");
+    expect(demo.tables.find((x) => x.name === "D3")!.status).toBe("booked");
+    expect(demo.recommendedTableId).toBe("demo-s4");
+    expect(demoAvailability(2).recommendedTableId).toBe("demo-d1");
     expect(isDemoTableId("real-uuid")).toBe(false);
   });
 

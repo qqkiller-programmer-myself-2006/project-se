@@ -7,8 +7,8 @@ import type { TableAvailability } from "../src/lib/api";
 
 const tables: TableAvailability[] = [
   { id: "t-f1", name: "F1", capacity: 4, zone: "front", status: "available" },
-  { id: "t-f2", name: "F2", capacity: 4, zone: "front", status: "booked" },
   { id: "t-d1", name: "D1", capacity: 2, zone: "dining", status: "too_small" },
+  { id: "t-d3", name: "D3", capacity: 4, zone: "dining", status: "booked" },
   { id: "t-d2", name: "D2", capacity: 4, zone: "dining", status: "available" },
   { id: "t-x1", name: "X1", capacity: 6, zone: null, status: "available" },
 ];
@@ -42,12 +42,12 @@ describe("ขั้นเลือกโซนและโต๊ะ (หนึ�
 
     const jump = screen.getByRole("navigation", { name: "ไปที่โซน" });
     expect(within(jump).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([
-      "ไปที่โซนหน้าร้าน (ใต้กันสาด) ว่าง 1/2 โต๊ะ",
-      "ไปที่โซนห้องอาหาร ว่าง 1/2 โต๊ะ",
+      "ไปที่โซนหน้าร้าน (ใต้กันสาด) ว่าง 1/1 โต๊ะ",
+      "ไปที่โซนห้องอาหาร ว่าง 1/3 โต๊ะ",
       "ไปที่โซนบาร์หน้าครัว ไม่มีโต๊ะ",
       "ไปที่โซนศาลากลางแจ้ง ไม่มีโต๊ะ",
     ]);
-    expect(within(jump).getAllByRole("button")[0]).toHaveTextContent("1หน้าร้านว่าง 1/2 โต๊ะ");
+    expect(within(jump).getAllByRole("button")[0]).toHaveTextContent("1หน้าร้านว่าง 1/1 โต๊ะ");
 
     // ส่วนละหนึ่งโซน + โซนอื่น ๆ สำหรับโต๊ะที่ยังไม่กำหนดโซน
     const regions = within(screen.getByRole("group", { name: "เลือกโต๊ะสำหรับ 3 คน" })).getAllByRole("region");
@@ -67,16 +67,13 @@ describe("ขั้นเลือกโซนและโต๊ะ (หนึ�
     );
     expect(within(front).getByRole("button", { name: "ภาพรวมโซน" })).toHaveAttribute("aria-pressed", "true");
     const frontTables = within(front).getByRole("list", { name: "โต๊ะในโซนหน้าร้าน (ใต้กันสาด)" });
-    expect(within(frontTables).getAllByRole("button").map((b) => b.textContent)).toEqual([
-      expect.stringContaining("F1"),
-      expect.stringContaining("F2"),
-    ]);
-    expect(within(frontTables).getByRole("button", { name: /โต๊ะ F2 .*สถานะจองแล้ว/ })).toHaveAttribute("aria-disabled", "true");
+    expect(within(frontTables).getAllByRole("button").map((b) => b.textContent)).toEqual([expect.stringContaining("F1")]);
 
     const dining = section("โซนห้องอาหาร");
     expect(within(dining).getByText("บาร์น้ำ ชาใต้")).toBeInTheDocument();
     expect(within(dining).getByText("ห้องน้ำ")).toBeInTheDocument();
     expect(within(dining).getByRole("button", { name: /โต๊ะ D1 .*ไม่พอสำหรับ 3 คน/ })).toHaveAttribute("aria-disabled", "true");
+    expect(within(dining).getByRole("button", { name: /โต๊ะ D3 .*สถานะจองแล้ว/ })).toHaveAttribute("aria-disabled", "true");
     expect(within(dining).getByRole("button", { name: /โต๊ะ D2 .*ระบบแนะนำ/ })).toBeInTheDocument();
 
     expect(within(section("โซนบาร์หน้าครัว")).getByText("โซนนี้ยังไม่มีโต๊ะให้จอง ลองดูโซนอื่น")).toBeInTheDocument();
@@ -113,7 +110,7 @@ describe("ขั้นเลือกโซนและโต๊ะ (หนึ�
     await user.click(screen.getByRole("button", { name: /โต๊ะ F1 / }));
     expect(onSelect).toHaveBeenLastCalledWith(null);
 
-    const booked = screen.getByRole("button", { name: /โต๊ะ F2 / });
+    const booked = screen.getByRole("button", { name: /โต๊ะ D3 / });
     booked.focus();
     await user.keyboard("{Enter}");
     expect(onSelect).toHaveBeenCalledTimes(2);

@@ -138,7 +138,7 @@ export const venueZones: VenueZone[] = [
     label: TABLE_ZONE_LABELS.front,
     shortLabel: "หน้าร้าน",
     caption: "แถวหน้าสุดใต้กันสาด ติดทางเข้าและลานจอดรถ เปิดโล่ง รับลม เข้า-ออกสะดวก",
-    highlights: ["ติดทางเข้า", "ใกล้ที่จอดรถ", "เปิดโล่ง"],
+    highlights: ["โต๊ะเดียว 4 ที่นั่ง", "ติดทางเข้า", "ใกล้ที่จอดรถ"],
     bounds: { x0: 0.1, x1: 9.2, z0: 0.6, z1: 3.1 },
     overview: { position: v(4.7, 7.2, 11.0), target: v(4.7, 0.3, 1.2) },
     photos: [
@@ -179,8 +179,8 @@ export const venueZones: VenueZone[] = [
       },
     ],
     slots: [
-      { position: v(3.0, FRONT_FLOOR_Y, 1.85), rotation: 0, kind: "long", style: "wood" },
-      { position: v(6.7, FRONT_FLOOR_Y, 1.85), rotation: 0, kind: "square", style: "wood" },
+      // หน้าร้านมีโต๊ะเดียว (4 ที่นั่ง) หน้าประตูกระจก
+      { position: v(4.0, FRONT_FLOOR_Y, 1.85), rotation: 0, kind: "square", style: "wood" },
     ],
   },
   {
@@ -248,7 +248,7 @@ export const venueZones: VenueZone[] = [
     label: TABLE_ZONE_LABELS.kitchen,
     shortLabel: "บาร์หน้าครัว",
     caption: "ห้องติดซุ้มครัว พื้นกระเบื้องน้ำตาล บาร์ไม้ริมหน้าต่างมองถนน โต๊ะพับกับเก้าอี้พลาสติก และผนังภาพเมนูอาหาร อาหารร้อนถึงโต๊ะไว",
-    highlights: ["ติดซุ้มครัว", "บาร์ริมหน้าต่าง", "โต๊ะยาวสำหรับกลุ่ม"],
+    highlights: ["ติดซุ้มครัว", "บาร์ริมหน้าต่าง", "โต๊ะพับ"],
     bounds: { x0: -8.2, x1: -0.1, z0: -7.2, z1: -0.1 },
     overview: { position: v(-2.4, 6.4, 3.6), target: v(-4.4, 0.3, -3.4) },
     photos: [
@@ -301,7 +301,7 @@ export const venueZones: VenueZone[] = [
     label: TABLE_ZONE_LABELS.sala,
     shortLabel: "ศาลา",
     caption: "ศาลาหลังคามุงจากคลุมผ้าใบ โครงไม้ดิบ รั้วไม้ไผ่ โต๊ะไม้ 4 ชุด มีจุดน้ำแข็งและแก้วน้ำที่มุมติดถนน ลมโกรก สบาย ๆ",
-    highlights: ["หลังคามุงจาก", "มีจุดน้ำแข็ง/แก้ว", "เหมาะกับกลุ่มใหญ่"],
+    highlights: ["หลังคามุงจาก", "มีจุดน้ำแข็ง/แก้ว", "โต๊ะ 6 ที่นั่ง (S4)"],
     bounds: { x0: -8.2, x1: -0.5, z0: 0.3, z1: 6.8 },
     overview: { position: v(-0.6, 7.6, 10.4), target: v(-4.4, 0.3, 3.3) },
     photos: [
@@ -336,8 +336,9 @@ export const venueZones: VenueZone[] = [
     ],
     slots: [
       { position: v(-5.3, SALA_FLOOR_Y, 2.4), rotation: 0, kind: "square", style: "sala" },
-      { position: v(-2.6, SALA_FLOOR_Y, 1.9), rotation: 0, kind: "long", style: "sala" },
+      { position: v(-2.6, SALA_FLOOR_Y, 1.9), rotation: 0, kind: "square", style: "sala" },
       { position: v(-6.6, SALA_FLOOR_Y, 5.0), rotation: 0, kind: "square", style: "sala" },
+      // S4 โต๊ะยาวตัวเดียวของร้านที่นั่งได้ 6 คน
       { position: v(-2.9, SALA_FLOOR_Y, 4.8), rotation: 0, kind: "long", style: "sala" },
     ],
   },
@@ -401,22 +402,22 @@ export function summarizeZones(tables: TableAvailability[]): ZoneSummary[] {
     .filter((s) => s.zone !== null || s.total > 0);
 }
 
+// โต๊ะจริงของร้าน: หน้าร้าน 1 · ห้องอาหาร 6 · บาร์หน้าครัว 3 · ศาลา 4 — ทุกตัว 4 ที่นั่ง ยกเว้น S4 นั่งได้ 6
 const DEMO_LAYOUT: { name: string; capacity: number; zone: TableZone; booked?: boolean }[] = [
-  { name: "F1", capacity: 6, zone: "front" },
-  { name: "F2", capacity: 4, zone: "front", booked: true },
-  { name: "D1", capacity: 2, zone: "dining" },
+  { name: "F1", capacity: 4, zone: "front" },
+  { name: "D1", capacity: 4, zone: "dining" },
   { name: "D2", capacity: 4, zone: "dining" },
   { name: "D3", capacity: 4, zone: "dining", booked: true },
-  { name: "D4", capacity: 6, zone: "dining" },
+  { name: "D4", capacity: 4, zone: "dining" },
   { name: "D5", capacity: 4, zone: "dining" },
   { name: "D6", capacity: 4, zone: "dining" },
-  { name: "K1", capacity: 6, zone: "kitchen" },
-  { name: "K2", capacity: 8, zone: "kitchen" },
-  { name: "K3", capacity: 2, zone: "kitchen" },
+  { name: "K1", capacity: 4, zone: "kitchen" },
+  { name: "K2", capacity: 4, zone: "kitchen" },
+  { name: "K3", capacity: 4, zone: "kitchen" },
   { name: "S1", capacity: 4, zone: "sala" },
-  { name: "S2", capacity: 8, zone: "sala" },
+  { name: "S2", capacity: 4, zone: "sala" },
   { name: "S3", capacity: 4, zone: "sala", booked: true },
-  { name: "S4", capacity: 8, zone: "sala" },
+  { name: "S4", capacity: 6, zone: "sala" },
 ];
 
 /** ผังตัวอย่างสำหรับโหมดสาธิต/ออฟไลน์ (id ขึ้นต้น demo- — จองจริงไม่ได้) */
