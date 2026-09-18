@@ -1,41 +1,44 @@
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { Link, NavLink, Route, Routes, useNavigate } from "react-router-dom";
 import { api, ROLE_LABELS, type PublicUser } from "./lib/api";
 import { Spinner } from "./components/ui";
 import { PageEnter } from "./components/motion";
 import { PublicShell } from "./components/shell";
-import LoginPage from "./pages/shared/Login";
-import StaffPage from "./pages/owner/Staff";
-import ChangePasswordPage from "./pages/shared/ChangePassword";
-import AuditPage from "./pages/owner/Audit";
+// แยกโหลดทีละหน้า: ลูกค้าที่สแกน QR บนมือถือไม่ต้องดาวน์โหลดโค้ดหลังร้านทั้งหมด
+// (บัญชี สต๊อก การเงิน คิวครัว) ตั้งแต่เปิดเว็บ — หน้าแรก เมนู ตะกร้า และสถานะร้าน
+// โหลดทันทีเพราะเป็นเส้นทางจาก QR ที่ต้องขึ้นเร็วที่สุด
+const LoginPage = lazy(() => import("./pages/shared/Login"));
+const StaffPage = lazy(() => import("./pages/owner/Staff"));
+const ChangePasswordPage = lazy(() => import("./pages/shared/ChangePassword"));
+const AuditPage = lazy(() => import("./pages/owner/Audit"));
 import StatusPage from "./pages/shared/Status";
-import ShopPage from "./pages/admin/Shop";
-import TablesPage from "./pages/admin/Tables";
-import CustomerRegisterPage from "./pages/customer/CustomerRegister";
-import CustomerLoginPage from "./pages/customer/CustomerLogin";
-import CustomerProfilePage from "./pages/customer/CustomerProfile";
-import AdminCustomersPage from "./pages/admin/AdminCustomers";
+const ShopPage = lazy(() => import("./pages/admin/Shop"));
+const TablesPage = lazy(() => import("./pages/admin/Tables"));
+const CustomerRegisterPage = lazy(() => import("./pages/customer/CustomerRegister"));
+const CustomerLoginPage = lazy(() => import("./pages/customer/CustomerLogin"));
+const CustomerProfilePage = lazy(() => import("./pages/customer/CustomerProfile"));
+const AdminCustomersPage = lazy(() => import("./pages/admin/AdminCustomers"));
 import MenuPublicPage from "./pages/customer/MenuPublic";
 import LandingPage from "./pages/customer/Landing";
-import MenuAdminPage from "./pages/admin/MenuAdmin";
-import InventoryPage from "./pages/admin/Inventory";
+const MenuAdminPage = lazy(() => import("./pages/admin/MenuAdmin"));
+const InventoryPage = lazy(() => import("./pages/admin/Inventory"));
 import CartPage from "./pages/customer/Cart";
-import MyOrdersPage from "./pages/customer/MyOrders";
-import PayOrderPage from "./pages/customer/PayOrder";
-import AdminPaymentsPage from "./pages/admin/AdminPayments";
-import AdminOrdersPage from "./pages/admin/AdminOrders";
-import ReservationsPage from "./pages/customer/Reservations";
-import CheckinPage from "./pages/shared/Checkin";
-import AdminReservationsPage from "./pages/admin/AdminReservations";
-import StationQueuePage from "./pages/kitchen/StationQueue";
-import QueueTrackPage from "./pages/customer/QueueTrack";
-import RewardsPage from "./pages/customer/Rewards";
-import AdminRewardsPage from "./pages/admin/AdminRewards";
-import FinanceDashboardPage from "./pages/owner/FinanceDashboard";
-import FinanceEntriesPage from "./pages/owner/FinanceEntries";
-import CapacityDashboardPage from "./pages/owner/CapacityDashboard";
-import AdminNotificationsPage from "./pages/admin/AdminNotifications";
-import MyNotificationsPage from "./pages/customer/MyNotifications";
+const MyOrdersPage = lazy(() => import("./pages/customer/MyOrders"));
+const PayOrderPage = lazy(() => import("./pages/customer/PayOrder"));
+const AdminPaymentsPage = lazy(() => import("./pages/admin/AdminPayments"));
+const AdminOrdersPage = lazy(() => import("./pages/admin/AdminOrders"));
+const ReservationsPage = lazy(() => import("./pages/customer/Reservations"));
+const CheckinPage = lazy(() => import("./pages/shared/Checkin"));
+const AdminReservationsPage = lazy(() => import("./pages/admin/AdminReservations"));
+const StationQueuePage = lazy(() => import("./pages/kitchen/StationQueue"));
+const QueueTrackPage = lazy(() => import("./pages/customer/QueueTrack"));
+const RewardsPage = lazy(() => import("./pages/customer/Rewards"));
+const AdminRewardsPage = lazy(() => import("./pages/admin/AdminRewards"));
+const FinanceDashboardPage = lazy(() => import("./pages/owner/FinanceDashboard"));
+const FinanceEntriesPage = lazy(() => import("./pages/owner/FinanceEntries"));
+const CapacityDashboardPage = lazy(() => import("./pages/owner/CapacityDashboard"));
+const AdminNotificationsPage = lazy(() => import("./pages/admin/AdminNotifications"));
+const MyNotificationsPage = lazy(() => import("./pages/customer/MyNotifications"));
 
 const NAV_BASE =
   "pa-lift pa-press inline-flex min-h-[44px] items-center rounded-lg border px-4 py-2 text-sm font-semibold tracking-wide transition-colors";
@@ -90,6 +93,7 @@ export default function App() {
   if (!me)
     return (
       <PublicShell>
+      <Suspense fallback={<p className="py-10 text-center"><Spinner label="กำลังโหลดหน้า…" /></p>}>
       <Routes>
         <Route path="/" element={<LandingPage />} />
         <Route path="/status" element={<StatusPage />} />
@@ -106,6 +110,7 @@ export default function App() {
         <Route path="/notifications" element={<MyNotificationsPage />} />
         <Route path="*" element={<LoginPage onLoggedIn={refresh} />} />
       </Routes>
+      </Suspense>
       </PublicShell>
     );
 
@@ -275,6 +280,7 @@ export default function App() {
       </header>
       <main id="main-content" tabIndex={-1} className="luxe-scene role-main mx-auto w-full max-w-5xl px-4 py-6 sm:px-6">
         <PageEnter>
+        <Suspense fallback={<p className="py-10 text-center"><Spinner label="กำลังโหลดหน้า…" /></p>}>
         <Routes>
           <Route path="/status" element={<StatusPage />} />
           <Route path="/menu" element={<MenuPublicPage />} />
@@ -331,6 +337,7 @@ export default function App() {
             }
           />
         </Routes>
+        </Suspense>
         </PageEnter>
       </main>
       <footer className="mx-auto w-full max-w-5xl px-4 pb-8 sm:px-6">
