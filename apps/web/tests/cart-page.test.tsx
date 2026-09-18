@@ -100,6 +100,8 @@ describe("หน้าตะกร้าและยืนยันคำสั�
     let calls = 0;
     stubFetch((url) => {
       if (url.includes("/api/customers/me")) return { ok: false, status: 401, json: async () => ({}) };
+      // session ของตะกร้าไม่ใช่คำขอเมนู — ไม่นับเป็น call ที่ต้องล้ม
+      if (url.includes("/api/customers/session")) return { ok: true, json: async () => ({ customer: null }) };
       calls += 1;
       if (calls === 1) return { ok: false, status: 500, json: async () => ({ error: "เซิร์ฟเวอร์ขัดข้อง" }) };
       return { ok: true, json: async () => ({ groups: [] }) };

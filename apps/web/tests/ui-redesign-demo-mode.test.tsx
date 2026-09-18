@@ -41,7 +41,7 @@ describe("UI redesign demo mode (Ticket 15)", () => {
   it("เมนูออฟไลน์: แสดงข้อมูลตัวอย่าง + ป้ายโหมดสาธิต + แถบเชื่อมต่อแบบไม่บังเนื้อหา", async () => {
     stubOffline();
     renderPage("/menu", MenuPublicPage);
-    expect(await screen.findByText("ข้าวผัดป้าอ้อ (ตัวอย่าง)")).toBeInTheDocument();
+    expect(await screen.findByText("ข้าวผัดหมู")).toBeInTheDocument();
     expect(screen.getAllByText(DEMO_LABEL).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/เชื่อมต่อเซิร์ฟเวอร์ไม่ได้/)).toBeInTheDocument();
     // เนื้อหายังใช้งานได้: ช่องค้นหา + ปุ่มลองเชื่อมต่ออีกครั้งมีชื่อเข้าถึงได้
@@ -71,11 +71,9 @@ describe("UI redesign demo mode (Ticket 15)", () => {
   it("ตะกร้าออฟไลน์: เลือกเมนูตัวอย่างได้ ป้ายสาธิตมองเห็น", async () => {
     stubOffline();
     renderPage("/cart", CartPage);
-    expect(await screen.findByText("ข้าวผัดป้าอ้อ (ตัวอย่าง)")).toBeInTheDocument();
+    expect(await screen.findByText("ชาใต้")).toBeInTheDocument();
     expect(screen.getAllByText(DEMO_LABEL).length).toBeGreaterThanOrEqual(1);
-    expect(
-      screen.getByRole("button", { name: "เพิ่มข้าวผัดป้าอ้อ (ตัวอย่าง)ลงตะกร้า" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "เพิ่มชาใต้ลงตะกร้า" })).toBeInTheDocument();
   });
 
   it("คำสั่งซื้อออฟไลน์: แสดงคำสั่งซื้อตัวอย่าง ไม่ใช่หน้าว่าง", async () => {
@@ -119,7 +117,7 @@ describe("UI redesign demo mode (Ticket 15)", () => {
     }
     expect(screen.getByText("ข้ามไปยังเนื้อหาหลัก")).toBeInTheDocument();
     // รอเนื้อหาสาธิตก่อนตรวจปุ่ม (เมนูออฟไลน์มีปุ่ม retry หลังโหลดเสร็จ)
-    await screen.findByText("ข้าวผัดป้าอ้อ (ตัวอย่าง)");
+    await screen.findByText("ข้าวผัดหมู");
     // ทุกปุ่มที่มองเห็นต้องมีชื่อเข้าถึงได้ (ไม่มีปุ่มไอคอนลอยไร้ป้าย)
     const buttons = screen.queryAllByRole("button");
     expect(buttons.length).toBeGreaterThan(0);

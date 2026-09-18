@@ -17,6 +17,10 @@ function setFlag(value: string | undefined) {
   else env["VITE_DEMO_MODE"] = value;
 }
 
+function setDev(value: boolean) {
+  env["DEV"] = value;
+}
+
 function stubMenuPublic(
   handler: (url: string) => { ok: boolean; status: number; body: unknown },
 ) {
@@ -28,6 +32,17 @@ function stubMenuPublic(
         const r = handler(u);
         return { ok: r.ok, status: r.status, json: async () => r.body };
       }
+      return { ok: true, status: 200, json: async () => ({}) };
+    }),
+  );
+}
+
+function stubMenuPublicThrow(err: unknown) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.includes("/api/menu/public")) throw err;
       return { ok: true, status: 200, json: async () => ({}) };
     }),
   );
@@ -82,7 +97,7 @@ describe("VITE_DEMO_MODE dev-only guard", () => {
   });
 });
 
-describe("VITE_DEMO_MODE กับหน้าเมนู", () => {
+describe("DEV-only fallback ของหน้าเมนู (ไม่ใช้ VITE_DEMO_MODE)", () => {
   beforeEach(() => {
     saved = { ...env };
     vi.unstubAllGlobals();
@@ -97,20 +112,22 @@ describe("VITE_DEMO_MODE กับหน้าเมนู", () => {
     Object.assign(env, saved);
   });
 
-  it("flag=true + API ว่างเปล่า: แสดงข้อมูลตัวอย่างพร้อมป้าย", async () => {
-    setFlag("true");
+  it("DEV=true + API ว่างเปล่า: แสดงข้อมูลตัวอย่างพร้อมป้าย (ไม่ต้องมี flag)", async () => {
+    setFlag(undefined);
+    setDev(true);
     stubMenuPublic(() => ({ ok: true, status: 200, body: { groups: [] } }));
     render(
       <MemoryRouter initialEntries={["/menu"]}>
         <MenuPublicPage />
       </MemoryRouter>,
     );
-    expect(await screen.findByText("ข้าวผัดป้าอ้อ (ตัวอย่าง)")).toBeInTheDocument();
+    expect(await screen.findByText("ชาใต้")).toBeInTheDocument();
     expect(screen.getAllByText(DEMO_MODE_LABEL).length).toBeGreaterThanOrEqual(1);
   });
 
-  it("flag=false + API ว่างเปล่า: คง empty state จริง ไม่แสดงป้ายสาธิต", async () => {
-    setFlag(undefined);
+  it("production (DEV=false) + API ว่างเปล่า: คง empty state จริง แม้ flag=true", async () => {
+    setFlag("true");
+    setDev(false);
     stubMenuPublic(() => ({ ok: true, status: 200, body: { groups: [] } }));
     render(
       <MemoryRouter initialEntries={["/menu"]}>
@@ -121,20 +138,10 @@ describe("VITE_DEMO_MODE กับหน้าเมนู", () => {
     expect(screen.queryByText(DEMO_MODE_LABEL)).not.toBeInTheDocument();
   });
 
-  it("flag=true + API 500: fallback สาธิต (ไม่ใช่แค่ offline)", async () => {
-    setFlag("true");
-    stubMenuPublic(() => ({ ok: false, status: 500, body: { error: "เซิร์ฟเวอร์ขัดข้อง" } }));
-    render(
-      <MemoryRouter initialEntries={["/menu"]}>
-        <MenuPublicPage />
-      </MemoryRouter>,
-    );
-    expect(await screen.findByText("ข้าวผัดป้าอ้อ (ตัวอย่าง)")).toBeInTheDocument();
-    expect(screen.getAllByText(DEMO_MODE_LABEL).length).toBeGreaterThanOrEqual(1);
-  });
-
-  it("flag=false + API 500: แสดง error จริง ไม่แสดงป้ายสาธิต", async () => {
+  it("DEV=true + API 500: แสดง error จริง ไม่กลืนเป็นข้อมูลสาธิต", async () => {
+    // 500 = เซิร์ฟเวอร์พัง ต้องเห็นของจริงแม้ใน dev — fallback เฉพาะตอนติดต่อ API ไม่ได้
     setFlag(undefined);
+    setDev(true);
     stubMenuPublic(() => ({ ok: false, status: 500, body: { error: "เซิร์ฟเวอร์ขัดข้อง" } }));
     render(
       <MemoryRouter initialEntries={["/menu"]}>
@@ -142,6 +149,45 @@ describe("VITE_DEMO_MODE กับหน้าเมนู", () => {
       </MemoryRouter>,
     );
     expect(await screen.findByRole("alert")).toHaveTextContent("เซิร์ฟเวอร์ขัดข้อง");
+    expect(screen.queryByText(DEMO_MODE_LABEL)).not.toBeInTheDocument();
+  });
+
+  it("production (DEV=false) + API 500: แสดง error จริง แม้ flag=true", async () => {
+    setFlag("true");
+    setDev(false);
+    stubMenuPublic(() => ({ ok: false, status: 500, body: { error: "เซิร์ฟเวอร์ขัดข้อง" } }));
+    render(
+      <MemoryRouter initialEntries={["/menu"]}>
+        <MenuPublicPage />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("เซิร์ฟเวอร์ขัดข้อง");
+    expect(screen.queryByText(DEMO_MODE_LABEL)).not.toBeInTheDocument();
+  });
+
+  it("DEV=true + network failure: fallback สาธิตพร้อมป้าย", async () => {
+    setFlag(undefined);
+    setDev(true);
+    stubMenuPublicThrow(new TypeError("Failed to fetch"));
+    render(
+      <MemoryRouter initialEntries={["/menu"]}>
+        <MenuPublicPage />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("ชาใต้")).toBeInTheDocument();
+    expect(screen.getAllByText(DEMO_MODE_LABEL).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("DEV=true + HTTP อื่น (400): คง error จริง ไม่ fallback", async () => {
+    setFlag(undefined);
+    setDev(true);
+    stubMenuPublic(() => ({ ok: false, status: 400, body: { error: "คำขอไม่ถูกต้อง" } }));
+    render(
+      <MemoryRouter initialEntries={["/menu"]}>
+        <MenuPublicPage />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("คำขอไม่ถูกต้อง");
     expect(screen.queryByText(DEMO_MODE_LABEL)).not.toBeInTheDocument();
   });
 

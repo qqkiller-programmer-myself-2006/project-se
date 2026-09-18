@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { MENU_KIND_LABELS, api, type MenuKind, type PublicMenuGroupWithOptions } from "../../lib/api";
-import { DEMO_MENU_GROUPS, isDemoModeEnabled, shouldFallbackToDemo } from "../../lib/demo";
+import { DEMO_MENU_GROUPS_WITH_FOOD, isOfflineError } from "../../lib/demo";
 import { Alert, Badge, Panel } from "../../components/ui";
 import { DepthHero, MotionReveal, Skeleton, StaggerItem, StaggerList, TiltCard } from "../../components/motion";
 import { ConnectionBanner, DemoBadge } from "../../components/demo";
-import { Icon, FoodMotif } from "../../components/icons";
+import { Icon } from "../../components/icons";
+import { MenuItemImage } from "../../components/MenuItemImage";
 import { RealMenuPhotoGallery } from "../../components/RealMenuPhotoGallery";
 
 function fmtPrice(n: number): string {
@@ -18,12 +19,39 @@ function fmtDelta(n: number): string {
   return `${sign}${Math.abs(n).toLocaleString("th-TH", { maximumFractionDigits: 2 })} บาท`;
 }
 
+/**
+ * Dev-only demo fallback for the public menu page.
+ * Explicitly based on `import.meta.env.DEV` — never on VITE_DEMO_MODE —
+ * so production builds can never automatically fall back to fixtures.
+ */
+function isDevMenuFallbackEnabled(): boolean {
+  try {
+    const env = (import.meta as unknown as { env?: Record<string, unknown> })?.env;
+    return env?.["DEV"] === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * error ที่เข้าข่าย fallback: เฉพาะเครือข่ายล้มเหลว (API ติดต่อไม่ได้)
+ *
+ * HTTP error รวมถึง 500 ไม่เข้าข่าย — เซิร์ฟเวอร์พังคือเรื่องที่ทางร้านต้องเห็น
+ * ถ้ากลืนเป็นข้อมูลตัวอย่างให้ หน้าเว็บจะดู "ปกติ" ทั้งที่ระบบหลังบ้านล่ม
+ * และคนแก้จะไม่รู้เลยว่าพังตั้งแต่เมื่อไร
+ */
+function isMenuFallbackError(err: unknown): boolean {
+  return isOfflineError(err);
+}
+
 /** หน้าเมนูสาธารณะ: ดูได้โดยไม่ต้องเข้าสู่ระบบ — เฉพาะเมนูพร้อมขาย จัดกลุ่มตามหมวด */
 export default function MenuPublicPage() {
   const [groups, setGroups] = useState<PublicMenuGroupWithOptions[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [demo, setDemo] = useState(false);
+  // ร้านนี้คือร้านอาหารตามสั่ง — เปิดหน้ามาต้องเห็นทั้งอาหารและเครื่องดื่ม
+  // (เคยตั้งเป็น "drink" ไว้ตอน seed เมนูเครื่องดื่ม แล้วลืมคืนค่า เมนูอาหารเลยหายไปทั้งหน้า)
   const [kind, setKind] = useState<"" | MenuKind>("");
   const [q, setQ] = useState("");
 
@@ -33,19 +61,20 @@ export default function MenuPublicPage() {
       setError(null);
       setDemo(false);
       const fetched = (await api.menuPublic()).groups;
-      // Dev-only demo mode: empty API also shows local fixtures (with label).
-      // Normal mode keeps the real empty state so operators see the truth.
-      if (fetched.length === 0 && isDemoModeEnabled()) {
-        setGroups(DEMO_MENU_GROUPS);
+      // DEV-only fallback: empty API shows local fixtures (with DemoBadge).
+      // Production keeps the real empty state so operators see the truth.
+      if (fetched.length === 0 && isDevMenuFallbackEnabled()) {
+        setGroups(DEMO_MENU_GROUPS_WITH_FOOD);
         setDemo(true);
       } else {
         setGroups(fetched);
       }
     } catch (err) {
-      // Prefer real API; offline always falls back, other errors only in demo mode.
+      // DEV-only fallback: network failures and HTTP 500 show demo fixtures.
+      // Other HTTP errors keep real error behavior; production never falls back.
       // Mutations still call the real API — demo never bypasses auth/security.
-      if (shouldFallbackToDemo(err)) {
-        setGroups(DEMO_MENU_GROUPS);
+      if (isDevMenuFallbackEnabled() && isMenuFallbackError(err)) {
+        setGroups(DEMO_MENU_GROUPS_WITH_FOOD);
         setDemo(true);
         setError(null);
       } else {
@@ -84,15 +113,17 @@ export default function MenuPublicPage() {
         ข้ามไปยังรายการเมนู
       </a>
       <DepthHero>
-        <p
-          aria-hidden="true"
-          className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-600 text-white shadow-md"
-        >
-          <FoodMotif className="h-9 w-9" />
-        </p>
+        <img
+          src="/venue/site/pa-or-menu-hero.jpg"
+          alt="ป้ายเมนูเครื่องดื่มหนูนุ้ย ชาใต้ ที่ร้านป้าอ้อ"
+          title="เมนูเครื่องดื่มหนูนุ้ย ชาใต้ ที่ร้านป้าอ้อ"
+          className="h-auto w-full rounded-2xl object-cover"
+          loading="eager"
+          decoding="async"
+        />
         <h1 className="font-display mt-2 text-xl font-bold text-ink-900 sm:text-2xl">เมนูร้านป้าอ้ออาหารตามสั่ง</h1>
         <p className="mt-1 text-sm text-ink-600">
-          ดูเมนูพร้อมขายแยกตามหมวดหมู่ได้โดยไม่ต้องเข้าสู่ระบบ
+          ดูเมนูอาหารและเครื่องดื่มพร้อมขายแยกตามหมวดหมู่ได้โดยไม่ต้องเข้าสู่ระบบ
         </p>
         {demo ? (
           <div className="mt-3 flex justify-center">
@@ -118,7 +149,7 @@ export default function MenuPublicPage() {
                 className="w-full min-h-[44px] rounded-xl border border-ink-300 bg-white px-3 py-2.5 text-base text-ink-900 placeholder:text-ink-400 shadow-sm"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                placeholder="เช่น ข้าวผัด ชาเย็น"
+                placeholder="เช่น ข้าวผัดหมู ชาใต้"
               />
             </div>
             <div>
@@ -131,9 +162,9 @@ export default function MenuPublicPage() {
                 value={kind}
                 onChange={(e) => setKind(e.target.value as "" | MenuKind)}
               >
-                <option value="">ทั้งหมด (อาหาร + เครื่องดื่ม)</option>
+                <option value="">ทั้งหมด</option>
                 <option value="food">{MENU_KIND_LABELS.food}</option>
-                <option value="drink">{MENU_KIND_LABELS.drink}</option>
+                <option value="drink">เครื่องดื่มทั้งหมด</option>
               </select>
             </div>
             </div>
@@ -187,18 +218,9 @@ export default function MenuPublicPage() {
                     return (
                       <StaggerItem key={m.id} index={index} className="overflow-hidden rounded-2xl border border-ink-200 bg-white shadow-sm">
                         <TiltCard className="pa-lift h-full">
-                        {m.imageUrl ? (
-                          <img
-                            src={m.imageUrl}
-                            alt={`รูป${m.name}`}
-                            loading="lazy"
-                            className="h-36 w-full object-cover"
-                            onError={(e) => {
-                              (e.target as HTMLImageElement).style.display = "none";
-                            }}
-                          />
-                        ) : null}
-                        <div className="space-y-1.5 p-4">
+                        {/* รูปพัง/ยังไม่มีรูป → แผ่นป้ายสำรอง แทนการหายไปเงียบ ๆ จนการ์ดโหว่ */}
+                        <MenuItemImage src={m.imageUrl} name={m.name} className="h-36 w-full" />
+                        <div className="luxe-layer space-y-1.5 p-4">
                           <div className="flex flex-wrap items-start justify-between gap-2">
                             <p className="text-base font-bold text-ink-900">{m.name}</p>
                             <span className="flex flex-wrap gap-1.5">

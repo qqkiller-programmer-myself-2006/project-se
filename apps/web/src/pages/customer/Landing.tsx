@@ -44,15 +44,11 @@ function isDevMenuFallbackEnabled(): boolean {
 }
 
 /**
- * error ที่เข้าข่าย fallback: เครือข่ายล้ม (API ไม่ตอบ) หรือ HTTP 500
- * error อื่นคงพฤติกรรมจริงไว้แม้ใน dev — กฎเดียวกับหน้าเมนูสาธารณะ
+ * error ที่เข้าข่าย fallback: เฉพาะเครือข่ายล้มเหลว (API ติดต่อไม่ได้)
+ * HTTP error รวมถึง 500 ไม่เข้าข่าย — กฎเดียวกับหน้าเมนูสาธารณะ
  */
 function isMenuFallbackError(err: unknown): boolean {
-  if (isOfflineError(err)) return true;
-  const status = (err as { status?: unknown } | null | undefined)?.status;
-  if (status === 500 || status === "500") return true;
-  const msg = err instanceof Error ? err.message : String(err ?? "");
-  return /\(500\)|\b500\b|เซิร์ฟเวอร์ขัดข้อง|internal server error/i.test(msg);
+  return isOfflineError(err);
 }
 
 function openingText(status: ShopStatus | null): string {

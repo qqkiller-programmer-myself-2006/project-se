@@ -8,3 +8,7 @@ coverage/
 *.tsbuildinfo
 .vite/
 .claude/
+
+# ต้นฉบับรูปเมนูอาหาร 60 จาน (~140 MB) — เว็บไม่เสิร์ฟจากที่นี่
+# ข้อมูลเมนูชี้ URL บน Cloudflare R2 (key food-menu/NN-slug.png) ดู docs/menu-seed.md
+apps/web/public/food-menu/

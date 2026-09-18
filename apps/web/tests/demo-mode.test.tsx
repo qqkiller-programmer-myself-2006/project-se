@@ -41,7 +41,7 @@ describe("โหมดสาธิตเมื่อ API ใช้ไม่ไ�
     renderWithRouter(<MenuPublicPage />, ["/menu"]);
     const labels = await screen.findAllByText(DEMO_LABEL);
     expect(labels.length).toBeGreaterThanOrEqual(1);
-    expect(await screen.findByText("ข้าวผัดป้าอ้อ (ตัวอย่าง)")).toBeInTheDocument();
+    expect(await screen.findByText("ข้าวผัดหมู")).toBeInTheDocument();
     // แบนเนอร์เชื่อมต่อเป็น non-blocking: เนื้อหายังอยู่ + มีปุ่มลองใหม่ที่มีชื่อเข้าถึงได้
     expect(screen.getByRole("button", { name: "ลองเชื่อมต่อเซิร์ฟเวอร์อีกครั้ง" })).toBeInTheDocument();
   });
