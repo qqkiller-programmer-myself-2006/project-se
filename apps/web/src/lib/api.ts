@@ -1134,6 +1134,11 @@ export const api = {
     ),
   logout: () => req<{ ok: boolean }>("/api/auth/logout", { method: "POST" }, true),
   me: () => req<{ user: PublicUser }>("/api/auth/me"),
+  /**
+   * "ตอนนี้มีพนักงานล็อกอินไหม" — ตอบ 200 เสมอ (ไม่มี → user: null)
+   * ใช้ตอนเปิดแอปเลือกเชลล์ลูกค้า/หลังร้าน แทน me ซึ่งตอบ 401 ให้ลูกค้าทุกคนทุกครั้ง
+   */
+  staffSession: () => req<{ user: PublicUser | null }>("/api/auth/session"),
   changePassword: (currentPassword: string, newPassword: string) =>
     req<{ ok: boolean; message: string }>(
       "/api/auth/change-password",

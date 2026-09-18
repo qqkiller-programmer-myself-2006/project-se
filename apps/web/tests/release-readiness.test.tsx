@@ -39,6 +39,7 @@ function stubAppFetch() {
       const err = (status: number, message: string) => ({ ok: false, status, json: async () => ({ error: message }) });
       if (u.endsWith("/api/auth/csrf")) return ok({ csrfToken: "t" });
       if (u.endsWith("/api/auth/me")) return ok({ user: owner });
+      if (u.endsWith("/api/auth/session")) return ok({ user: owner });
       if (u.includes("/api/")) return err(404, "ไม่พบข้อมูล");
       return err(404, "ไม่พบข้อมูล");
     }),

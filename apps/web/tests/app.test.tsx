@@ -41,6 +41,7 @@ describe("App ระดับ integration (login/session flow)", () => {
         if (u.endsWith("/api/auth/me")) {
           return loggedIn ? ok({ user: owner }) : err(401, "กรุณาเข้าสู่ระบบก่อน");
         }
+        if (u.endsWith("/api/auth/session")) return ok({ user: loggedIn ? owner : null });
         if (u.endsWith("/api/auth/logout")) {
           loggedIn = false;
           return ok({ ok: true, message: "ออกจากระบบแล้ว" });

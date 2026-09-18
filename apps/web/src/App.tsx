@@ -54,7 +54,8 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      setMe((await api.me()).user);
+      // ตอบ 200 เสมอ — ลูกค้า (ซึ่งเกือบทุกคนไม่ใช่พนักงาน) จึงไม่เห็น 401 ใน console ทุกครั้งที่เปิดเว็บ
+      setMe((await api.staffSession()).user);
     } catch {
       setMe(null);
     } finally {

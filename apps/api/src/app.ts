@@ -167,35 +167,46 @@ export function createApp(opts: AppOptions): express.Express {
     });
   }
 
+  /**
+   * ตรวจ session พนักงานจากคุกกี้ — แหล่งเดียวของกฎนี้ ใช้ทั้ง requireAuth และ /api/auth/session
+   * session ที่ใช้ไม่ได้แล้ว (หมดอายุ/บัญชีปิด/รหัสเปลี่ยน) ถูกลบทิ้งระหว่างทาง
+   */
+  async function resolveStaffSession(
+    sid: string | undefined,
+  ): Promise<
+    | { ok: true; user: NonNullable<Awaited<ReturnType<typeof store.findById>>>; sessionId: string }
+    | { ok: false; message: string }
+  > {
+    if (!sid) return { ok: false, message: "กรุณาเข้าสู่ระบบก่อน" };
+    const session = await store.findSession(sid);
+    if (!session || new Date(session.expiresAt).getTime() < Date.now()) {
+      if (session) await store.deleteSession(sid);
+      return { ok: false, message: "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่" };
+    }
+    const user = await store.findById(session.userId);
+    if (!user || !user.isActive) {
+      await store.deleteSession(sid);
+      return { ok: false, message: "บัญชีถูกปิดใช้งานหรือไม่มีอยู่ กรุณาเข้าสู่ระบบใหม่" };
+    }
+    // เซสชันผูกกับรุ่น credential: reset/เปลี่ยนรหัสหลังสร้างเซสชันทำให้เซสชันเดิมใช้ไม่ได้
+    // แม้แถว session จะยังไม่ถูกลบ (กัน reset/login race)
+    if (session.passwordVersion !== user.passwordVersion) {
+      await store.deleteSession(sid);
+      return { ok: false, message: "เซสชันถูกยกเลิกแล้ว กรุณาเข้าสู่ระบบใหม่" };
+    }
+    return { ok: true, user, sessionId: session.id };
+  }
+
   async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const sid = req.cookies?.[SID_COOKIE] as string | undefined;
-      if (!sid) {
-        res.status(401).json(toErrorBody("AUTH", "กรุณาเข้าสู่ระบบก่อน"));
+      const result = await resolveStaffSession(req.cookies?.[SID_COOKIE] as string | undefined);
+      if (!result.ok) {
+        res.status(401).json(toErrorBody("AUTH", result.message));
         return;
       }
-      const session = await store.findSession(sid);
-      if (!session || new Date(session.expiresAt).getTime() < Date.now()) {
-        if (session) await store.deleteSession(sid);
-        res.status(401).json(toErrorBody("AUTH", "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่"));
-        return;
-      }
-      const user = await store.findById(session.userId);
-      if (!user || !user.isActive) {
-        await store.deleteSession(sid);
-        res.status(401).json(toErrorBody("AUTH", "บัญชีถูกปิดใช้งานหรือไม่มีอยู่ กรุณาเข้าสู่ระบบใหม่"));
-        return;
-      }
-      // เซสชันผูกกับรุ่น credential: reset/เปลี่ยนรหัสหลังสร้างเซสชันทำให้เซสชันเดิมใช้ไม่ได้
-      // แม้แถว session จะยังไม่ถูกลบ (กัน reset/login race)
-      if (session.passwordVersion !== user.passwordVersion) {
-        await store.deleteSession(sid);
-        res.status(401).json(toErrorBody("AUTH", "เซสชันถูกยกเลิกแล้ว กรุณาเข้าสู่ระบบใหม่"));
-        return;
-      }
-      req.user = toPublicUser(user);
-      req.userId = user.id;
-      req.sessionId = session.id;
+      req.user = toPublicUser(result.user);
+      req.userId = result.user.id;
+      req.sessionId = result.sessionId;
       next();
     } catch (err) {
       next(err);
@@ -358,6 +369,28 @@ export function createApp(opts: AppOptions): express.Express {
 
   app.get("/api/auth/me", requireAuth, (req, res) => {
     res.json({ user: req.user });
+  });
+
+  /**
+   * "ตอนนี้มีพนักงานล็อกอินอยู่ไหม" — ตอบ 200 เสมอ (ไม่มี session → user: null)
+   *
+   * เว็บถามคำถามนี้ทุกครั้งที่เปิดเพื่อเลือกระหว่างหน้าลูกค้ากับหลังร้าน ลูกค้าเกือบทุกคนไม่ใช่พนักงาน
+   * `/api/auth/me` จึงตอบ 401 ให้ทุกคนทุกครั้ง และเบราว์เซอร์ log 401 เป็น error เสมอ
+   * endpoint ที่ต้องล็อกอินยังใช้ requireAuth ตามเดิม ตัวนี้แค่ตอบคำถามโดยไม่นับเป็น error
+   */
+  app.get("/api/auth/session", async (req, res, next) => {
+    try {
+      const result = await resolveStaffSession(req.cookies?.[SID_COOKIE] as string | undefined);
+      if (!result.ok) {
+        // คุกกี้เสียแล้ว — ล้างทิ้งให้ด้วย ไม่ให้ค้างส่งมาทุกคำขอ
+        if (req.cookies?.[SID_COOKIE]) clearSessionCookie(res);
+        res.json({ user: null });
+        return;
+      }
+      res.json({ user: toPublicUser(result.user) });
+    } catch (err) {
+      next(err);
+    }
   });
 
   app.post("/api/auth/change-password", requireAuth, requireCsrf, async (req, res, next) => {
