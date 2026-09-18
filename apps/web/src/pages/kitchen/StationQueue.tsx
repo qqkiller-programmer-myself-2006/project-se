@@ -352,7 +352,7 @@ export default function StationQueuePage({
       {canManageCapacity && (
         <Panel label="กำลังผลิตต่อช่วง 15 นาที">
           <div className="space-y-3">
-            <h2 className="text-base font-bold text-ink-900">กำลังผลิตฝ่าย{QUEUE_STATION_LABELS[station]}</h2>
+            <h2 className="pa-display text-base text-ink-900">กำลังผลิตฝ่าย{QUEUE_STATION_LABELS[station]}</h2>
             <p className="text-sm text-ink-600">
               ปัจจุบัน {capacities.find((c) => c && c.station === station)?.perSlot ?? "—"} งานต่อช่วง 15 นาที · เต็มแล้วเสนอช่วงถัดไปให้คำสั่งซื้อล่วงหน้า
             </p>

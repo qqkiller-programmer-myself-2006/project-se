@@ -271,7 +271,7 @@ export default function AdminRewardsPage({ isManager }: { isManager: boolean }) 
       {rowMsg && <Alert tone={rowMsg.tone} role={rowMsg.tone === "error" ? "alert" : "status"}>{rowMsg.text}</Alert>}
 
       <Panel label="รายการรอรับ">
-        <h2 className="text-base font-bold text-ink-900">รายการรอรับ ({pending.length})</h2>
+        <h2 className="pa-display text-base text-ink-900">รายการรอรับ ({pending.length})</h2>
         <p className="mt-1 text-sm text-ink-600">กดรับเพื่อสร้างงานคิวเครื่องดื่มราคา 0 ให้ร้านทำต่อ หรือปฏิเสธเพื่อคืนคะแนนให้ลูกค้า</p>
         {pending.length === 0 ? (
           <p className="mt-2 text-sm text-ink-600">ไม่มีรายการรอรับในขณะนี้</p>
@@ -354,7 +354,7 @@ export default function AdminRewardsPage({ isManager }: { isManager: boolean }) 
       </Panel>
 
       <Panel label="ออก QR Walk-in">
-        <h2 className="text-base font-bold text-ink-900">ออก QR Walk-in</h2>
+        <h2 className="pa-display text-base text-ink-900">ออก QR Walk-in</h2>
         <p className="mt-1 text-sm text-ink-600">รหัสใช้ได้ครั้งเดียวภายใน 10 นาที ลูกค้าสแกนรับ 1 แต้ม (ไม่ซ้ำกับคะแนนคำสั่งซื้อ)</p>
         <div className="mt-3">
           <button type="button" onClick={() => void issueQr()} disabled={qrBusy} aria-busy={qrBusy} className={primaryButtonClass}>
@@ -378,7 +378,7 @@ export default function AdminRewardsPage({ isManager }: { isManager: boolean }) 
       {isManager ? (
         <>
           <Panel label="สร้างรางวัลใหม่">
-            <h2 className="text-base font-bold text-ink-900">สร้างรางวัลใหม่</h2>
+            <h2 className="pa-display text-base text-ink-900">สร้างรางวัลใหม่</h2>
             {formMsg && (
               <div className="mt-3">
                 <Alert tone={formMsg.tone} role={formMsg.tone === "error" ? "alert" : "status"}>{formMsg.text}</Alert>
@@ -422,7 +422,7 @@ export default function AdminRewardsPage({ isManager }: { isManager: boolean }) 
           </Panel>
 
           <Panel label="รางวัลทั้งหมด">
-            <h2 className="text-base font-bold text-ink-900">รางวัลทั้งหมด ({rewards.length})</h2>
+            <h2 className="pa-display text-base text-ink-900">รางวัลทั้งหมด ({rewards.length})</h2>
             {rewards.length === 0 ? (
               <p className="mt-2 text-sm text-ink-600">ยังไม่มีรางวัล สร้างรางวัลแรกจากแบบฟอร์มด้านบน</p>
             ) : (
@@ -485,7 +485,7 @@ export default function AdminRewardsPage({ isManager }: { isManager: boolean }) 
           </Panel>
 
           <Panel label="ประวัติคะแนนและรางวัล">
-            <h2 className="text-base font-bold text-ink-900">ประวัติคะแนนและรางวัล</h2>
+            <h2 className="pa-display text-base text-ink-900">ประวัติคะแนนและรางวัล</h2>
             {audit.length === 0 ? (
               <p className="mt-2 text-sm text-ink-600">ยังไม่มีประวัติ (ดูได้เฉพาะ Owner/Admin ไม่มีข้อมูลลับลูกค้า)</p>
             ) : (

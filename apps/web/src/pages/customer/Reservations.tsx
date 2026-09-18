@@ -596,7 +596,7 @@ export default function ReservationsPage() {
         ) : demo ? (
           <Panel label="การจองตัวอย่าง">
             <div className="space-y-3">
-              <h2 className="text-base font-bold text-ink-900">การจองตัวอย่าง ({items.length} รายการ)</h2>
+              <h2 className="pa-display text-base text-ink-900">การจองตัวอย่าง ({items.length} รายการ)</h2>
               <p className="text-sm text-ink-600">สร้าง/ยกเลิกการจองต้องเชื่อมต่อเซิร์ฟเวอร์ — ข้อมูลด้านล่างไว้ดูดีไซน์เท่านั้น</p>
               {items.map((r, index) => (
                 <MotionReveal key={r.id} index={index}>
@@ -608,7 +608,7 @@ export default function ReservationsPage() {
         ) : customer ? (
           <Panel label="การจองของฉัน">
             <div className="space-y-3">
-              <h2 className="text-base font-bold text-ink-900">การจองของ {customer.name}</h2>
+              <h2 className="pa-display text-base text-ink-900">การจองของ {customer.name}</h2>
               {cancelError ? (
                 <Alert tone="error" role="alert">
                   {cancelError}

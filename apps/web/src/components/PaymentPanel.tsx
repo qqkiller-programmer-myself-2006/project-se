@@ -166,7 +166,7 @@ export function PaymentPanel({
     <Panel label={`ชำระเงินคำสั่งซื้อ ${order.orderNumber}`}>
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-base font-bold text-ink-900">
+          <h2 className="pa-display text-base text-ink-900">
             ชำระเงิน · {order.orderNumber} · {fmtPrice(order.total)}
           </h2>
           <PaymentStateBadge state={state} />

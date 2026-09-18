@@ -280,9 +280,9 @@ export default function RewardsPage() {
 
       <MotionReveal>
         <Panel label="ยอดคะแนนของฉัน">
-        <h2 className="text-base font-bold text-ink-900">ยอดคะแนนของฉัน</h2>
+        <h2 className="pa-display text-base text-ink-900">ยอดคะแนนของฉัน</h2>
         <p className="mt-2 flex items-baseline gap-2" aria-live="polite">
-          <span className="text-4xl font-bold text-brand-700">{balance ?? 0}</span>
+          <span className="text-4xl luxe-price font-semibold text-ink-900">{balance ?? 0}</span>
           <span className="text-sm font-medium text-ink-600">แต้ม</span>
         </p>
         {reserved.length > 0 && (
@@ -292,7 +292,7 @@ export default function RewardsPage() {
       </MotionReveal>
 
       <Panel label="รางวัลพร้อมแลก">
-        <h2 className="text-base font-bold text-ink-900">รางวัลพร้อมแลก</h2>
+        <h2 className="pa-display text-base text-ink-900">รางวัลพร้อมแลก</h2>
         {redeemMsg && (
           <div className="mt-3">
             <Alert tone={redeemMsg.tone} role={redeemMsg.tone === "error" ? "alert" : "status"}>{redeemMsg.text}</Alert>
@@ -328,7 +328,7 @@ export default function RewardsPage() {
       </Panel>
 
       <Panel label="รายการแลกของฉัน">
-        <h2 className="text-base font-bold text-ink-900">รายการแลกของฉัน</h2>
+        <h2 className="pa-display text-base text-ink-900">รายการแลกของฉัน</h2>
         {releaseMsg && (
           <div className="mt-3">
             <Alert tone={releaseMsg.tone} role={releaseMsg.tone === "error" ? "alert" : "status"}>{releaseMsg.text}</Alert>
@@ -409,7 +409,7 @@ export default function RewardsPage() {
       </Panel>
 
       <Panel label="สแกน QR Walk-in">
-        <h2 className="text-base font-bold text-ink-900">สแกน QR Walk-in</h2>
+        <h2 className="pa-display text-base text-ink-900">สแกน QR Walk-in</h2>
         <p className="mt-1 text-sm text-ink-600">ขอรหัส QR จากพนักงานที่ร้าน (ใช้ได้ครั้งเดียวภายใน 10 นาที) รับ 1 แต้มต่อรหัส</p>
         <form onSubmit={scanWalkin} className="mt-3 flex flex-wrap items-end gap-2">
           <div className="min-w-0 flex-1 basis-48">
@@ -435,7 +435,7 @@ export default function RewardsPage() {
       </Panel>
 
       <Panel label="ผูกคำสั่งซื้อ Guest">
-        <h2 className="text-base font-bold text-ink-900">ผูกคำสั่งซื้อ Guest</h2>
+        <h2 className="pa-display text-base text-ink-900">ผูกคำสั่งซื้อ Guest</h2>
         <p className="mt-1 text-sm text-ink-600">
           สั่งแบบไม่เข้าสู่ระบบด้วยเบอร์เดียวกับบัญชีนี้ใช่ไหม ผูกคำสั่งซื้อนั้นภายใน 24 ชั่วโมงเพื่อรับคะแนนที่ยังไม่มีผู้รับ
         </p>
@@ -463,7 +463,7 @@ export default function RewardsPage() {
       </Panel>
 
       <Panel label="ประวัติคะแนน">
-        <h2 className="text-base font-bold text-ink-900">ประวัติคะแนน</h2>
+        <h2 className="pa-display text-base text-ink-900">ประวัติคะแนน</h2>
         {ledger.length === 0 ? (
           <p className="mt-2 text-sm text-ink-600">ยังไม่มีประวัติคะแนน สั่งเครื่องดื่มแล้วรับที่ร้านเพื่อเริ่มสะสมแต้ม</p>
         ) : (

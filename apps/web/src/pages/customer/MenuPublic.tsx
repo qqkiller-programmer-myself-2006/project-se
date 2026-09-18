@@ -150,7 +150,7 @@ export default function MenuPublicPage() {
               </label>
               <input
                 id="menu-search"
-                className="w-full min-h-[44px] rounded-xl border border-ink-300 bg-white px-3 py-2.5 text-base text-ink-900 placeholder:text-ink-400 shadow-sm"
+                className="w-full min-h-[44px] rounded-lg border border-ink-200 bg-white px-3 py-2.5 text-base text-ink-900 placeholder:text-ink-400 shadow-sm"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 placeholder="เช่น ข้าวผัดหมู ชาใต้"
@@ -162,7 +162,7 @@ export default function MenuPublicPage() {
               </label>
               <select
                 id="menu-kind"
-                className="w-full min-h-[44px] rounded-xl border border-ink-300 bg-white px-3 py-2.5 text-base text-ink-900 shadow-sm"
+                className="w-full min-h-[44px] rounded-lg border border-ink-200 bg-white px-3 py-2.5 text-base text-ink-900 shadow-sm"
                 value={kind}
                 onChange={(e) => setKind(e.target.value as "" | MenuKind)}
               >
@@ -188,7 +188,7 @@ export default function MenuPublicPage() {
               type="button"
               onClick={() => void load()}
               aria-label="ลองโหลดเมนูอีกครั้ง"
-              className="inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-ink-300 bg-white px-4 py-2.5 text-sm font-semibold text-ink-800 shadow-sm transition-colors hover:bg-ink-50"
+              className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-ink-200 bg-white px-4 py-2.5 text-sm font-semibold text-ink-800 shadow-sm transition-colors hover:bg-ink-50"
             >
               <Icon name="refresh" size={18} />
               ลองใหม่
@@ -220,7 +220,7 @@ export default function MenuPublicPage() {
                     const optionGroups = m.optionGroups ?? [];
                     const inStock = m.inStock ?? true;
                     return (
-                      <StaggerItem key={m.id} index={index} className="overflow-hidden rounded-2xl border border-ink-200 bg-white shadow-sm">
+                      <StaggerItem key={m.id} index={index} className="overflow-hidden luxe-card">
                         {/* แตะตรงไหนของการ์ดก็เปิดป๊อปอัปสั่งซื้อ — ปุ่มข้างล่างคือทางเข้าหลักของคีย์บอร์ด/สกรีนรีดเดอร์ */}
                         <TiltCard className="pa-lift h-full cursor-pointer">
                         <div onClick={() => setOrdering(m)} className="h-full">
@@ -235,7 +235,7 @@ export default function MenuPublicPage() {
                             </span>
                           </div>
                           {m.description ? <p className="text-sm text-ink-600">{m.description}</p> : null}
-                          <p className="text-base font-bold text-brand-700">{fmtPrice(m.price)}</p>
+                          <p className="text-base luxe-price font-semibold text-ink-900">{fmtPrice(m.price)}</p>
                           {optionGroups.length > 0 ? (
                             <div className="space-y-1 border-t border-ink-100 pt-2">
                               {optionGroups.map((og) => (

@@ -197,7 +197,7 @@ export default function CapacityDashboardPage() {
           {overview.stations.map((s) => (
             <Panel key={s.station} label={`กำลังผลิตฝ่าย${QUEUE_STATION_LABELS[s.station]}`}>
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-base font-bold text-ink-900">ฝ่าย{QUEUE_STATION_LABELS[s.station]}</h2>
+                <h2 className="pa-display text-base text-ink-900">ฝ่าย{QUEUE_STATION_LABELS[s.station]}</h2>
                 <Badge tone={s.source === "model" ? "active" : "brand"}>
                   {s.source === "model" ? "โมเดลพยากรณ์" : "เวลามาตรฐาน"}
                 </Badge>
@@ -217,7 +217,7 @@ export default function CapacityDashboardPage() {
             </Panel>
           ))}
           <Panel label="โต๊ะและผู้ใช้บริการ">
-            <h2 className="text-base font-bold text-ink-900">โต๊ะและผู้ใช้บริการ</h2>
+            <h2 className="pa-display text-base text-ink-900">โต๊ะและผู้ใช้บริการ</h2>
             <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">
               <div className="rounded-xl bg-ink-50 p-3">
                 <dt className="text-ink-600">โต๊ะว่าง</dt>
@@ -236,7 +236,7 @@ export default function CapacityDashboardPage() {
       )}
 
       <Panel label="ประมาณเวลารอรายฝ่าย">
-        <h2 className="text-base font-bold text-ink-900">ประมาณเวลารอรายฝ่าย</h2>
+        <h2 className="pa-display text-base text-ink-900">ประมาณเวลารอรายฝ่าย</h2>
         <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
           <div>
             <label htmlFor="cap-wait-station" className="mb-1 block text-sm font-semibold text-ink-800">ฝ่ายงาน (ประมาณเวลา)</label>
@@ -268,7 +268,7 @@ export default function CapacityDashboardPage() {
       </Panel>
 
       <Panel label="ตรวจสล็อตล่วงหน้า">
-        <h2 className="text-base font-bold text-ink-900">ตรวจสล็อตล่วงหน้า (จอง/นัดรับ)</h2>
+        <h2 className="pa-display text-base text-ink-900">ตรวจสล็อตล่วงหน้า (จอง/นัดรับ)</h2>
         <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_1fr_1fr_auto]">
           <div>
             <label htmlFor="cap-slot-station" className="mb-1 block text-sm font-semibold text-ink-800">ฝ่ายงาน (ตรวจสล็อต)</label>
@@ -309,7 +309,7 @@ export default function CapacityDashboardPage() {
 
       <Panel label="โมเดลพยากรณ์และความแม่นยำ">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-base font-bold text-ink-900">โมเดลพยากรณ์และความแม่นยำ</h2>
+          <h2 className="pa-display text-base text-ink-900">โมเดลพยากรณ์และความแม่นยำ</h2>
           <button type="button" onClick={() => void runEvaluate()} disabled={evalLoading} className={secondaryButtonClass}>
             {evalLoading ? "กำลังประเมิน…" : "ประเมินใหม่"}
           </button>

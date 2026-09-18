@@ -325,7 +325,7 @@ export default function InventoryPage() {
         title="จัดการวัตถุดิบและสต๊อก"
         description={`รับเข้า ตัดจ่าย และปรับยอดวัตถุดิบพร้อมเหตุผลทุกครั้ง · ทั้งหมด ${items.length} รายการ`}
         actions={
-          <label className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-xl border border-ink-300 bg-white px-4 py-2 text-sm font-semibold text-ink-800">
+          <label className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-lg border border-ink-200 bg-white px-4 py-2 text-sm font-semibold text-ink-800">
             <input
               type="checkbox"
               className="h-5 w-5 accent-brand-600"
@@ -611,7 +611,7 @@ export default function InventoryPage() {
             </form>
 
             <div className="space-y-2">
-              <h2 className="text-base font-bold text-ink-900">ประวัติล่าสุด (20 รายการ)</h2>
+              <h2 className="pa-display text-base text-ink-900">ประวัติล่าสุด (20 รายการ)</h2>
               {ledgerLoading ? (
                 <p className="py-4 text-center">
                   <Spinner label="กำลังโหลดประวัติ…" />
@@ -775,7 +775,7 @@ export default function InventoryPage() {
           </form>
 
           <div className="space-y-2">
-            <h2 className="text-base font-bold text-ink-900">ประวัติเวอร์ชัน{targetId ? ` (${recipes.length} เวอร์ชัน)` : ""}</h2>
+            <h2 className="pa-display text-base text-ink-900">ประวัติเวอร์ชัน{targetId ? ` (${recipes.length} เวอร์ชัน)` : ""}</h2>
             {!targetId ? (
               <p className="rounded-xl border border-dashed border-ink-300 px-4 py-6 text-center text-sm text-ink-600">
                 เลือกเมนูหรือตัวเลือกเป้าหมายเพื่อดูประวัติสูตร

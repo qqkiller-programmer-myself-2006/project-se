@@ -259,7 +259,7 @@ export default function QueueTrackPage() {
       {!loading && !error && trackedNumber && (
         <MotionReveal>
         <Panel label={`สถานะคิว ${trackedNumber}`}>
-          <h2 className="text-base font-bold text-ink-900">คำสั่งซื้อ {trackedNumber}</h2>
+          <h2 className="pa-display text-base text-ink-900">คำสั่งซื้อ {trackedNumber}</h2>
           {jobs.length > 0 && (
             <div className="mt-3 rounded-xl border border-brand-200 bg-brand-50 p-3" aria-live="polite">
               {waitLoading ? (

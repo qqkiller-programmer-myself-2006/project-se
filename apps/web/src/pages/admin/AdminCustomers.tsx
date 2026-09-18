@@ -115,7 +115,7 @@ export default function AdminCustomersPage() {
       {selected && (
         <Panel label={`รายละเอียดสมาชิก ${selected.customer.name}`}>
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-base font-bold text-ink-900">{selected.customer.isDeleted ? "ลูกค้าที่ลบบัญชี" : selected.customer.name}</h2>
+            <h2 className="pa-display text-base text-ink-900">{selected.customer.isDeleted ? "ลูกค้าที่ลบบัญชี" : selected.customer.name}</h2>
             {selected.customer.isDeleted ? <Badge tone="neutral">ลบบัญชีแล้ว</Badge> : selected.customer.isActive ? <Badge tone="active">ใช้งาน</Badge> : <Badge tone="inactive">ปิดใช้งาน</Badge>}
             {selected.line.linked ? <Badge tone="brand">เชื่อม LINE แล้ว</Badge> : <Badge tone="neutral">ยังไม่เชื่อม LINE</Badge>}
           </div>

@@ -38,9 +38,9 @@ import AdminNotificationsPage from "./pages/admin/AdminNotifications";
 import MyNotificationsPage from "./pages/customer/MyNotifications";
 
 const NAV_BASE =
-  "pa-lift pa-press inline-flex min-h-[44px] items-center rounded-xl border px-4 py-2 text-sm font-semibold transition-colors";
-const NAV_IDLE = "border-ink-200 bg-white text-ink-700 hover:border-brand-300 hover:bg-brand-50 hover:text-brand-800";
-const NAV_ACTIVE = "border-brand-600 bg-brand-600 text-white shadow-sm";
+  "pa-lift pa-press inline-flex min-h-[44px] items-center rounded-lg border px-4 py-2 text-sm font-semibold tracking-wide transition-colors";
+const NAV_IDLE = "border-ink-200 bg-white text-ink-700 hover:border-gold-600 hover:text-ink-900";
+const NAV_ACTIVE = "border-ink-900 bg-ink-900 text-ink-50";
 
 function navClass(isActive: boolean): string {
   return `${NAV_BASE} ${isActive ? NAV_ACTIVE : NAV_IDLE}`;
@@ -80,7 +80,7 @@ export default function App() {
 
   if (!ready)
     return (
-      <div className="flex min-h-screen items-center justify-center bg-brand-50 p-6">
+      <div className="flex min-h-screen items-center justify-center bg-ink-50 p-6">
         <Spinner label="กำลังโหลดระบบหลังร้าน…" />
       </div>
     );
@@ -119,28 +119,28 @@ export default function App() {
   const roleSurface = isOwner ? "role-owner" : isManager ? "role-admin" : canKitchen || canDrink ? "role-kitchen" : "role-staff";
 
   return (
-    <div className={`min-h-screen bg-brand-50 text-ink-900 ${roleSurface}`}>
+    <div className={`min-h-screen bg-ink-50 text-ink-900 ${roleSurface}`}>
       <a href="#main-content" className="ui-skip-link">
         ข้ามไปยังเนื้อหาหลัก
       </a>
-      <header className="role-header border-b border-brand-100 bg-white shadow-sm">
+      <header className="role-header border-b border-ink-200 bg-white">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-4 gap-y-3 px-4 py-3 sm:px-6">
           <Link to={homePath} className="flex min-h-[44px] items-center gap-3">
             <span
               aria-hidden="true"
-              className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-600 text-lg font-bold text-white"
+              className="pa-display flex h-10 w-10 items-center justify-center rounded-xl bg-ink-900 text-lg text-gold-200"
             >
               ป
             </span>
             <span className="leading-tight">
-              <span className="block text-base font-bold">ร้านป้าอ้อ · หลังร้าน</span>
+              <span className="pa-display block text-lg">ร้านป้าอ้อ · หลังร้าน</span>
               <span className="block text-xs font-medium text-ink-500">
                 ระบบจัดการพนักงานและบัญชีสำหรับทีมงาน
               </span>
             </span>
           </Link>
 
-          <p className="flex min-h-[44px] flex-wrap items-center gap-2 rounded-xl bg-ink-50 px-3 py-1.5 text-sm">
+          <p className="flex min-h-[44px] flex-wrap items-center gap-2 rounded-lg border border-ink-200 px-3 py-1.5 text-sm">
             <span className="font-semibold">{me.username}</span>
             <span aria-hidden="true" className="text-ink-300">
               |
@@ -265,7 +265,7 @@ export default function App() {
               onClick={() => void logout()}
               disabled={loggingOut}
               aria-busy={loggingOut}
-              className="inline-flex min-h-[44px] items-center rounded-xl border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 transition-colors hover:bg-red-50 active:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex min-h-[44px] items-center rounded-lg border border-brand-300 bg-white px-4 py-2 text-sm font-semibold tracking-wide text-brand-700 transition-colors hover:bg-brand-50 active:bg-brand-100 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {loggingOut ? "กำลังออกจากระบบ…" : "ออกจากระบบ"}
             </button>

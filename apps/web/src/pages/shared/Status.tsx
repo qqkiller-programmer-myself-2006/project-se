@@ -57,7 +57,7 @@ export default function StatusPage() {
             <Alert tone="error" role="alert">
               {error}
             </Alert>
-            <button type="button" onClick={() => void load()} className="inline-flex min-h-[44px] items-center rounded-xl border border-ink-300 bg-white px-4 py-2.5 text-sm font-semibold text-ink-800 shadow-sm transition-colors hover:bg-ink-50">
+            <button type="button" onClick={() => void load()} className="inline-flex min-h-[44px] items-center rounded-lg border border-ink-200 bg-white px-4 py-2.5 text-sm font-semibold text-ink-800 shadow-sm transition-colors hover:bg-ink-50">
               ลองใหม่
             </button>
           </div>
@@ -65,7 +65,7 @@ export default function StatusPage() {
           <div className="space-y-4">
             <Panel label="สถานะร้านปัจจุบัน" className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <h2 className="text-lg font-bold text-ink-900">{status.shopName}</h2>
+                <h2 className="pa-display text-lg text-ink-900">{status.shopName}</h2>
                 <Badge tone={status.isOpen ? "success" : "danger"}>
                   {status.isOpen ? "เปิดรับบริการ" : "ปิดรับบริการ"}
                 </Badge>

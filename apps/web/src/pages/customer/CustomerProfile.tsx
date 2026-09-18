@@ -206,7 +206,7 @@ export default function CustomerProfilePage({ onLoggedOut }: { onLoggedOut?: () 
       />
 
       <Panel label="ข้อมูลสมาชิก">
-        <h2 className="text-base font-bold text-ink-900">ข้อมูลสมาชิก</h2>
+        <h2 className="pa-display text-base text-ink-900">ข้อมูลสมาชิก</h2>
         <p className="mt-1 text-sm text-ink-600">เบอร์โทร {customer.phone ?? "—"} (ใช้เข้าสู่ระบบ เปลี่ยนไม่ได้)</p>
         <form onSubmit={saveProfile} className="mt-3 space-y-3">
           <div>
@@ -225,7 +225,7 @@ export default function CustomerProfilePage({ onLoggedOut }: { onLoggedOut?: () 
       </Panel>
 
       <Panel label="เปลี่ยนรหัสผ่าน">
-        <h2 className="text-base font-bold text-ink-900">เปลี่ยนรหัสผ่าน</h2>
+        <h2 className="pa-display text-base text-ink-900">เปลี่ยนรหัสผ่าน</h2>
         <p className="mt-1 text-sm text-ink-600">เปลี่ยนแล้วต้องเข้าสู่ระบบใหม่ทุกอุปกรณ์</p>
         <form onSubmit={changePassword} className="mt-3 space-y-3">
           <div>
@@ -245,7 +245,7 @@ export default function CustomerProfilePage({ onLoggedOut }: { onLoggedOut?: () 
 
       <Panel label="การเชื่อม LINE">
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="text-base font-bold text-ink-900">การเชื่อม LINE</h2>
+          <h2 className="pa-display text-base text-ink-900">การเชื่อม LINE</h2>
           {line?.linked ? <Badge tone="success">เชื่อมแล้ว</Badge> : <Badge tone="neutral">ยังไม่เชื่อม</Badge>}
         </div>
         <p className="mt-1 text-sm text-ink-600">
@@ -282,7 +282,7 @@ export default function CustomerProfilePage({ onLoggedOut }: { onLoggedOut?: () 
       </Panel>
 
       <Panel label="ลบบัญชี">
-        <h2 className="text-base font-bold text-red-800">ลบบัญชี</h2>
+        <h2 className="pa-display text-base text-red-800">ลบบัญชี</h2>
         <p className="mt-1 text-sm text-ink-600">
           ลบแล้วชื่อ เบอร์โทร อีเมล และการเชื่อม LINE จะถูกทำเป็นนิรนามทันทีและออกจากระบบทุกอุปกรณ์
           ประวัติคำสั่งซื้อเดิมยังอ้างรหัสภายในโดยไม่มีข้อมูลระบุตัวคุณ

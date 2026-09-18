@@ -175,7 +175,7 @@ export default function AdminOrdersPage() {
             {selected ? (
               <Panel label={`จัดการ ${selected.orderNumber}`}>
                 <div className="space-y-3">
-                  <h2 className="text-base font-bold text-ink-900">เปลี่ยนสถานะ {selected.orderNumber}</h2>
+                  <h2 className="pa-display text-base text-ink-900">เปลี่ยนสถานะ {selected.orderNumber}</h2>
                   {selected.status !== "pending_payment" ? (
                     <Alert tone="info" role="status">
                       คำสั่งซื้อนี้ปิดงานแล้ว ไม่สามารถเปลี่ยนสถานะได้อีก
@@ -245,7 +245,7 @@ export default function AdminOrdersPage() {
 
             <Panel label="ประวัติคำสั่งซื้อล่าสุด">
               <div className="space-y-2">
-                <h2 className="text-base font-bold text-ink-900">ประวัติล่าสุด</h2>
+                <h2 className="pa-display text-base text-ink-900">ประวัติล่าสุด</h2>
                 {audit.length === 0 ? (
                   <p className="text-sm text-ink-600">ยังไม่มีประวัติคำสั่งซื้อ</p>
                 ) : (

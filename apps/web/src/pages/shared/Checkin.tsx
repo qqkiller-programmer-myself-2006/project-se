@@ -108,7 +108,7 @@ export default function CheckinPage() {
 
       <Panel label="เช็กอิน">
         <div className="space-y-3">
-          <h2 className="text-base font-bold text-ink-900">เช็กอินลูกค้า</h2>
+          <h2 className="pa-display text-base text-ink-900">เช็กอินลูกค้า</h2>
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <label htmlFor="checkin-code" className="mb-1 block text-sm font-semibold text-ink-800">
@@ -185,7 +185,7 @@ export default function CheckinPage() {
 
       <Panel label="รอบการใช้โต๊ะที่เปิดอยู่">
         <div className="space-y-3">
-          <h2 className="text-base font-bold text-ink-900">รอบที่เปิดอยู่</h2>
+          <h2 className="pa-display text-base text-ink-900">รอบที่เปิดอยู่</h2>
           {loading ? (
             <p className="py-6 text-center">
               <Spinner label="กำลังโหลดรอบโต๊ะ…" />

@@ -297,7 +297,7 @@ export default function CartPage() {
 
         <Panel label="ตะกร้าของฉัน">
           <div className="space-y-3">
-            <h2 className="text-base font-bold text-ink-900">
+            <h2 className="pa-display text-base text-ink-900">
               ตะกร้าของฉัน {count > 0 ? <span className="font-medium text-ink-600">({count} ชิ้น)</span> : null}
             </h2>
             {cart.length === 0 ? (
@@ -385,7 +385,7 @@ export default function CartPage() {
                             onClick={() => setCart((c) => setQuantity(c, l.menuId, l.quantity - 1, l.options))}
                             disabled={l.quantity <= 1}
                             aria-label="ลดจำนวน"
-                            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl border border-ink-300 bg-white text-lg font-bold text-ink-800 hover:bg-ink-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-ink-200 bg-white text-lg font-bold text-ink-800 hover:bg-ink-50 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             −
                           </button>
@@ -397,7 +397,7 @@ export default function CartPage() {
                             onClick={() => setCart((c) => setQuantity(c, l.menuId, l.quantity + 1, l.options))}
                             disabled={l.quantity >= 20}
                             aria-label="เพิ่มจำนวน"
-                            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl border border-ink-300 bg-white text-lg font-bold text-ink-800 hover:bg-ink-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-ink-200 bg-white text-lg font-bold text-ink-800 hover:bg-ink-50 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             +
                           </button>
@@ -616,7 +616,7 @@ export default function CartPage() {
                         >
                           <div className="min-w-0">
                             <p className="truncate font-semibold text-ink-900">{m.name}</p>
-                            <p className="text-sm font-bold text-brand-700">{fmtPrice(m.price)}</p>
+                            <p className="text-sm luxe-price font-semibold text-ink-900">{fmtPrice(m.price)}</p>
                             {(m.optionGroups ?? []).length > 0 ? (
                               <p className="truncate text-xs text-ink-500">
                                 มี {(m.optionGroups ?? []).length} กลุ่มตัวเลือก

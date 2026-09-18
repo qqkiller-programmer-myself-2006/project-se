@@ -154,7 +154,7 @@ export default function MyOrdersPage() {
             {(sessionChecked && customer) || demo ? (
               <Panel label="คำสั่งซื้อของสมาชิก">
                 <div className="space-y-3">
-                  <h2 className="text-base font-bold text-ink-900">
+                  <h2 className="pa-display text-base text-ink-900">
                     {customer ? `คำสั่งซื้อของ ${customer.name}` : "คำสั่งซื้อตัวอย่าง"}
                   </h2>
                   {orders.length === 0 ? (
@@ -192,7 +192,7 @@ export default function MyOrdersPage() {
 
             <Panel label="ค้นหาคำสั่งซื้อ Guest">
               <div className="space-y-3">
-                <h2 className="text-base font-bold text-ink-900">ค้นหาด้วยเลขคำสั่งซื้อ (Guest)</h2>
+                <h2 className="pa-display text-base text-ink-900">ค้นหาด้วยเลขคำสั่งซื้อ (Guest)</h2>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div>
                     <label htmlFor="lookup-number" className="mb-1 block text-sm font-semibold text-ink-800">
