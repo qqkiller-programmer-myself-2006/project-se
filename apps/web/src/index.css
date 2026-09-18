@@ -625,19 +625,19 @@ body {
 /* ---------- เลเยอร์ความลึก 3D ที่ทุกหน้าได้ร่วมกัน ---------- */
 
 /*
- * เวที: ตั้ง perspective ครั้งเดียวที่ <main> ทุกหน้าที่อยู่ข้างในจึงมีความลึก
- * เดียวกัน โดยไม่ต้องไล่แก้ทีละหน้า ค่า perspective ไกลพอให้ขอบไม่บิดจนอ่านยาก
+ * เวที: `.luxe-scene` บน <main> เป็นแค่จุดเกาะของเลเยอร์นี้ — ตั้งใจไม่ใส่ perspective ที่ตัวมัน
+ *
+ * perspective / transform-style: preserve-3d บนบรรพบุรุษทำให้ position: fixed ของลูก
+ * ยึดกล่องนั้นแทนหน้าจอ (ป๊อปอัป แถบจองด้านล่าง lightbox ไปโผล่ท้ายหน้ายาว ๆ)
+ * ความลึกจึงใส่เป็น perspective() ใน transform ของแต่ละชิ้น และค้างเฉพาะตอนเคลื่อนไหว
+ * พอแอนิเมชันจบ/เนื้อหาโผล่แล้ว transform กลับเป็น none — fixed ของลูกกลับมายึดหน้าจอตามปกติ
  */
-.luxe-scene {
-  perspective: 1400px;
-  perspective-origin: 50% 0%;
-}
 
 /* หน้าที่เพิ่งเข้ามาเอนเข้าหาคนดูเล็กน้อยแล้วตั้งตรง */
 @keyframes luxe-page-in-3d {
   from {
     opacity: 0;
-    transform: translate3d(0, 10px, -60px) rotateX(3.5deg);
+    transform: perspective(1400px) translate3d(0, 10px, -60px) rotateX(3.5deg);
   }
   to {
     opacity: 1;
@@ -645,19 +645,19 @@ body {
   }
 }
 .luxe-scene .pa-page-enter {
-  transform-style: preserve-3d;
+  /* backwards (ไม่ใช่ both): ไม่ค้าง transform หลังจบ — เหตุผลเดียวกับ .pa-page-enter เดิม */
   animation: luxe-page-in-3d var(--motion-slow) var(--motion-ease) backwards;
 }
 
 /* เนื้อหาที่ไหลเข้ามาตอนเลื่อนจอก็เอนขึ้นมาแบบเดียวกัน */
 .luxe-scene .pa-reveal {
-  transform: translate3d(0, 14px, -40px) rotateX(3deg);
+  transform: perspective(1400px) translate3d(0, 14px, -40px) rotateX(3deg);
 }
 .luxe-scene .pa-reveal--fade {
-  transform: translate3d(0, 0, -30px);
+  transform: perspective(1400px) translate3d(0, 0, -30px);
 }
 .luxe-scene .pa-reveal--scale {
-  transform: translate3d(0, 6px, -50px) scale(0.985);
+  transform: perspective(1400px) translate3d(0, 6px, -50px) scale(0.985);
 }
 .luxe-scene .pa-reveal.is-visible {
   transform: none;

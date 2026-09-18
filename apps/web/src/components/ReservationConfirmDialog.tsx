@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { useEffect, useRef, type ReactNode } from "react";
 import type { BookingDay } from "../lib/reservationSlots";
 import { Alert, inputClass, primaryButtonClass, secondaryButtonClass } from "./ui";
@@ -59,7 +60,9 @@ export function ReservationConfirmDialog(props: Props) {
 
   const busy = props.checking || props.creating;
 
-  return (
+  // portal ไปที่ body: บรรพบุรุษที่มี transform/perspective/preserve-3d (เช่นเลเยอร์ 3D ของหน้า)
+  // ทำให้ position: fixed ยึดกล่องนั้นแทนหน้าจอ — ป๊อปอัปไปโผล่ท้ายหน้ายาว ๆ จนต้องเลื่อนหา
+  return createPortal(
     <div
       className="fixed inset-0 z-50 grid place-items-end bg-ink-900/60 p-0 backdrop-blur-sm sm:place-items-center sm:p-4"
       onClick={onClose}
@@ -209,6 +212,7 @@ export function ReservationConfirmDialog(props: Props) {
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
