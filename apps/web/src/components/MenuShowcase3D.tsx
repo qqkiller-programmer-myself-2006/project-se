@@ -219,6 +219,9 @@ export function MenuShowcase3D({ items, activeIndex, onActiveIndexChange }: Menu
     });
     disposables.push(frameMaterial);
 
+    /** วาดบานใหม่เมื่อเว็บฟอนต์มาถึง — บานที่วาดก่อนฟอนต์โหลดจะเป็นฟอนต์สำรอง */
+    const repaints: (() => void)[] = [];
+
     items.forEach((item, index) => {
       const canvas = document.createElement("canvas");
       canvas.width = TEXTURE_WIDTH;
@@ -229,15 +232,24 @@ export function MenuShowcase3D({ items, activeIndex, onActiveIndexChange }: Menu
       texture.colorSpace = THREE.SRGBColorSpace;
       disposables.push(texture);
 
-      if (item.imageUrl && ctx) {
-        const image = new Image();
-        image.decoding = "async";
-        image.onload = () => {
-          paintPanel(ctx, item, image);
+      if (ctx) {
+        let loaded: HTMLImageElement | null = null;
+        const repaint = () => {
+          paintPanel(ctx, item, loaded);
           texture.needsUpdate = true;
         };
-        // รูปพังก็ปล่อยให้เป็นบานตัวอักษร "ปอ" ตามที่วาดไว้แล้ว
-        image.src = item.imageUrl;
+        repaints.push(repaint);
+
+        if (item.imageUrl) {
+          const image = new Image();
+          image.decoding = "async";
+          image.onload = () => {
+            loaded = image;
+            repaint();
+          };
+          // รูปพังก็ปล่อยให้เป็นบานตัวอักษร "ปอ" ตามที่วาดไว้แล้ว
+          image.src = item.imageUrl;
+        }
       }
 
       const panelMaterial = new THREE.MeshBasicMaterial({
@@ -364,6 +376,18 @@ export function MenuShowcase3D({ items, activeIndex, onActiveIndexChange }: Menu
     renderer.domElement.addEventListener("pointerup", onPointerUp);
     renderer.domElement.addEventListener("pointercancel", onPointerUp);
     renderer.domElement.addEventListener("pointerleave", onPointerUp);
+
+    // เว็บฟอนต์ (Cormorant/Noto Serif Thai) มาช้ากว่าเฟรมแรก — วาดบานใหม่เมื่อพร้อม
+    let fontsSettled = false;
+    document.fonts?.ready
+      ?.then(() => {
+        if (disposed || fontsSettled) return;
+        fontsSettled = true;
+        for (const repaint of repaints) repaint();
+      })
+      .catch(() => {
+        // ฟอนต์โหลดไม่ได้ก็ใช้ฟอนต์สำรองที่วาดไว้แล้ว
+      });
 
     const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(resize) : null;
     resizeObserver?.observe(stage);
