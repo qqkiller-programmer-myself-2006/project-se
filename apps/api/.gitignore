@@ -1,0 +1,7 @@
+# Stage 2 (Task D): throwaway SQLite dev database files — never commit.
+# Created by `DATABASE_URL=file:... npx prisma db push --schema=prisma/schema.sqlite.prisma`
+# and exercised by prisma/verify-sqlite.ts. Safe to delete at any time.
+dev.db*
+
+# Prisma client output — regenerate with `npx prisma generate`
+generated/

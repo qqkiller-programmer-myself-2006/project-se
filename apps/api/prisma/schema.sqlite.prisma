@@ -1,0 +1,202 @@
+// Prisma schema — SQLite DEV variant. MECHANICALLY DERIVED, DO NOT EDIT BY HAND.
+// Source of truth: prisma/schema.prisma (MySQL production schema, itself mirroring
+// db/migrations/001-004). To sync: edit schema.prisma, then run
+// `npm run prisma:gen-sqlite` (re-runnable, idempotent). Generator:
+// prisma/gen-sqlite-schema.ts (option (a): generator script, chosen so the two
+// schemas cannot drift — same 11 models/fields/@map/@@map names by construction).
+//
+// Mechanical transform applied by the generator:
+// - datasource db provider "mysql" -> "sqlite".
+// - generator client output -> ../generated/prisma-sqlite (a separate directory so
+//   the MySQL client in ../generated/prisma-mysql is never clobbered; both
+//   clients can coexist — verified in Task D via `ls generated/`).
+// - EVERY @db.* native-type attribute stripped. Research (not a guess): the SQLite
+//   connector supports NO native types — any @db.* fails validation with
+//   "Native type X is not supported for sqlite connector" (Prisma docs: scalar
+//   types already cover everything SQLite has; confirmed empirically — the first
+//   generated draft kept the attributes and `prisma validate` rejected them).
+//   Stripped: @db.Char/@db.VarChar lengths, @db.TinyInt, @db.Int, @db.BigInt,
+//   @db.Timestamp(0) / @db.DateTime(0) precisions, plus the `map:` (named-FK)
+//   argument on @relation — SQLite rejects named foreign keys (found
+//   empirically, not in the brief's candidate list). @@unique/@@index `map:`
+//   names ARE accepted on SQLite and are kept identical.
+// Known trouble spots (verified empirically in Task D, see FOR_UPDATE_STRATEGY.md):
+// - Json (User.roles, ShopSchedule.intervals): kept as the Json scalar (stored as
+//   TEXT); round-trips to real JS objects/arrays.
+// - Boolean: no native-type attribute needed or valid on SQLite.
+// - AuditLog.id (BigInt @default(autoincrement())): DIVERGES from MySQL —
+//   `prisma validate` accepts it, but `db push` emits
+//   "id" BIGINT NOT NULL PRIMARY KEY (no AUTOINCREMENT, and the declared
+//   type is BIGINT not INTEGER so SQLite's rowid-alias auto-assignment does
+//   NOT kick in). Inserting without an explicit id fails with P2011
+//   (NOT NULL constraint failed: audit_logs.id) — observed empirically in
+//   Task D. The client DOES return native JS bigint for BigInt columns,
+//   which JSON.stringify() rejects by default — Stage 3 routes touching
+//   AuditLog.id need a replacer (String(id)), AND Stage 3 needs an
+//   explicit id-assignment strategy for AuditLog on sqlite (e.g. assign
+//   ids in code when provider is sqlite).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma-sqlite"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ---------- 001_staff_accounts.sql ----------
+
+model User {
+  id              String    @id @map("id")
+  username        String    @map("username")
+  passwordHash    String    @map("password_hash")
+  roles           Json      @map("roles")
+  isActive        Boolean   @default(true) @map("is_active")
+  passwordVersion Int       @default(1) @map("password_version")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @default(now()) @updatedAt @map("updated_at")
+  sessions        Session[]
+
+  @@unique([username], map: "username")
+  @@map("users")
+}
+
+model Session {
+  id              String   @id @map("id")
+  userId          String   @map("user_id")
+  passwordVersion Int      @default(1) @map("password_version")
+  createdAt       DateTime @default(now()) @map("created_at")
+  expiresAt       DateTime @map("expires_at")
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([userId], map: "idx_sessions_user")
+  @@map("sessions")
+}
+
+model AuditLog {
+  id             BigInt   @id @default(autoincrement()) @map("id")
+  at             DateTime @default(now()) @map("at")
+  actorId        String?  @map("actor_id")
+  actorUsername  String?  @map("actor_username")
+  action         String   @map("action")
+  targetId       String?  @map("target_id")
+  targetUsername String?  @map("target_username")
+  detail         String?  @map("detail")
+  ip             String?  @map("ip")
+  success        Boolean  @default(true) @map("success")
+
+  @@index([action, at], map: "idx_audit_action_at")
+  @@index([targetId], map: "idx_audit_target")
+  @@map("audit_logs")
+}
+
+// ---------- 003_shop_status_tables.sql ----------
+// KNOWN GAP: chk_shop_settings_single (id = 1), chk_shop_schedule_weekday
+// (weekday 0–6), chk_shop_override_single (id = 1) and
+// chk_shop_tables_capacity (capacity 1–50) cannot be expressed in Prisma
+// for MySQL — plain columns only, CHECKs must stay enforced by raw DDL.
+
+model ShopSetting {
+  id        Int      @id @map("id")
+  shopName  String   @default("ร้านป้าอ้ออาหารตามสั่ง") @map("shop_name")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("shop_settings")
+}
+
+model ShopSchedule {
+  weekday   Int     @id @map("weekday")
+  closed    Boolean @default(false) @map("closed")
+  intervals Json    @map("intervals")
+
+  @@map("shop_schedule")
+}
+
+model ShopOverride {
+  id               Int       @id @map("id")
+  mode             String    @map("mode")
+  reason           String?   @map("reason")
+  expectedReopenAt DateTime? @map("expected_reopen_at")
+  expiresAt        DateTime? @map("expires_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  createdBy        String?   @map("created_by")
+
+  @@map("shop_override")
+}
+
+model ShopTable {
+  id        String   @id @map("id")
+  name      String   @map("name")
+  capacity  Int      @map("capacity")
+  isEnabled Boolean  @default(true) @map("is_enabled")
+  zone      String?  @map("zone")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([name], map: "name")
+  @@map("shop_tables")
+}
+
+// ---------- 004_customer_accounts.sql ----------
+
+model Customer {
+  id              String            @id @map("id")
+  name            String            @map("name")
+  phone           String?           @map("phone")
+  email           String?           @map("email")
+  passwordHash    String            @map("password_hash")
+  isActive        Boolean           @default(true) @map("is_active")
+  isDeleted       Boolean           @default(false) @map("is_deleted")
+  passwordVersion Int               @default(1) @map("password_version")
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @default(now()) @updatedAt @map("updated_at")
+  deletedAt       DateTime?         @map("deleted_at")
+  sessions        CustomerSession[]
+  lineLink        CustomerLineLink?
+  lineTx          CustomerLineTx[]
+
+  @@unique([phone], map: "uq_customers_phone")
+  @@unique([email], map: "uq_customers_email")
+  @@map("customers")
+}
+
+model CustomerSession {
+  id              String   @id @map("id")
+  customerId      String   @map("customer_id")
+  passwordVersion Int      @default(1) @map("password_version")
+  createdAt       DateTime @default(now()) @map("created_at")
+  expiresAt       DateTime @map("expires_at")
+  customer        Customer @relation(fields: [customerId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([customerId], map: "idx_customer_sessions_customer")
+  @@map("customer_sessions")
+}
+
+model CustomerLineLink {
+  customerId      String   @id @map("customer_id")
+  provider        String   @default("line") @map("provider")
+  providerSubject String   @map("provider_subject")
+  displayName     String?  @map("display_name")
+  linkedAt        DateTime @default(now()) @map("linked_at")
+  customer        Customer @relation(fields: [customerId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([provider, providerSubject], map: "uq_line_subject")
+  @@map("customer_line_links")
+}
+
+model CustomerLineTx {
+  state         String    @id @map("state")
+  customerId    String    @map("customer_id")
+  nonce         String    @map("nonce")
+  codeVerifier  String    @map("code_verifier")
+  redirectAfter String?   @map("redirect_after")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  expiresAt     DateTime  @map("expires_at")
+  usedAt        DateTime? @map("used_at")
+  customer      Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([customerId], map: "idx_line_tx_customer")
+  @@index([expiresAt], map: "idx_line_tx_expires")
+  @@map("customer_line_tx")
+}

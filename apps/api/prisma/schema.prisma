@@ -1,0 +1,173 @@
+// Prisma schema — Stage 1: mirrors db/migrations/001–004 (MySQL 8, InnoDB/utf8mb4).
+// Source of truth is the SQL migration files; see the stage-1 report for the
+// table-by-table DDL comparison and known gaps (CHECK constraints).
+// NOTE (Prisma 7): `datasource db` carries only `provider` — the connection
+// URL lives in apps/api/prisma.config.ts as env("DATABASE_URL") (required by
+// the config loader for every CLI command, but validate / format / generate /
+// migrate-diff-from-empty never connect to a database, so a dummy value
+// passed inline is enough for this stage; no .env file was created).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma-mysql"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+// ---------- 001_staff_accounts.sql ----------
+
+model User {
+  id              String    @id @map("id") @db.Char(36)
+  username        String    @map("username") @db.VarChar(64)
+  passwordHash    String    @map("password_hash") @db.VarChar(255)
+  roles           Json      @map("roles")
+  isActive        Boolean   @default(true) @map("is_active")
+  passwordVersion Int       @default(1) @map("password_version") @db.Int
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamp(0)
+  updatedAt       DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamp(0)
+  sessions        Session[]
+
+  @@unique([username], map: "username")
+  @@map("users")
+}
+
+model Session {
+  id              String   @id @map("id") @db.Char(64)
+  userId          String   @map("user_id") @db.Char(36)
+  passwordVersion Int      @default(1) @map("password_version") @db.Int
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamp(0)
+  expiresAt       DateTime @map("expires_at") @db.Timestamp(0)
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_sessions_user")
+
+  @@index([userId], map: "idx_sessions_user")
+  @@map("sessions")
+}
+
+model AuditLog {
+  id             BigInt   @id @default(autoincrement()) @map("id") @db.BigInt
+  at             DateTime @default(now()) @map("at") @db.Timestamp(0)
+  actorId        String?  @map("actor_id") @db.Char(36)
+  actorUsername  String?  @map("actor_username") @db.VarChar(64)
+  action         String   @map("action") @db.VarChar(48)
+  targetId       String?  @map("target_id") @db.Char(36)
+  targetUsername String?  @map("target_username") @db.VarChar(64)
+  detail         String?  @map("detail") @db.VarChar(500)
+  ip             String?  @map("ip") @db.VarChar(64)
+  success        Boolean  @default(true) @map("success")
+
+  @@index([action, at], map: "idx_audit_action_at")
+  @@index([targetId], map: "idx_audit_target")
+  @@map("audit_logs")
+}
+
+// ---------- 003_shop_status_tables.sql ----------
+// KNOWN GAP: chk_shop_settings_single (id = 1), chk_shop_schedule_weekday
+// (weekday 0–6), chk_shop_override_single (id = 1) and
+// chk_shop_tables_capacity (capacity 1–50) cannot be expressed in Prisma
+// for MySQL — plain columns only, CHECKs must stay enforced by raw DDL.
+
+model ShopSetting {
+  id        Int      @id @map("id") @db.Int
+  shopName  String   @default("ร้านป้าอ้ออาหารตามสั่ง") @map("shop_name") @db.VarChar(120)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(0)
+
+  @@map("shop_settings")
+}
+
+model ShopSchedule {
+  weekday   Int     @id @map("weekday") @db.TinyInt
+  closed    Boolean @default(false) @map("closed")
+  intervals Json    @map("intervals")
+
+  @@map("shop_schedule")
+}
+
+model ShopOverride {
+  id               Int       @id @map("id") @db.Int
+  mode             String    @map("mode") @db.VarChar(16)
+  reason           String?   @map("reason") @db.VarChar(300)
+  expectedReopenAt DateTime? @map("expected_reopen_at") @db.DateTime(0)
+  expiresAt        DateTime? @map("expires_at") @db.DateTime(0)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamp(0)
+  createdBy        String?   @map("created_by") @db.VarChar(64)
+
+  @@map("shop_override")
+}
+
+model ShopTable {
+  id        String   @id @map("id") @db.Char(36)
+  name      String   @map("name") @db.VarChar(64)
+  capacity  Int      @map("capacity") @db.Int
+  isEnabled Boolean  @default(true) @map("is_enabled")
+  zone      String?  @map("zone") @db.VarChar(32)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamp(0)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(0)
+
+  @@unique([name], map: "name")
+  @@map("shop_tables")
+}
+
+// ---------- 004_customer_accounts.sql ----------
+
+model Customer {
+  id              String            @id @map("id") @db.Char(36)
+  name            String            @map("name") @db.VarChar(120)
+  phone           String?           @map("phone") @db.VarChar(32)
+  email           String?           @map("email") @db.VarChar(254)
+  passwordHash    String            @map("password_hash") @db.VarChar(255)
+  isActive        Boolean           @default(true) @map("is_active")
+  isDeleted       Boolean           @default(false) @map("is_deleted")
+  passwordVersion Int               @default(1) @map("password_version") @db.Int
+  createdAt       DateTime          @default(now()) @map("created_at") @db.Timestamp(0)
+  updatedAt       DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamp(0)
+  deletedAt       DateTime?         @map("deleted_at") @db.DateTime(0)
+  sessions        CustomerSession[]
+  lineLink        CustomerLineLink?
+  lineTx          CustomerLineTx[]
+
+  @@unique([phone], map: "uq_customers_phone")
+  @@unique([email], map: "uq_customers_email")
+  @@map("customers")
+}
+
+model CustomerSession {
+  id              String   @id @map("id") @db.Char(64)
+  customerId      String   @map("customer_id") @db.Char(36)
+  passwordVersion Int      @default(1) @map("password_version") @db.Int
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamp(0)
+  expiresAt       DateTime @map("expires_at") @db.Timestamp(0)
+  customer        Customer @relation(fields: [customerId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_customer_sessions_customer")
+
+  @@index([customerId], map: "idx_customer_sessions_customer")
+  @@map("customer_sessions")
+}
+
+model CustomerLineLink {
+  customerId      String   @id @map("customer_id") @db.Char(36)
+  provider        String   @default("line") @map("provider") @db.VarChar(16)
+  providerSubject String   @map("provider_subject") @db.VarChar(128)
+  displayName     String?  @map("display_name") @db.VarChar(120)
+  linkedAt        DateTime @default(now()) @map("linked_at") @db.Timestamp(0)
+  customer        Customer @relation(fields: [customerId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_line_links_customer")
+
+  @@unique([provider, providerSubject], map: "uq_line_subject")
+  @@map("customer_line_links")
+}
+
+model CustomerLineTx {
+  state         String    @id @map("state") @db.Char(64)
+  customerId    String    @map("customer_id") @db.Char(36)
+  nonce         String    @map("nonce") @db.Char(64)
+  codeVerifier  String    @map("code_verifier") @db.VarChar(128)
+  redirectAfter String?   @map("redirect_after") @db.VarChar(128)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamp(0)
+  expiresAt     DateTime  @map("expires_at") @db.DateTime(0)
+  usedAt        DateTime? @map("used_at") @db.DateTime(0)
+  customer      Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_line_tx_customer")
+
+  @@index([customerId], map: "idx_line_tx_customer")
+  @@index([expiresAt], map: "idx_line_tx_expires")
+  @@map("customer_line_tx")
+}
