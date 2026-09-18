@@ -157,6 +157,40 @@ describe("Ticket 06: สั่งที่โต๊ะด้วยรหัส�
     expect(res.body.order.roundId).toBeNull();
   });
 
+  it("สถานะโต๊ะสาธารณะบอกว่าสั่งได้ไหม โดยไม่หลุดข้อมูลลูกค้าหรือรหัสรอบ", async () => {
+    await seatTable(tableA1, "0811111111");
+
+    const seated = await request(app).get(`/api/tables/${tableA1}/public-status`);
+    expect(seated.status).toBe(200);
+    expect(seated.body.table).toEqual({ id: tableA1, name: "A1", zone: null });
+    expect(seated.body.ready).toBe(true);
+    expect(typeof seated.body.openedAt).toBe("string");
+    // DTO ต้องแคบ: ไม่มีรหัสรอบ ชื่อลูกค้า หรือจำนวนคน
+    const leaked = JSON.stringify(seated.body);
+    expect(leaked).not.toContain("roundId");
+    expect(leaked).not.toContain("partySize");
+    expect(leaked).not.toContain("customer");
+
+    const empty = await request(app).get(`/api/tables/${tableB2}/public-status`);
+    expect(empty.status).toBe(200);
+    expect(empty.body.ready).toBe(false);
+    expect(empty.body.openedAt).toBeNull();
+
+    expect((await request(app).get("/api/tables/ไม่มีโต๊ะนี้/public-status")).status).toBe(404);
+  });
+
+  it("โต๊ะที่งดใช้งานไม่พร้อมสั่ง แม้จะมีรอบเปิดค้างอยู่", async () => {
+    await seatTable(tableA1, "0811111111");
+    const owner = await loginAs("owner", "OwnerPass123");
+    const token = await csrfToken(owner);
+    const off = await owner.patch(`/api/tables/${tableA1}`).set("x-csrf-token", token).send({ isEnabled: false });
+    expect(off.status).toBe(200);
+
+    const res = await request(app).get(`/api/tables/${tableA1}/public-status`);
+    expect(res.status).toBe(200);
+    expect(res.body.ready).toBe(false);
+  });
+
   it("idempotencyKey เดิมจากโต๊ะเดิม: คืนคำสั่งซื้อเดิม ไม่สร้างซ้ำ", async () => {
     await seatTable(tableA1, "0811111111");
     const key = randomUUID();

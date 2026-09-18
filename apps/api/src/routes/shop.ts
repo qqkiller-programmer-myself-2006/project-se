@@ -147,6 +147,37 @@ export function createShopRouter(deps: ShopRouterDeps): express.Router {
     }
   });
 
+  /**
+   * สถานะโต๊ะแบบสาธารณะ — ให้เว็บที่มาจาก QR บนโต๊ะรู้ตั้งแต่ต้นว่าสั่งที่โต๊ะนี้ได้ไหม
+   * แทนที่จะปล่อยให้ลูกค้าเลือกเมนูจนครบแล้วค่อยโดน 409 ตอนกดยืนยัน
+   *
+   * DTO แคบมาก: ชื่อโต๊ะ โซน และพร้อมสั่งหรือไม่ — ไม่มีชื่อลูกค้า จำนวนคน
+   * รหัสจอง หรือ roundId (รหัสรอบยังเป็นของหลังร้านเหมือนเดิม)
+   */
+  router.get("/api/tables/:id/public-status", async (req, res, next) => {
+    try {
+      const id = String(req.params["id"] ?? "").trim();
+      if (!id) {
+        res.status(400).json({ error: "ไม่ได้ระบุโต๊ะ" });
+        return;
+      }
+      const table = (await store.listTables()).find((t) => t.id === id);
+      if (!table) {
+        res.status(404).json({ error: "ไม่พบโต๊ะนี้" });
+        return;
+      }
+      const [open] = await store.listTableRounds({ status: "open", tableId: table.id, limit: 1 });
+      res.json({
+        table: { id: table.id, name: table.name, zone: table.zone },
+        // งดใช้งานโต๊ะไว้ก็สั่งที่โต๊ะนี้ไม่ได้ แม้จะมีรอบค้างอยู่
+        ready: table.isEnabled && open !== undefined,
+        openedAt: open?.openedAt ?? null,
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   router.get("/api/shop/schedule", requireAuth, requireShopManager, async (_req, res, next) => {
     try {
       const now = clock();
