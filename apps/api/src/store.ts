@@ -6778,6 +6778,7 @@ const MIGRATION_FILES = [
   "013_line_notifications.sql",
   "014_capacity_wait_predictions.sql",
   "015_table_zones.sql",
+  "016_seed_noonui_cha_tai.sql",
 ];
 
 export function findMigrationFile(name = MIGRATION_FILES[0]!): string {

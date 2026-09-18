@@ -16,8 +16,8 @@ export const REQUEST_ID_HEADER = "x-request-id";
 /** Service version สำหรับ health/ready/metrics (ตรงกับ package.json หลัก) */
 export const SERVICE_VERSION = "0.1.0";
 
-/** จำนวน migration ที่ release นี้ต้องมี (001–014, ตรงกับ MIGRATION_FILES ใน store.ts) */
-export const RELEASE_MIGRATION_COUNT = 14;
+/** จำนวน migration ที่ release นี้ต้องมี (001–016, ตรงกับ MIGRATION_FILES ใน store.ts และ scripts/verify-restore.mjs) */
+export const RELEASE_MIGRATION_COUNT = 16;
 
 const startedAt = Date.now();
 

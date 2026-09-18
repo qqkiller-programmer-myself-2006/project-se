@@ -116,7 +116,7 @@ describe("Ticket 14 release hardening (local fake E2E + security + observability
     const owner = await loginAs("owner", "OwnerPass123");
     const metrics = await owner.get("/api/metrics/summary");
     expect(metrics.status).toBe(200);
-    expect(metrics.body.migrationCount).toBe(14);
+    expect(metrics.body.migrationCount).toBe(16);
     expect(typeof metrics.body.version).toBe("string");
   });
 
