@@ -1,53 +1,59 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Karla", "Sarabun", "Noto Sans Thai", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-display: "Playfair Display SC", "Karla", Georgia, "Times New Roman", serif;
+  --font-sans: "Karla", "IBM Plex Sans Thai", "Sarabun", "Noto Sans Thai", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Cormorant Garamond", "Noto Serif Thai", Georgia, "Times New Roman", serif;
 
-  /* Vibrant Thai-restaurant reds: primary #DC2626, light #F87171, wash #FEF2F2, cocoa #450A0A */
-  --color-brand-50: #fef2f2;
-  --color-brand-100: #fee2e2;
-  --color-brand-200: #fecaca;
-  --color-brand-300: #fca5a5;
-  --color-brand-400: #f87171;
-  --color-brand-500: #ef4444;
-  --color-brand-600: #dc2626;
-  --color-brand-700: #b91c1c;
-  --color-brand-800: #7f1d1d;
-  --color-brand-900: #450a0a;
+  /* Aged-oxblood brand: restrained, used sparingly. Primary #73302C on ivory. */
+  --color-brand-50: #faf6f5;
+  --color-brand-100: #f2e7e5;
+  --color-brand-200: #e3cbc7;
+  --color-brand-300: #cca8a2;
+  --color-brand-400: #ac746e;
+  --color-brand-500: #8d433d;
+  --color-brand-600: #73302c;
+  --color-brand-700: #5b2623;
+  --color-brand-800: #3e1a18;
+  --color-brand-900: #1d0e0d;
 
-  /* Turmeric gold accent #A16207 */
-  --color-gold-100: #fef3c7;
-  --color-gold-200: #fde68a;
-  --color-gold-500: #ca8a04;
-  --color-gold-600: #a16207;
-  --color-gold-700: #713f12;
+  /* Antique brass accent #A8853F — hairlines, rules and small marks only */
+  --color-gold-100: #f7f0de;
+  --color-gold-200: #e9dcb9;
+  --color-gold-500: #c2a25c;
+  --color-gold-600: #a8853f;
+  --color-gold-700: #6f5527;
 
-  /* Warm neutrals kept for body text on cream */
-  --color-ink-50: #fef2f2;
-  --color-ink-100: #f5f0eb;
-  --color-ink-200: #e7ded4;
-  --color-ink-300: #cbbfae;
-  --color-ink-400: #a89880;
-  --color-ink-500: #6b5d4d;
-  --color-ink-600: #52463a;
-  --color-ink-700: #3d332b;
-  --color-ink-800: #292019;
-  --color-ink-900: #1c1512;
+  /* Warm ivory-to-graphite neutrals: the page is mostly these */
+  --color-ink-50: #fbf9f6;
+  --color-ink-100: #f3efe9;
+  --color-ink-200: #e5dfd5;
+  --color-ink-300: #c8c0b3;
+  --color-ink-400: #9b9284;
+  --color-ink-500: #6d655a;
+  --color-ink-600: #514a41;
+  --color-ink-700: #3a342d;
+  --color-ink-800: #241f1b;
+  --color-ink-900: #14110f;
 }
 
 :root {
   --surface: #ffffff;
-  --surface-warm: #fef2f2;
-  --border: #e7ded4;
-  --ring: #dc2626;
-  /* Premium motion tokens (Ticket 16): shared durations/easing, capped travel */
-  --motion-fast: 120ms;
-  --motion-base: 220ms;
-  --motion-slow: 480ms;
-  --motion-ease: cubic-bezier(0.22, 0.9, 0.28, 1);
-  --motion-lift: -2px;
+  --surface-warm: #fbf9f6;
+  --border: #e5dfd5;
+  --ring: #73302c;
+  /* Premium motion tokens (Ticket 16): shared durations/easing, capped travel.
+     Luxury reads as unhurried — longer durations, gentler easing, same small travel. */
+  --motion-fast: 160ms;
+  --motion-base: 320ms;
+  --motion-slow: 720ms;
+  --motion-ease: cubic-bezier(0.16, 0.84, 0.24, 1);
+  --motion-lift: -3px;
   --motion-delay: 0ms;
+  /* Luxury surface tokens: hairline rules and shadows that read as paper, not plastic */
+  --hairline: rgba(20, 17, 15, 0.1);
+  --hairline-gold: rgba(168, 133, 63, 0.38);
+  --shadow-paper: 0 1px 2px rgba(20, 17, 15, 0.04), 0 12px 32px -24px rgba(20, 17, 15, 0.3);
+  --shadow-raised: 0 2px 4px rgba(20, 17, 15, 0.05), 0 26px 50px -30px rgba(20, 17, 15, 0.42);
   color-scheme: light;
 }
 
@@ -57,10 +63,9 @@ html {
 
 body {
   font-family: var(--font-sans);
-  background-color: var(--color-brand-50);
-  background-image:
-    radial-gradient(circle at 12% 8%, rgba(220, 38, 38, 0.06) 0 90px, transparent 91px),
-    radial-gradient(circle at 88% 4%, rgba(161, 98, 7, 0.07) 0 70px, transparent 71px);
+  /* Ivory paper, no decorative blobs: a single soft vignette gives depth without pattern. */
+  background-color: var(--color-ink-50);
+  background-image: radial-gradient(120% 80% at 50% 0%, rgba(255, 255, 255, 0.9) 0, transparent 60%);
   color: var(--color-ink-900);
   line-height: 1.65;
   text-rendering: optimizeLegibility;
@@ -68,12 +73,12 @@ body {
 
 /* Role surfaces: each workspace has a different job, pace and visual rhythm. */
 .role-customer {
-  --role-accent: #dc2626;
-  --role-surface: #fffaf5;
+  --role-accent: #73302c;
+  --role-surface: #fbf9f6;
   background: var(--role-surface);
 }
 .customer-header {
-  box-shadow: 0 18px 45px -32px rgba(69, 10, 10, .9);
+  box-shadow: 0 18px 45px -30px rgba(20, 17, 15, .55);
 }
 .customer-main {
   max-width: 72rem;
@@ -146,7 +151,9 @@ body {
 
 .pa-display {
   font-family: var(--font-display);
-  letter-spacing: 0.01em;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+  line-height: 1.25;
 }
 
 /* Customer brand mark: the real storefront logo gets a restrained depth cue.
@@ -162,31 +169,29 @@ body {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: linear-gradient(125deg, rgba(255,255,255,.3), transparent 38%, rgba(69,10,10,.16));
+  background: linear-gradient(125deg, rgba(255,255,255,.28), transparent 38%, rgba(20,17,15,.18));
   mix-blend-mode: soft-light;
 }
 .pa-brand-mark:hover,
 .pa-brand-mark:focus-within {
   transform: perspective(500px) rotateY(5deg) rotateX(2deg) translateY(-2px);
-  box-shadow: 0 14px 24px -14px rgba(69, 10, 10, 0.8);
+  box-shadow: 0 14px 24px -16px rgba(20, 17, 15, 0.55);
 }
 
-/* Block hero: deep cocoa slab with red/gold bands — the single focal point */
+/* Hero: a single deep graphite-oxblood slab, one brass hairline, no pattern.
+   The restraint is the point — nothing competes with the type. */
 .pa-hero {
   position: relative;
   overflow: hidden;
-  background: linear-gradient(135deg, #450a0a 0%, #7f1d1d 55%, #b91c1c 100%);
-  color: #fef2f2;
-  border-radius: 1.25rem;
+  background: linear-gradient(168deg, #14110f 0%, #2a1614 58%, #3e1a18 100%);
+  color: var(--color-ink-50);
+  border-radius: 1.5rem;
 }
 .pa-hero::before {
   content: "";
   position: absolute;
   inset: 0;
-  background-image:
-    radial-gradient(circle at 85% 15%, rgba(248, 113, 113, 0.35) 0 70px, transparent 71px),
-    radial-gradient(circle at 10% 90%, rgba(161, 98, 7, 0.4) 0 60px, transparent 61px),
-    repeating-linear-gradient(-45deg, rgba(255, 255, 255, 0.05) 0 10px, transparent 10px 20px);
+  background-image: radial-gradient(90% 70% at 70% 0%, rgba(168, 133, 63, 0.16) 0, transparent 70%);
   pointer-events: none;
 }
 .pa-hero::after {
@@ -195,42 +200,142 @@ body {
   left: 0;
   right: 0;
   bottom: 0;
-  height: 8px;
-  background: linear-gradient(90deg, #dc2626 0 25%, #f87171 25% 50%, #a16207 50% 75%, #fde68a 75% 100%);
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--color-gold-600) 50%, transparent);
 }
 
-/* Hero sits on deep cocoa: force light text even when inner
-   elements carry dark text utilities (contrast ≥ 4.5:1 on #450A0A). */
+/* Hero sits on near-black: force light text even when inner
+   elements carry dark text utilities (contrast ≥ 4.5:1 on #14110F). */
 .pa-hero h1,
 .pa-hero h2,
 .pa-hero p {
-  color: #fef2f2;
+  color: var(--color-ink-50);
 }
 .pa-hero .text-ink-900,
 .pa-hero .text-ink-800,
 .pa-hero .text-ink-600,
 .pa-hero .text-ink-500 {
-  color: #fef2f2;
+  color: var(--color-ink-50);
 }
 
-/* Block section title: gold bar + display type, not another card */
+/* Section title: small brass rule above display type, not a coloured chip */
 .pa-section-title {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.65rem;
+  font-family: var(--font-display);
+  letter-spacing: 0.01em;
 }
 .pa-section-title::before {
   content: "";
-  width: 6px;
-  height: 1.4em;
-  border-radius: 3px;
-  background: linear-gradient(180deg, #dc2626, #a16207);
+  width: 1.75rem;
+  height: 1px;
+  background: var(--color-gold-600);
   flex-shrink: 0;
 }
 
 .pa-band-gold {
-  background: linear-gradient(90deg, #a16207, #ca8a04);
-  color: #fffbeb;
+  background: linear-gradient(90deg, var(--color-gold-700), var(--color-gold-600));
+  color: var(--color-gold-100);
+}
+
+/* ---------- Luxury layer: eyebrow labels, hairlines, paper cards, glass ---------- */
+
+/* Eyebrow/kicker: wide-tracked uppercase micro-label above a heading */
+.luxe-kicker {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--color-gold-700);
+}
+
+/* Hairline divider with an optional centred brass fade */
+.luxe-rule {
+  height: 1px;
+  border: 0;
+  background: linear-gradient(90deg, transparent, var(--hairline-gold), transparent);
+}
+
+/* Paper card: hairline border, ivory face, shadow that suggests a sheet on a table */
+.luxe-card {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 1rem;
+  box-shadow: var(--shadow-paper);
+  transition:
+    transform var(--motion-base) var(--motion-ease),
+    box-shadow var(--motion-base) var(--motion-ease),
+    border-color var(--motion-base) var(--motion-ease);
+}
+.luxe-card:hover,
+.luxe-card:focus-within {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-raised);
+  border-color: var(--hairline-gold);
+}
+
+/* Frosted panel for use over photography or the 3D scene */
+.luxe-glass {
+  background: rgba(20, 17, 15, 0.42);
+  backdrop-filter: blur(14px) saturate(130%);
+  -webkit-backdrop-filter: blur(14px) saturate(130%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 1rem;
+  color: var(--color-ink-50);
+}
+
+/* One slow brass sheen across a surface — fires on hover, never loops */
+.luxe-sheen {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+.luxe-sheen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(105deg, transparent 38%, rgba(255, 255, 255, 0.28) 50%, transparent 62%);
+  transform: translateX(-120%);
+  transition: transform var(--motion-slow) var(--motion-ease);
+}
+.luxe-sheen:hover::after,
+.luxe-sheen:focus-visible::after,
+.luxe-sheen:focus-within::after {
+  transform: translateX(120%);
+}
+
+/* Type scale helper for the landing: large display headline that stays readable on phones */
+.luxe-display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  font-size: clamp(2rem, 7vw, 3.75rem);
+}
+
+/* Price set in tabular figures so a menu column lines up */
+.luxe-price {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+/* Letter-by-letter headline rise used once per page, on the hero only */
+@keyframes luxe-line-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.luxe-line-in {
+  animation: luxe-line-in var(--motion-slow) var(--motion-ease) both;
+  animation-delay: var(--motion-delay, 0ms);
 }
 
 /* Receipt-style dashed divider between order blocks */
@@ -294,6 +399,16 @@ body {
     transform: none !important;
     transition: none !important;
   }
+  .luxe-line-in {
+    animation: none !important;
+  }
+  .luxe-card:hover,
+  .luxe-card:focus-within {
+    transform: none !important;
+  }
+  .luxe-sheen::after {
+    display: none !important;
+  }
 }
 
 /* ---------- Premium motion/3D layer (Ticket 16) ---------- */
@@ -350,7 +465,7 @@ body {
 .pa-lift:focus-visible,
 .pa-lift:focus-within {
   transform: translateY(var(--motion-lift));
-  box-shadow: 0 8px 20px -10px rgba(69, 10, 10, 0.35);
+  box-shadow: var(--shadow-raised);
 }
 /* Press feedback for buttons/links (paired with :hover lift, never alone) */
 .pa-press {
@@ -367,7 +482,7 @@ body {
 }
 .pa-tilt.is-tilting {
   will-change: transform;
-  box-shadow: 0 14px 28px -16px rgba(69, 10, 10, 0.45);
+  box-shadow: var(--shadow-raised);
 }
 
 /* Layered hero depth: ambient blobs float gently behind content */
@@ -389,7 +504,7 @@ body {
   height: 220px;
   right: -60px;
   top: -80px;
-  background: radial-gradient(circle, rgba(248, 113, 113, 0.4) 0, transparent 70%);
+  background: radial-gradient(circle, rgba(168, 133, 63, 0.26) 0, transparent 70%);
   animation: pa-float-a 9s ease-in-out infinite alternate;
 }
 .pa-depth-layer--b {
@@ -397,7 +512,7 @@ body {
   height: 170px;
   left: -50px;
   bottom: -60px;
-  background: radial-gradient(circle, rgba(253, 230, 138, 0.35) 0, transparent 70%);
+  background: radial-gradient(circle, rgba(233, 220, 185, 0.22) 0, transparent 70%);
   animation: pa-float-b 11s ease-in-out infinite alternate;
 }
 .pa-depth-layer--c {
@@ -405,7 +520,7 @@ body {
   height: 120px;
   left: 38%;
   top: -50px;
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.16) 0, transparent 70%);
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.12) 0, transparent 70%);
   animation: pa-float-a 13s ease-in-out infinite alternate-reverse;
 }
 @keyframes pa-float-a {
@@ -427,7 +542,7 @@ body {
 
 /* Skeleton shimmer (transform-free: background-position only) */
 .pa-skeleton {
-  background: linear-gradient(90deg, #f5f0eb 25%, #fee2e2 50%, #f5f0eb 75%);
+  background: linear-gradient(90deg, #f3efe9 25%, #e5dfd5 50%, #f3efe9 75%);
   background-size: 200% 100%;
   animation: pa-shimmer 1.6s linear infinite;
 }
