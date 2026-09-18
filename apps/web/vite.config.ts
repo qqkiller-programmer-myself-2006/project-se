@@ -13,5 +13,17 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./tests/setup.ts"],
+    /**
+     * เทสต์ต้องไม่ขึ้นกับ .env.local ของเครื่องใครคนหนึ่ง
+     *
+     * Vite โหลด `apps/web/.env.local` ให้ vitest ด้วย เครื่องที่ตั้ง
+     * `VITE_DEMO_MODE=true` ไว้จะทำให้ `isDemoModeEnabled()` เป็น true ตลอด
+     * แล้ว `shouldFallbackToDemo()` คืน true กับ error ทุกชนิด — ทุกหน้าจึง
+     * แสดงข้อมูลตัวอย่างแทน error/empty state และเทสต์ที่ตรวจสองสถานะนั้นล้ม
+     * (เจอจริง: ล้ม 17 ตัวเฉพาะบนเครื่องที่เปิดโหมดสาธิตไว้)
+     *
+     * ปิดเป็นค่าตั้งต้น เทสต์ที่ต้องการโหมดสาธิตเปิดเองได้ (tests/demo-flag.test.tsx)
+     */
+    env: { VITE_DEMO_MODE: "false" },
   },
 });
