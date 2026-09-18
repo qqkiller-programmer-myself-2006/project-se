@@ -1,0 +1,60 @@
+/* เวทีของตู้โชว์เมนู 3D: กล่องสูงคงที่ ไม่ให้ canvas ดันเนื้อหาใต้มันกระโดด */
+.menu-showcase__stage {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: clamp(320px, 46vw, 460px);
+}
+
+/* ฉากหลังของเวที: แสงนวลจากด้านบนบนพื้นกราไฟต์ + เงาวงรีใต้ตู้ */
+.menu-showcase {
+  position: relative;
+  overflow: hidden;
+  border-radius: 1.5rem;
+  background:
+    radial-gradient(70% 55% at 50% 8%, rgba(168, 133, 63, 0.22) 0, transparent 72%),
+    linear-gradient(168deg, #14110f 0%, #241f1b 60%, #2a1614 100%);
+}
+.menu-showcase::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 12%;
+  z-index: 0;
+  width: 58%;
+  height: 54px;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.55) 0, transparent 70%);
+  pointer-events: none;
+}
+
+/* จุดบอกตำแหน่งบาน — เป็นปุ่มจริง กดเลือกบานได้ */
+.menu-showcase__dot {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.menu-showcase__dot::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: rgba(251, 249, 246, 0.35);
+  transition: background-color var(--motion-base) var(--motion-ease), transform var(--motion-base) var(--motion-ease);
+}
+.menu-showcase__dot[aria-current="true"]::before {
+  background: var(--color-gold-500);
+  transform: scale(1.6);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menu-showcase__dot::before {
+    transition: none !important;
+  }
+}

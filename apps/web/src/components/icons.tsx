@@ -21,7 +21,11 @@ export type IconName =
   | "alert"
   | "info"
   | "wifiOff"
-  | "flame";
+  | "flame"
+  | "chevronLeft"
+  | "chevronRight"
+  | "user"
+  | "logout";
 
 const PATHS: Record<IconName, string> = {
   home: "M3 10.5 12 3l9 7.5M5 9.5V21h5v-6h4v6h5V9.5",
@@ -43,6 +47,10 @@ const PATHS: Record<IconName, string> = {
   info: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18ZM12 11v5M12 7.5V8",
   wifiOff: "M2 8.5A15 15 0 0 1 12 5c1.5 0 3 .2 4.3.7M5 12a10 10 0 0 1 4.2-2.3M8.5 15.5A6 6 0 0 1 12 14c.9 0 1.7.2 2.5.5M12 20h.01M3 3l18 18",
   flame: "M12 2s6 5.5 6 11a6 6 0 0 1-12 0c0-2 1-3.8 2-5 .5 1 1.2 1.8 2 2.3C10 8 10.5 5 12 2Z",
+  chevronLeft: "M15 5l-7 7 7 7",
+  chevronRight: "M9 5l7 7-7 7",
+  user: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4 21a8 8 0 0 1 16 0",
+  logout: "M15 4h3a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-3M10 8 6 12l4 4M6 12h10",
 };
 
 export function Icon({

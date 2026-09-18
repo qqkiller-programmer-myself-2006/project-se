@@ -16,6 +16,7 @@ import CustomerLoginPage from "./pages/customer/CustomerLogin";
 import CustomerProfilePage from "./pages/customer/CustomerProfile";
 import AdminCustomersPage from "./pages/admin/AdminCustomers";
 import MenuPublicPage from "./pages/customer/MenuPublic";
+import LandingPage from "./pages/customer/Landing";
 import MenuAdminPage from "./pages/admin/MenuAdmin";
 import InventoryPage from "./pages/admin/Inventory";
 import CartPage from "./pages/customer/Cart";
@@ -89,7 +90,7 @@ export default function App() {
     return (
       <PublicShell>
       <Routes>
-        <Route path="/" element={<MenuPublicPage />} />
+        <Route path="/" element={<LandingPage />} />
         <Route path="/status" element={<StatusPage />} />
         <Route path="/menu" element={<MenuPublicPage />} />
         <Route path="/cart" element={<CartPage />} />
