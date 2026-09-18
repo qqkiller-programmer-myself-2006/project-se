@@ -272,7 +272,7 @@ export default function App() {
           </nav>
         </div>
       </header>
-      <main id="main-content" tabIndex={-1} className="role-main mx-auto w-full max-w-5xl px-4 py-6 sm:px-6">
+      <main id="main-content" tabIndex={-1} className="luxe-scene role-main mx-auto w-full max-w-5xl px-4 py-6 sm:px-6">
         <PageEnter>
         <Routes>
           <Route path="/status" element={<StatusPage />} />

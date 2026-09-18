@@ -13,6 +13,7 @@ import { resolveTableContext } from "../../lib/tableContext";
 import { Alert, primaryButtonClass, secondaryButtonClass } from "../../components/ui";
 import { MotionReveal, Skeleton, StaggerItem, StaggerList } from "../../components/motion";
 import { Icon } from "../../components/icons";
+import { MenuItemImage } from "../../components/MenuItemImage";
 import type { ShowcaseItem } from "../../components/MenuShowcase3D";
 import "../../components/MenuShowcase3D.css";
 
@@ -346,18 +347,8 @@ export default function LandingPage() {
           <StaggerList className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" label="เมนูที่สั่งได้วันนี้">
             {items.slice(0, 6).map((m, index) => (
               <StaggerItem key={m.id} index={index} className="luxe-card luxe-sheen overflow-hidden">
-                {m.imageUrl ? (
-                  <img
-                    src={m.imageUrl}
-                    alt={`รูป${m.name}`}
-                    loading="lazy"
-                    className="h-40 w-full object-cover"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).style.display = "none";
-                    }}
-                  />
-                ) : null}
-                <div className="space-y-2 p-5">
+                <MenuItemImage src={m.imageUrl} name={m.name} className="h-40 w-full" />
+                <div className="luxe-layer space-y-2 p-5">
                   <p className="luxe-kicker">{MENU_KIND_LABELS[m.kind]}</p>
                   <p className="pa-display text-lg text-ink-900">{m.name}</p>
                   {m.description ? <p className="text-sm text-ink-600">{m.description}</p> : null}

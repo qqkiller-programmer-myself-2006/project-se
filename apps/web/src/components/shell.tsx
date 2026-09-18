@@ -170,7 +170,11 @@ export function PublicShell({ children }: { children: ReactNode }) {
         </div>
         <div aria-hidden="true" className="h-px bg-gradient-to-r from-transparent via-gold-600 to-transparent" />
       </header>
-      <main id="public-main" tabIndex={-1} className="customer-main mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
+      <main
+        id="public-main"
+        tabIndex={-1}
+        className="luxe-scene customer-main mx-auto w-full max-w-6xl px-4 py-8 sm:px-6"
+      >
         <PageEnter>{children}</PageEnter>
       </main>
       <footer className="mx-auto w-full max-w-6xl px-4 pb-10 sm:px-6">

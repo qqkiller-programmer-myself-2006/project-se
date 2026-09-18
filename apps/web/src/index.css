@@ -270,7 +270,9 @@ body {
 }
 .luxe-card:hover,
 .luxe-card:focus-within {
-  transform: translateY(-3px);
+  /* ยกขึ้นมาหาคนดูจริง ๆ ไม่ใช่แค่เลื่อนขึ้น — perspective อยู่ในตัว transform เอง
+     จึงไม่ต้องให้ parent ตั้ง preserve-3d (parent ที่ overflow:hidden จะทำลาย 3D) */
+  transform: perspective(900px) translate3d(0, -4px, 16px);
   box-shadow: var(--shadow-raised);
   border-color: var(--hairline-gold);
 }
@@ -617,4 +619,89 @@ body {
 .ui-skip-link:focus-visible {
   top: 1rem;
   color: #fff;
+}
+
+
+/* ---------- เลเยอร์ความลึก 3D ที่ทุกหน้าได้ร่วมกัน ---------- */
+
+/*
+ * เวที: ตั้ง perspective ครั้งเดียวที่ <main> ทุกหน้าที่อยู่ข้างในจึงมีความลึก
+ * เดียวกัน โดยไม่ต้องไล่แก้ทีละหน้า ค่า perspective ไกลพอให้ขอบไม่บิดจนอ่านยาก
+ */
+.luxe-scene {
+  perspective: 1400px;
+  perspective-origin: 50% 0%;
+}
+
+/* หน้าที่เพิ่งเข้ามาเอนเข้าหาคนดูเล็กน้อยแล้วตั้งตรง */
+@keyframes luxe-page-in-3d {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, -60px) rotateX(3.5deg);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.luxe-scene .pa-page-enter {
+  transform-style: preserve-3d;
+  animation: luxe-page-in-3d var(--motion-slow) var(--motion-ease) backwards;
+}
+
+/* เนื้อหาที่ไหลเข้ามาตอนเลื่อนจอก็เอนขึ้นมาแบบเดียวกัน */
+.luxe-scene .pa-reveal {
+  transform: translate3d(0, 14px, -40px) rotateX(3deg);
+}
+.luxe-scene .pa-reveal--fade {
+  transform: translate3d(0, 0, -30px);
+}
+.luxe-scene .pa-reveal--scale {
+  transform: translate3d(0, 6px, -50px) scale(0.985);
+}
+.luxe-scene .pa-reveal.is-visible {
+  transform: none;
+}
+
+/*
+ * ชั้นลอย: ลูกของการ์ดถูกดันมาข้างหน้าเล็กน้อยตอน hover ทำให้รูปกับตัวหนังสือ
+ * แยกระนาบกันเหมือนของจริง ใช้ได้เฉพาะเมาส์ที่ชี้ได้แม่น (มือถือไม่มี hover)
+ */
+@media (hover: hover) and (pointer: fine) {
+  .luxe-layer {
+    transition: transform var(--motion-base) var(--motion-ease);
+  }
+  .luxe-card:hover .luxe-layer {
+    transform: translateZ(22px);
+  }
+}
+
+/* แผ่นป้ายแทนรูปเมนูที่โหลดไม่ได้ — ภาษาเดียวกับบานกระจกในตู้โชว์ */
+.menu-item-image__fallback {
+  background:
+    radial-gradient(80% 60% at 50% 0%, rgba(168, 133, 63, 0.22) 0, transparent 70%),
+    linear-gradient(155deg, #2a1614 0%, #14110f 100%);
+  border-bottom: 1px solid var(--hairline-gold);
+}
+
+/* หัวเว็บลอยอยู่เหนือหน้า: เงาทอดลงบนเนื้อหาที่เลื่อนผ่านข้างใต้ */
+.customer-header {
+  position: relative;
+  z-index: 10;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .luxe-scene .pa-page-enter {
+    animation: none !important;
+  }
+  .luxe-scene .pa-reveal {
+    transform: none !important;
+  }
+  .luxe-card:hover,
+  .luxe-card:focus-within {
+    transform: none !important;
+  }
+  .luxe-card:hover .luxe-layer {
+    transform: none !important;
+  }
 }
