@@ -2854,7 +2854,9 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
    * ตรวจ linkage โต๊ะ/รอบก่อนสร้างคำสั่งซื้อ (ใช้ร่วมกันใน memory seam):
    * - ระบุ roundId ได้เฉพาะ dine_in; รอบต้องมีอยู่และเปิดอยู่; tableId (ถ้าระบุ)
    *   ต้องตรงกับโต๊ะของรอบ; ไม่ระบุ tableId ให้ใช้โต๊ะของรอบ
-   * - ระบุ tableId อย่างเดียวโดยไม่มี roundId → 409 (ต้องเช็กอินเปิดรอบก่อน)
+   * - ระบุ tableId อย่างเดียว (มาจาก QR ที่ติดโต๊ะ) → หารอบที่เปิดอยู่ของโต๊ะนั้นให้เอง
+   *   ลูกค้าที่สแกน QR ไม่มีทางรู้ roundId และไม่มี endpoint สาธารณะให้ถาม
+   *   โต๊ะที่ยังไม่ได้เช็กอินยังคง 409 พร้อมข้อความบอกให้ไปเช็กอินก่อน
    */
   function resolveOrderRoundLinkage(
     serviceType: OrderServiceType,
@@ -2862,11 +2864,20 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
     roundId: string | null,
   ): { tableId: string | null; roundId: string | null } {
     if (roundId === null && tableId === null) return { tableId: null, roundId: null };
-    if (roundId === null) {
-      throw new ConflictError("กรุณาเช็กอินเพื่อเปิดรอบการใช้โต๊ะก่อนสั่งที่โต๊ะ");
-    }
     if (serviceType !== "dine_in") {
       throw new ConflictError("ผูกคำสั่งซื้อกับรอบโต๊ะได้เฉพาะแบบรับประทานที่ร้าน");
+    }
+    if (roundId === null) {
+      const table = tables.get(tableId!);
+      if (!table) throw new NotFoundError("ไม่พบโต๊ะนี้");
+      // หนึ่งโต๊ะเปิดได้รอบเดียว (บังคับตอนเช็กอิน) — เรียงเผื่อข้อมูลเก่ามีรอบค้าง
+      const open = [...tableRounds.values()]
+        .filter((r) => r.tableId === table.id && r.status === "open")
+        .sort((a, b) => b.openedAt.localeCompare(a.openedAt))[0];
+      if (!open) {
+        throw new ConflictError("โต๊ะนี้ยังไม่ได้เช็กอิน กรุณาเช็กอินที่หน้าร้านก่อนสั่งที่โต๊ะ");
+      }
+      return { tableId: open.tableId, roundId: open.id };
     }
     const round = tableRounds.get(roundId);
     if (!round) throw new NotFoundError("ไม่พบรอบการใช้โต๊ะ");
@@ -9812,27 +9823,40 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
         let linkTableId: string | null = null;
         let linkRoundId: string | null = null;
         if (shape.roundId !== null || shape.tableId !== null) {
-          if (shape.roundId === null) {
-            throw new ConflictError("กรุณาเช็กอินเพื่อเปิดรอบการใช้โต๊ะก่อนสั่งที่โต๊ะ");
-          }
           if (shape.serviceType !== "dine_in") {
             throw new ConflictError("ผูกคำสั่งซื้อกับรอบโต๊ะได้เฉพาะแบบรับประทานที่ร้าน");
           }
-          const [roundRows] = (await conn.query("SELECT * FROM table_rounds WHERE id = ? LIMIT 1", [shape.roundId])) as [
-            Record<string, unknown>[],
-            unknown,
-          ];
-          if (roundRows.length === 0) throw new NotFoundError("ไม่พบรอบการใช้โต๊ะ");
-          const roundRow = roundRows[0]!;
-          if (String(roundRow["status"]) !== "open") {
-            throw new ConflictError("รอบการใช้โต๊ะนี้ปิดแล้ว ไม่รับคำสั่งซื้อใหม่");
+          if (shape.roundId === null) {
+            // ระบุโต๊ะอย่างเดียว (QR ที่ติดโต๊ะ) → หารอบที่เปิดอยู่ของโต๊ะนั้นใน tx เดียวกัน
+            const [tableRows] = (await conn.query("SELECT id FROM shop_tables WHERE id = ? LIMIT 1", [
+              shape.tableId,
+            ])) as [Record<string, unknown>[], unknown];
+            if (tableRows.length === 0) throw new NotFoundError("ไม่พบโต๊ะนี้");
+            const [openRows] = (await conn.query(
+              "SELECT id, table_id FROM table_rounds WHERE table_id = ? AND status = 'open' ORDER BY opened_at DESC LIMIT 1",
+              [shape.tableId],
+            )) as [Record<string, unknown>[], unknown];
+            if (openRows.length === 0) {
+              throw new ConflictError("โต๊ะนี้ยังไม่ได้เช็กอิน กรุณาเช็กอินที่หน้าร้านก่อนสั่งที่โต๊ะ");
+            }
+            linkTableId = String(openRows[0]!["table_id"]);
+            linkRoundId = String(openRows[0]!["id"]);
+          } else {
+            const [roundRows] = (await conn.query("SELECT * FROM table_rounds WHERE id = ? LIMIT 1", [
+              shape.roundId,
+            ])) as [Record<string, unknown>[], unknown];
+            if (roundRows.length === 0) throw new NotFoundError("ไม่พบรอบการใช้โต๊ะ");
+            const roundRow = roundRows[0]!;
+            if (String(roundRow["status"]) !== "open") {
+              throw new ConflictError("รอบการใช้โต๊ะนี้ปิดแล้ว ไม่รับคำสั่งซื้อใหม่");
+            }
+            const roundTableId = String(roundRow["table_id"]);
+            if (shape.tableId !== null && shape.tableId !== roundTableId) {
+              throw new ConflictError("โต๊ะไม่ตรงกับรอบการใช้โต๊ะที่เปิดอยู่");
+            }
+            linkTableId = roundTableId;
+            linkRoundId = String(roundRow["id"]);
           }
-          const roundTableId = String(roundRow["table_id"]);
-          if (shape.tableId !== null && shape.tableId !== roundTableId) {
-            throw new ConflictError("โต๊ะไม่ตรงกับรอบการใช้โต๊ะที่เปิดอยู่");
-          }
-          linkTableId = roundTableId;
-          linkRoundId = String(roundRow["id"]);
         }
         const hash = orderHashWithLinkageMysql({
           customerId,
