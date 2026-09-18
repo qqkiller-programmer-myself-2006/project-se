@@ -40,17 +40,17 @@ export default function CustomerRegisterPage({ onRegistered }: { onRegistered?: 
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-brand-50 bg-[radial-gradient(circle_at_top,#ffedd5_0,transparent_55%)] p-4">
+    <div className="flex items-start justify-center py-4">
       <div className="w-full max-w-sm">
         <div className="mb-4 text-center">
-          <p aria-hidden="true" className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-600 text-xl font-bold text-white shadow-sm">
+          <p aria-hidden="true" className="pa-display mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-ink-900 text-lg text-gold-200">
             ป
           </p>
-          <p className="mt-2 text-sm font-semibold text-brand-800">ร้านป้าอ้ออาหารตามสั่ง · สมาชิก</p>
+          <p className="luxe-kicker mt-3">ร้านป้าอ้ออาหารตามสั่ง · สมาชิก</p>
         </div>
-        <form onSubmit={submit} noValidate aria-label="ฟอร์มสมัครสมาชิก" aria-busy={busy} className="w-full rounded-2xl border border-ink-200 bg-white p-6 shadow-sm sm:p-7">
+        <form onSubmit={submit} noValidate aria-label="ฟอร์มสมัครสมาชิก" aria-busy={busy} className="luxe-card w-full p-6 sm:p-7">
           <div className="space-y-1">
-            <h1 className="text-center text-xl font-bold text-ink-900">สมัครสมาชิก</h1>
+            <h1 className="pa-display text-center text-2xl text-ink-900">สมัครสมาชิก</h1>
             <p className="text-center text-sm text-ink-600">ใช้จองโต๊ะและสะสมคะแนน เบอร์เดียวสมัครได้หนึ่งบัญชี</p>
           </div>
           <div className="mt-5 space-y-4">

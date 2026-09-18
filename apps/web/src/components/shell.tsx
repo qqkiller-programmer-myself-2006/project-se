@@ -1,19 +1,22 @@
-import type { ReactNode } from "react";
-import { Link, NavLink } from "react-router-dom";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { FoodMotif, Icon, type IconName } from "./icons";
 import { PageEnter } from "./motion";
 import { DemoBadge } from "./demo";
 import { isDemoModeEnabled } from "../lib/demo";
+import { api, type PublicCustomer } from "../lib/api";
 
 const NAV_BASE =
-  "pa-lift pa-press inline-flex min-h-[44px] items-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold transition-colors";
-const NAV_IDLE =
-  "border-white/25 bg-white/10 text-white hover:border-white/60 hover:bg-white/20";
-const NAV_ACTIVE = "border-white bg-white text-brand-900 shadow-sm";
+  "pa-lift pa-press inline-flex min-h-[44px] items-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold tracking-wide transition-colors";
+const NAV_IDLE = "border-white/15 text-ink-100 hover:border-gold-500 hover:text-gold-200";
+const NAV_ACTIVE = "border-gold-500 bg-gold-500/15 text-gold-100";
 
 function navClass(isActive: boolean): string {
   return `${NAV_BASE} ${isActive ? NAV_ACTIVE : NAV_IDLE}`;
 }
+
+const ACCOUNT_LINK =
+  "pa-press inline-flex min-h-[44px] items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold tracking-wide text-ink-100 transition-colors hover:text-gold-200";
 
 export interface PublicNavItem {
   to: string;
@@ -32,22 +35,104 @@ export const PUBLIC_NAV: PublicNavItem[] = [
   { to: "/notifications", label: "แจ้งเตือน", icon: "bell" },
 ];
 
-/** Public restaurant shell: cocoa hero band + icon nav + food-motif footer. */
+/**
+ * session ลูกค้าของ shell (คุกกี้ csid แยกจาก sid ของพนักงาน)
+ *
+ * โหลดใหม่ทุกครั้งที่เปลี่ยนหน้า — เข้าสู่ระบบ/สมัครสมาชิกแล้ว nav ไป /profile
+ * หัวเว็บจึงขึ้นชื่อสมาชิกเองโดยไม่ต้องส่ง callback ข้ามหน้า
+ * guest ได้ 401 ซึ่งเป็นเรื่องปกติ — ถือว่ายังไม่ได้เข้าสู่ระบบ ไม่ใช่ error
+ */
+function useCustomerSession(pathname: string) {
+  const [customer, setCustomer] = useState<PublicCustomer | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      setCustomer((await api.customerMe()).customer);
+    } catch {
+      setCustomer(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh, pathname]);
+
+  return { customer, setCustomer };
+}
+
+/** แถบบัญชีสมาชิกมุมขวาของหัวเว็บ: ชื่อ + ออกจากระบบ หรือ เข้าสู่ระบบ + สมัครสมาชิก */
+function AccountBar() {
+  const { pathname } = useLocation();
+  const nav = useNavigate();
+  const { customer, setCustomer } = useCustomerSession(pathname);
+  const [busy, setBusy] = useState(false);
+
+  async function logout() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.customerLogout();
+    } finally {
+      // ล้าง session ฝั่งเว็บเสมอ แม้ปลายทางตอบ error — ไม่ทิ้งหัวเว็บค้างว่ายัง login อยู่
+      setCustomer(null);
+      setBusy(false);
+      nav("/");
+    }
+  }
+
+  if (!customer) {
+    return (
+      <nav aria-label="บัญชีสมาชิก" className="ml-auto flex items-center gap-1">
+        <Link to="/customer/login" className={ACCOUNT_LINK}>
+          <Icon name="user" size={18} />
+          เข้าสู่ระบบ
+        </Link>
+        <Link
+          to="/register"
+          className="pa-press inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-gold-500/60 px-4 py-2 text-sm font-semibold tracking-wide text-gold-100 transition-colors hover:bg-gold-500/15"
+        >
+          สมัครสมาชิก
+        </Link>
+      </nav>
+    );
+  }
+
+  return (
+    <nav aria-label="บัญชีสมาชิก" className="ml-auto flex items-center gap-1">
+      <Link to="/profile" className={ACCOUNT_LINK}>
+        <Icon name="user" size={18} />
+        <span className="max-w-[10rem] truncate">{customer.name}</span>
+      </Link>
+      <button
+        type="button"
+        onClick={() => void logout()}
+        disabled={busy}
+        aria-busy={busy}
+        className="pa-press inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-white/20 px-4 py-2 text-sm font-semibold tracking-wide text-ink-100 transition-colors hover:border-brand-300 hover:text-brand-200 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        <Icon name="logout" size={18} />
+        {busy ? "กำลังออก…" : "ออกจากระบบ"}
+      </button>
+    </nav>
+  );
+}
+
+/** Public restaurant shell: graphite hero band + icon nav + food-motif footer. */
 export function PublicShell({ children }: { children: ReactNode }) {
   return (
-    <div className="role-customer min-h-screen bg-brand-50 text-ink-900">
+    <div className="role-customer min-h-screen bg-ink-50 text-ink-900">
       <a href="#public-main" className="ui-skip-link">
         ข้ามไปยังเนื้อหาหลัก
       </a>
-      <header className="customer-header bg-brand-900 text-white">
-        <div className="mx-auto w-full max-w-5xl px-4 pb-4 pt-4 sm:px-6">
+      <header className="customer-header bg-ink-900 text-ink-50">
+        <div className="mx-auto w-full max-w-6xl px-4 pb-4 pt-4 sm:px-6">
           <div className="flex flex-wrap items-center gap-3">
             <Link
-              to="/menu"
+              to="/"
               className="flex min-h-[44px] items-center gap-3 rounded-xl"
-              aria-label="ร้านป้าอ้ออาหารตามสั่ง กลับไปหน้าเมนู"
+              aria-label="ร้านป้าอ้ออาหารตามสั่ง กลับไปหน้าแรก"
             >
-              <span className="pa-brand-mark flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-brand-600 shadow-md ring-2 ring-gold-200">
+              <span className="pa-brand-mark flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-brand-800 ring-1 ring-gold-600/60">
                 <img
                   src="/brand/pa-or-logo.png"
                   alt="โลโก้ร้านป้าอ้ออาหารตามสั่ง"
@@ -58,25 +143,18 @@ export function PublicShell({ children }: { children: ReactNode }) {
                     event.currentTarget.nextElementSibling?.removeAttribute("hidden");
                   }}
                 />
-                <span hidden aria-hidden="true" className="pa-display text-xl font-bold text-white">
+                <span hidden aria-hidden="true" className="pa-display text-lg text-gold-200">
                   ปอ
                 </span>
               </span>
               <span className="leading-tight">
-                <span className="pa-display block text-lg font-bold sm:text-xl">
-                  ร้านป้าอ้ออาหารตามสั่ง
-                </span>
-                <span className="block text-xs font-medium text-brand-100">
-                  ข้าง มรภ.เลย · ผัดร้อนทีละกระทะ ราคานักศึกษา
-                </span>
+                <span className="pa-display block text-lg sm:text-xl">ร้านป้าอ้ออาหารตามสั่ง</span>
+                <span className="luxe-kicker block text-gold-500">ข้าง มรภ.เลย · ผัดร้อนทีละกระทะ</span>
               </span>
             </Link>
-            <p className="ml-auto hidden items-center gap-2 rounded-full border border-white/25 bg-white/10 px-4 py-2 text-xs font-semibold text-brand-100 md:inline-flex">
-              <Icon name="clock" size={16} />
-              เปิดทุกวัน 9:00–21:00 · โทรหน้าร้านดูที่หน้าเมนู
-            </p>
+            <AccountBar />
           </div>
-          <nav aria-label="เมนูลูกค้า" className="mt-3 flex flex-wrap gap-2">
+          <nav aria-label="เมนูลูกค้า" className="mt-4 flex flex-wrap gap-2">
             {PUBLIC_NAV.map((item) => (
               <NavLink key={item.to} to={item.to} end={item.end} className={({ isActive }) => navClass(isActive)}>
                 <Icon name={item.icon} size={18} />
@@ -90,24 +168,22 @@ export function PublicShell({ children }: { children: ReactNode }) {
             </div>
           ) : null}
         </div>
-        <div
-          aria-hidden="true"
-          className="h-2 bg-gradient-to-r from-brand-600 via-brand-400 via-50% to-gold-600"
-        />
+        <div aria-hidden="true" className="h-px bg-gradient-to-r from-transparent via-gold-600 to-transparent" />
       </header>
-      <main id="public-main" tabIndex={-1} className="customer-main mx-auto w-full max-w-5xl px-4 py-6 sm:px-6">
+      <main id="public-main" tabIndex={-1} className="customer-main mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
         <PageEnter>{children}</PageEnter>
       </main>
-      <footer className="mx-auto w-full max-w-5xl px-4 pb-10 sm:px-6">
-        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-ink-200 bg-white px-4 py-3 text-xs text-ink-600 shadow-sm">
-          <FoodMotif className="h-8 w-8 text-brand-600" />
+      <footer className="mx-auto w-full max-w-6xl px-4 pb-10 sm:px-6">
+        <hr className="luxe-rule mb-5" />
+        <div className="flex flex-wrap items-center gap-3 text-xs text-ink-600">
+          <FoodMotif className="h-8 w-8 text-brand-700" />
           <p className="min-w-0 flex-1">
-            ร้านป้าอ้ออาหารตามสั่ง · ใกล้มหาวิทยาลัยราชภัฏเลย ต.เมืองเลย จ.เลย ·
+            ร้านป้าอ้ออาหารตามสั่ง · ใกล้มหาวิทยาลัยราชภัฏเลย ต.เมืองเลย จ.เลย · เปิดทุกวัน 9:00–21:00 ·
             รับทำข้าวกล่องงานมหาวิทยาลัย สั่งล่วงหน้าอย่างน้อย 30 นาที
           </p>
           <Link
             to="/status"
-            className="inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-ink-300 px-4 py-2 font-semibold text-ink-800 hover:border-gold-600 hover:text-gold-700"
+            className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-ink-200 px-4 py-2 font-semibold text-ink-800 transition-colors hover:border-gold-600 hover:text-gold-700"
           >
             <Icon name="info" size={18} />
             สถานะร้าน
