@@ -438,7 +438,8 @@
 }
 
 .zone-photo__match {
-  min-height: 36px;
+  /* เป้ากดขั้นต่ำ 44px (WCAG 2.5.5) — เดิม 36px เล็กเกินสำหรับนิ้วบนมือถือ */
+  min-height: 44px;
   border: 1px solid var(--color-ink-300);
   border-radius: 999px;
   padding: 0.2rem 0.75rem;
