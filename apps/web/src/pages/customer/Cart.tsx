@@ -7,6 +7,7 @@ import {
   type OrderServiceType,
   type PublicCustomer,
   type PublicMenuGroupWithOptions,
+  type PublicTableStatus,
 } from "../../lib/api";
 import {
   addToCart,
@@ -23,6 +24,7 @@ import {
   toggleLineOption,
   type Cart,
 } from "../../lib/cart";
+import { loadTableContext, saveTableContext } from "../../lib/tableContext";
 import { Alert, Badge, Panel, inputClass, primaryButtonClass, secondaryButtonClass } from "../../components/ui";
 import { DepthHero, MotionReveal, Skeleton, StaggerItem, StaggerList } from "../../components/motion";
 import { ConnectionBanner, DemoBadge } from "../../components/demo";
@@ -71,6 +73,10 @@ export default function CartPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [placed, setPlaced] = useState<OrderDetail | null>(null);
+  // โต๊ะที่สแกน QR มา (จำไว้ตลอดแท็บ) + สถานะว่าโต๊ะนั้นเช็กอินแล้วหรือยัง
+  const [tableCode, setTableCode] = useState<string | null>(() => loadTableContext());
+  const [tableStatus, setTableStatus] = useState<PublicTableStatus | null>(null);
+  const [tableStatusError, setTableStatusError] = useState<string | null>(null);
 
   async function loadMenu() {
     try {
@@ -110,6 +116,39 @@ export default function CartPage() {
   useEffect(() => {
     saveCart(cart);
   }, [cart]);
+
+  // โต๊ะจาก QR: ถามสถานะเพื่อบอกลูกค้าตั้งแต่ตอนนี้ว่าสั่งที่โต๊ะนี้ได้ไหม
+  // ไม่ใช่ปล่อยให้เลือกเมนูจนครบแล้วค่อยโดนปฏิเสธตอนกดยืนยัน
+  useEffect(() => {
+    if (!tableCode) {
+      setTableStatus(null);
+      setTableStatusError(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .tablePublicStatus(tableCode)
+      .then((r) => {
+        if (!cancelled) {
+          setTableStatus(r);
+          setTableStatusError(null);
+        }
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setTableStatus(null);
+        setTableStatusError(err instanceof Error ? err.message : "ตรวจสถานะโต๊ะไม่สำเร็จ");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tableCode]);
+
+  /** ลูกค้าบอกว่าไม่ได้นั่งโต๊ะนี้ — ลืมโต๊ะแล้วกลับไปเลือกวิธีรับบริการเอง */
+  function forgetTable() {
+    saveTableContext(null);
+    setTableCode(null);
+  }
 
   const priceMap = useMemo(() => {
     const map = new Map<string, { price: number; name: string; inStock: boolean }>();
@@ -187,6 +226,9 @@ export default function CartPage() {
       ...(customer
         ? {}
         : { guestName: guestName.trim(), guestPhone: guestPhone.trim() }),
+      // แนบโต๊ะเฉพาะตอนกินที่ร้าน — server ผูกกับรอบที่เปิดอยู่ของโต๊ะนั้นให้เอง
+      // (เปลี่ยนไปกลับบ้าน/ล่วงหน้าแล้วส่งโต๊ะไปด้วยจะโดนปฏิเสธ)
+      ...(tableCode && serviceType === "dine_in" ? { tableId: tableCode } : {}),
       idempotencyKey: newIdempotencyKey(),
     };
     try {
@@ -239,6 +281,11 @@ export default function CartPage() {
                 สถานะปัจจุบัน: รอชำระเงิน — จดเลขคำสั่งซื้อไว้ใช้ติดตามสถานะ
                 {placed.guestPhone ? " (ใช้คู่กับเบอร์โทรที่สั่ง)" : " (ดูได้ที่หน้าคำสั่งซื้อของฉัน)"}
               </p>
+              {placed.tableId ? (
+                <p className="text-sm text-ink-600">
+                  ผูกกับโต๊ะ {tableStatus?.table.name ?? placed.tableId} แล้ว — ครัวจะรู้ว่าจานนี้ของโต๊ะไหน
+                </p>
+              ) : null}
               <div className="flex flex-wrap gap-2">
                 <Link to="/orders" className={primaryButtonClass}>
                   ไปติดตามคำสั่งซื้อ
@@ -409,6 +456,36 @@ export default function CartPage() {
         {cart.length > 0 ? (
           <Panel label="ยืนยันคำสั่งซื้อ">
             <div className="space-y-4">
+              {tableCode ? (
+                <div className="rounded-lg border border-gold-600/40 bg-gold-100 px-4 py-3">
+                  <p className="flex flex-wrap items-center gap-2 text-sm font-semibold text-gold-700">
+                    <Icon name="table" size={18} />
+                    กำลังสั่งที่โต๊ะ {tableStatus?.table.name ?? tableCode}
+                  </p>
+                  <p role="status" className="mt-1 text-sm text-ink-700">
+                    {tableStatusError
+                      ? `ตรวจสถานะโต๊ะไม่ได้ (${tableStatusError}) — ยืนยันได้ แต่ถ้าโต๊ะยังไม่เช็กอินระบบจะปฏิเสธ`
+                      : tableStatus === null
+                        ? "กำลังตรวจสถานะโต๊ะ…"
+                        : tableStatus.ready
+                          ? "โต๊ะนี้เช็กอินแล้ว คำสั่งซื้อจะผูกกับโต๊ะให้อัตโนมัติ"
+                          : "โต๊ะนี้ยังไม่ได้เช็กอิน กรุณาแจ้งพนักงานหน้าร้านก่อนยืนยัน"}
+                  </p>
+                  {serviceType !== "dine_in" ? (
+                    <p className="mt-1 text-sm text-ink-700">
+                      เลือกวิธีรับบริการอื่นอยู่ — คำสั่งซื้อนี้จะไม่ผูกกับโต๊ะ
+                    </p>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={forgetTable}
+                    className="mt-2 inline-flex min-h-[44px] items-center text-sm font-semibold text-ink-700 underline underline-offset-2 hover:text-brand-700"
+                  >
+                    ไม่ได้นั่งโต๊ะนี้
+                  </button>
+                </div>
+              ) : null}
+
               <fieldset>
                 <legend className="mb-1 block text-sm font-semibold text-ink-800">วิธีรับบริการ</legend>
                 <div className="grid gap-2 sm:grid-cols-3">

@@ -61,6 +61,14 @@ export interface ShopOverride {
   createdBy: string | null;
 }
 
+/** สถานะโต๊ะแบบสาธารณะ: พอให้รู้ว่าสั่งที่โต๊ะนี้ได้ไหม ไม่มีข้อมูลลูกค้าหรือรหัสรอบ */
+export interface PublicTableStatus {
+  table: { id: string; name: string; zone: TableZone | null };
+  /** โต๊ะเปิดใช้งานอยู่และมีรอบที่เช็กอินแล้ว */
+  ready: boolean;
+  openedAt: string | null;
+}
+
 export interface ShopStatus {
   shopName: string;
   isOpen: boolean;
@@ -1166,6 +1174,9 @@ export const api = {
     req<{ override: ShopOverride }>("/api/shop/override", { method: "POST", body: JSON.stringify(body) }, true),
   clearOverride: () => req<{ ok: boolean; cleared: boolean }>("/api/shop/override", { method: "DELETE" }, true),
   listTables: () => req<{ tables: ShopTable[] }>("/api/tables"),
+  /** สถานะโต๊ะแบบสาธารณะ (ใช้ตอนลูกค้าสแกน QR ที่โต๊ะ) — ไม่ต้อง login */
+  tablePublicStatus: (tableId: string) =>
+    req<PublicTableStatus>(`/api/tables/${encodeURIComponent(tableId)}/public-status`),
   createTable: (name: string, capacity: number, zone?: TableZone | null) =>
     req<{ table: ShopTable }>(
       "/api/tables",
