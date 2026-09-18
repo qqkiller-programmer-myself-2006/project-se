@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
+import { useState, type ReactNode } from "react";
+import { Link, NavLink, useNavigate } from "react-router-dom";
 import { FoodMotif, Icon, type IconName } from "./icons";
 import { PageEnter } from "./motion";
 import { DemoBadge } from "./demo";
 import { isDemoModeEnabled } from "../lib/demo";
-import { api, type PublicCustomer } from "../lib/api";
+import { api } from "../lib/api";
+import { useCustomerSession } from "../lib/customerSession";
 
 const NAV_BASE =
   "pa-lift pa-press inline-flex min-h-[44px] items-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold tracking-wide transition-colors";
@@ -35,36 +36,10 @@ export const PUBLIC_NAV: PublicNavItem[] = [
   { to: "/notifications", label: "แจ้งเตือน", icon: "bell" },
 ];
 
-/**
- * session ลูกค้าของ shell (คุกกี้ csid แยกจาก sid ของพนักงาน)
- *
- * โหลดใหม่ทุกครั้งที่เปลี่ยนหน้า — เข้าสู่ระบบ/สมัครสมาชิกแล้ว nav ไป /profile
- * หัวเว็บจึงขึ้นชื่อสมาชิกเองโดยไม่ต้องส่ง callback ข้ามหน้า
- * guest ได้ 401 ซึ่งเป็นเรื่องปกติ — ถือว่ายังไม่ได้เข้าสู่ระบบ ไม่ใช่ error
- */
-function useCustomerSession(pathname: string) {
-  const [customer, setCustomer] = useState<PublicCustomer | null>(null);
-
-  const refresh = useCallback(async () => {
-    try {
-      setCustomer((await api.customerMe()).customer);
-    } catch {
-      setCustomer(null);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh, pathname]);
-
-  return { customer, setCustomer };
-}
-
 /** แถบบัญชีสมาชิกมุมขวาของหัวเว็บ: ชื่อ + ออกจากระบบ หรือ เข้าสู่ระบบ + สมัครสมาชิก */
 function AccountBar() {
-  const { pathname } = useLocation();
   const nav = useNavigate();
-  const { customer, setCustomer } = useCustomerSession(pathname);
+  const { customer, clear } = useCustomerSession();
   const [busy, setBusy] = useState(false);
 
   async function logout() {
@@ -74,7 +49,7 @@ function AccountBar() {
       await api.customerLogout();
     } finally {
       // ล้าง session ฝั่งเว็บเสมอ แม้ปลายทางตอบ error — ไม่ทิ้งหัวเว็บค้างว่ายัง login อยู่
-      setCustomer(null);
+      clear();
       setBusy(false);
       nav("/");
     }

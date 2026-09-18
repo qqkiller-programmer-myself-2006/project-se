@@ -25,6 +25,7 @@ import {
   type Cart,
 } from "../../lib/cart";
 import { loadTableContext, saveTableContext } from "../../lib/tableContext";
+import { useCustomerSession } from "../../lib/customerSession";
 import { Alert, Badge, Panel, inputClass, primaryButtonClass, secondaryButtonClass } from "../../components/ui";
 import { DepthHero, MotionReveal, Skeleton, StaggerItem, StaggerList } from "../../components/motion";
 import { ConnectionBanner, DemoBadge } from "../../components/demo";
@@ -59,13 +60,14 @@ function newIdempotencyKey(): string {
  * - server ตรวจราคา/สถานะเมนู/ตัวเลือก/สต๊อกอีกครั้งแล้ว snapshot + จองสต๊อก
  */
 export default function CartPage() {
+  // session ลูกค้าแยกจาก staff — มีก็ผูกคำสั่งซื้อกับบัญชี ไม่มีก็สั่งแบบ Guest
+  // อ่านจากแหล่งเดียวของแอป ไม่ถามซ้ำเองอีกหน้าหนึ่ง
+  const { customer, ready: sessionChecked } = useCustomerSession();
   const [groups, setGroups] = useState<PublicMenuGroupWithOptions[]>([]);
   const [menuLoading, setMenuLoading] = useState(true);
   const [menuError, setMenuError] = useState<string | null>(null);
   const [demo, setDemo] = useState(false);
   const [cart, setCart] = useState<Cart>(() => loadCart());
-  const [customer, setCustomer] = useState<PublicCustomer | null>(null);
-  const [sessionChecked, setSessionChecked] = useState(false);
   const [serviceType, setServiceType] = useState<OrderServiceType>("dine_in");
   const [scheduledAt, setScheduledAt] = useState("");
   const [guestName, setGuestName] = useState("");
@@ -105,12 +107,6 @@ export default function CartPage() {
 
   useEffect(() => {
     void loadMenu();
-    // session ลูกค้าแยกจาก staff — มีก็ผูกคำสั่งซื้อกับบัญชี ไม่มีก็สั่งแบบ Guest
-    api
-      .customerMe()
-      .then((r) => setCustomer(r.customer))
-      .catch(() => setCustomer(null))
-      .finally(() => setSessionChecked(true));
   }, []);
 
   useEffect(() => {

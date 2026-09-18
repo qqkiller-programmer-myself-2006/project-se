@@ -1201,6 +1201,11 @@ export const api = {
     ),
   customerLogout: () => req<{ ok: boolean }>("/api/customers/logout", { method: "POST" }, true),
   customerMe: () => req<{ customer: PublicCustomer }>("/api/customers/me"),
+  /**
+   * "ตอนนี้มี session ลูกค้าไหม" — ตอบ 200 เสมอ (guest ได้ customer: null)
+   * ใช้แทน customerMe ในหน้าสาธารณะ เพื่อไม่ให้ guest เห็น 401 กองใน console
+   */
+  customerSession: () => req<{ customer: PublicCustomer | null }>("/api/customers/session"),
   updateCustomerProfile: (patch: { name?: string; email?: string | null }) =>
     req<{ customer: PublicCustomer }>("/api/customers/me", { method: "PATCH", body: JSON.stringify(patch) }, true),
   changeCustomerPassword: (currentPassword: string, newPassword: string) =>

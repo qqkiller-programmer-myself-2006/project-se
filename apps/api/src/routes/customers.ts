@@ -339,6 +339,46 @@ export function createCustomerRouter(deps: CustomerRouterDeps): express.Router {
     res.json({ customer: req.customer });
   });
 
+  /**
+   * "ตอนนี้มี session ลูกค้าอยู่ไหม" — ตอบ 200 เสมอ
+   *
+   * `/api/customers/me` ตอบ 401 เมื่อไม่มี session ซึ่งถูกต้องสำหรับ endpoint
+   * ที่ต้องล็อกอิน แต่หน้าเว็บสาธารณะต้องถามคำถามนี้ทุกครั้งที่โหลด และ
+   * เบราว์เซอร์จะ log 401 เป็น error เสมอไม่ว่า JS จะจัดการแล้วหรือไม่ —
+   * console ของ guest จึงเต็มไปด้วย error ปลอมจนกลบ error จริง
+   *
+   * ตัวนี้แยก "ไม่ได้ล็อกอิน" (คำตอบปกติ) ออกจาก "เข้าถึงไม่ได้" (error จริง)
+   * session เสีย/หมดอายุถือว่ายังไม่ได้ล็อกอิน และเคลียร์คุกกี้ให้เลย
+   */
+  router.get("/api/customers/session", async (req, res, next) => {
+    try {
+      const sid = req.cookies?.[CSID_COOKIE] as string | undefined;
+      if (!sid) {
+        res.json({ customer: null });
+        return;
+      }
+      const session = await store.findCustomerSession(sid);
+      const customer = session ? await store.findCustomerById(session.customerId) : null;
+      const valid =
+        session !== null &&
+        new Date(session.expiresAt).getTime() >= Date.now() &&
+        customer !== null &&
+        customer.isActive &&
+        !customer.isDeleted &&
+        session.passwordVersion === customer.passwordVersion;
+      if (!valid) {
+        // คุกกี้ค้างที่ใช้ไม่ได้แล้ว: ล้างทิ้ง ไม่ต้องให้ผู้ใช้ไปหาเองว่าทำไม
+        if (session) await store.deleteCustomerSession(sid);
+        clearCustomerCookie(res);
+        res.json({ customer: null });
+        return;
+      }
+      res.json({ customer: toPublicCustomer(customer) });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   // ---------- โปรไฟล์/รหัสผ่าน/ลบบัญชี ----------
   router.patch("/api/customers/me", requireCustomerAuth, requireCsrf, async (req, res, next) => {
     try {

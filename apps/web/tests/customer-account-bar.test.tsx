@@ -34,6 +34,8 @@ function stubApp(signedIn: boolean) {
         me = null;
         return ok({ ok: true });
       }
+      // endpoint สาธารณะของเชลล์: ตอบ 200 เสมอ guest ได้ customer: null
+      if (u.endsWith("/api/customers/session")) return ok({ customer: me });
       if (u.endsWith("/api/customers/me")) {
         return me ? ok({ customer: me }) : err(401, "กรุณาเข้าสู่ระบบก่อน");
       }
@@ -59,6 +61,20 @@ describe("แถบบัญชีสมาชิกในเชลล์ลู�
     await waitFor(() => expect(bar).toHaveTextContent("เข้าสู่ระบบ"));
     expect(bar).toHaveTextContent("สมัครสมาชิก");
     expect(screen.queryByRole("button", { name: /ออกจากระบบ/ })).not.toBeInTheDocument();
+  });
+
+  it("guest ไม่ยิง endpoint ที่ตอบ 401 เลย (console ต้องสะอาด)", async () => {
+    const calls = stubApp(false);
+    render(
+      <MemoryRouter initialEntries={["/register"]}>
+        <App />
+      </MemoryRouter>,
+    );
+    const bar = await screen.findByRole("navigation", { name: "บัญชีสมาชิก" });
+    await waitFor(() => expect(bar).toHaveTextContent("เข้าสู่ระบบ"));
+    expect(calls.filter((c) => c.endsWith("/api/customers/me"))).toHaveLength(0);
+    // ถามครั้งเดียวต่อการเปิดแอป ไม่ใช่ทุกครั้งที่เปลี่ยนหน้า
+    expect(calls.filter((c) => c.endsWith("/api/customers/session"))).toHaveLength(1);
   });
 
   it("สมาชิกที่เข้าสู่ระบบแล้วเห็นชื่อตัวเองและปุ่มออกจากระบบ", async () => {
