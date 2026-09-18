@@ -6,7 +6,7 @@ import {
   type PublicMenuItemWithOptions,
   type ShopStatus,
 } from "../../lib/api";
-import { addToCart, cartCount, loadCart, saveCart } from "../../lib/cart";
+import { cartCount, loadCart } from "../../lib/cart";
 import { DEMO_MENU_GROUPS_WITH_FOOD, isOfflineError } from "../../lib/demo";
 import { ConnectionBanner, DemoBadge } from "../../components/demo";
 import { resolveTableContext } from "../../lib/tableContext";
@@ -14,6 +14,7 @@ import { Alert, primaryButtonClass, secondaryButtonClass } from "../../component
 import { MotionReveal, Skeleton, StaggerItem, StaggerList } from "../../components/motion";
 import { Icon } from "../../components/icons";
 import { MenuItemImage } from "../../components/MenuItemImage";
+import { MenuOrderDialog } from "../../components/MenuOrderDialog";
 import type { ShowcaseItem } from "../../components/MenuShowcase3D";
 import "../../components/MenuShowcase3D.css";
 
@@ -77,6 +78,8 @@ export default function LandingPage() {
   const [active, setActive] = useState(0);
   const [count, setCount] = useState(() => cartCount(loadCart()));
   const [added, setAdded] = useState<string | null>(null);
+  // เมนูที่เปิดป๊อปอัปสั่งซื้ออยู่ — เลือกขนาด/ไข่/หมายเหตุ/จำนวนก่อนลงตะกร้า
+  const [ordering, setOrdering] = useState<PublicMenuItemWithOptions | null>(null);
   const [demo, setDemo] = useState(false);
   const tableCode = useMemo(() => resolveTableContext(search), [search]);
 
@@ -136,11 +139,9 @@ export default function LandingPage() {
     setActive((safeActive + delta + showcase.length) % showcase.length);
   }
 
-  function add(menuId: string, name: string) {
-    const next = addToCart(loadCart(), menuId);
-    saveCart(next);
-    setCount(cartCount(next));
-    setAdded(`เพิ่ม ${name} ลงตะกร้าแล้ว`);
+  function onAdded({ name, quantity }: { name: string; quantity: number }) {
+    setCount(cartCount(loadCart()));
+    setAdded(`เพิ่ม ${name} ${quantity} ชิ้นลงตะกร้าแล้ว`);
   }
 
   return (
@@ -262,7 +263,7 @@ export default function LandingPage() {
                 <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
                   <button
                     type="button"
-                    onClick={() => current && add(current.id, current.name)}
+                    onClick={() => current && setOrdering(current)}
                     className={primaryButtonClass}
                   >
                     <Icon name="cart" size={18} />
@@ -352,7 +353,7 @@ export default function LandingPage() {
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="luxe-price text-base font-semibold text-ink-900">{fmtPrice(m.price)}</p>
                     {(m.inStock ?? true) ? (
-                      <button type="button" onClick={() => add(m.id, m.name)} className={secondaryButtonClass}>
+                      <button type="button" onClick={() => setOrdering(m)} aria-label={`สั่ง ${m.name}`} className={secondaryButtonClass}>
                         <Icon name="cart" size={18} />
                         เพิ่ม
                       </button>
@@ -399,6 +400,9 @@ export default function LandingPage() {
           </Link>
         </div>
       </section>
+      {ordering ? (
+        <MenuOrderDialog item={ordering} onClose={() => setOrdering(null)} onAdded={onAdded} />
+      ) : null}
     </div>
   );
 }

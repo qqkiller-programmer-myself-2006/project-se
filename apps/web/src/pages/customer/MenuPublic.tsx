@@ -7,6 +7,7 @@ import { DepthHero, MotionReveal, Skeleton, StaggerItem, StaggerList, TiltCard }
 import { ConnectionBanner, DemoBadge } from "../../components/demo";
 import { Icon } from "../../components/icons";
 import { MenuItemImage } from "../../components/MenuItemImage";
+import { MenuOrderDialog } from "../../components/MenuOrderDialog";
 import { RealMenuPhotoGallery } from "../../components/RealMenuPhotoGallery";
 
 function fmtPrice(n: number): string {
@@ -54,6 +55,9 @@ export default function MenuPublicPage() {
   // (เคยตั้งเป็น "drink" ไว้ตอน seed เมนูเครื่องดื่ม แล้วลืมคืนค่า เมนูอาหารเลยหายไปทั้งหน้า)
   const [kind, setKind] = useState<"" | MenuKind>("");
   const [q, setQ] = useState("");
+  // เมนูที่กดการ์ดแล้วเปิดป๊อปอัปสั่งซื้ออยู่ (null = ปิด)
+  const [ordering, setOrdering] = useState<PublicMenuGroupWithOptions["items"][number] | null>(null);
+  const [added, setAdded] = useState<string | null>(null);
 
   async function load() {
     try {
@@ -217,7 +221,9 @@ export default function MenuPublicPage() {
                     const inStock = m.inStock ?? true;
                     return (
                       <StaggerItem key={m.id} index={index} className="overflow-hidden rounded-2xl border border-ink-200 bg-white shadow-sm">
-                        <TiltCard className="pa-lift h-full">
+                        {/* แตะตรงไหนของการ์ดก็เปิดป๊อปอัปสั่งซื้อ — ปุ่มข้างล่างคือทางเข้าหลักของคีย์บอร์ด/สกรีนรีดเดอร์ */}
+                        <TiltCard className="pa-lift h-full cursor-pointer">
+                        <div onClick={() => setOrdering(m)} className="h-full">
                         {/* รูปพัง/ยังไม่มีรูป → แผ่นป้ายสำรอง แทนการหายไปเงียบ ๆ จนการ์ดโหว่ */}
                         <MenuItemImage src={m.imageUrl} name={m.name} className="h-36 w-full" />
                         <div className="luxe-layer space-y-1.5 p-4">
@@ -240,6 +246,19 @@ export default function MenuPublicPage() {
                               ))}
                             </div>
                           ) : null}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setOrdering(m);
+                            }}
+                            aria-label={inStock ? `สั่ง ${m.name}` : `ดูรายละเอียด ${m.name} (วัตถุดิบหมดชั่วคราว)`}
+                            className="mt-2 inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg border border-ink-900 px-4 py-2 text-sm font-semibold tracking-wide text-ink-900 transition-colors hover:bg-ink-900 hover:text-ink-50"
+                          >
+                            <Icon name="cart" size={18} />
+                            {inStock ? "สั่งเมนูนี้" : "ดูรายละเอียด"}
+                          </button>
+                        </div>
                         </div>
                         </TiltCard>
                       </StaggerItem>
@@ -251,12 +270,30 @@ export default function MenuPublicPage() {
           </div>
         )}
 
+        {added ? (
+          <div className="flex flex-wrap items-center justify-center gap-3" role="status">
+            <p className="text-sm font-semibold text-green-800">{added}</p>
+            <Link to="/cart" className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-ink-200 px-4 py-2 text-sm font-semibold text-ink-800 hover:border-gold-600">
+              <Icon name="cart" size={18} />
+              ไปที่ตะกร้า
+            </Link>
+          </div>
+        ) : null}
+
         <p className="text-center text-sm text-ink-500">
           <Link to="/status" className="font-semibold text-brand-700 underline underline-offset-2">
             ดูสถานะร้านและโต๊ะว่าง
           </Link>
         </p>
       </main>
+
+      {ordering ? (
+        <MenuOrderDialog
+          item={ordering}
+          onClose={() => setOrdering(null)}
+          onAdded={({ name, quantity }) => setAdded(`เพิ่ม ${name} ${quantity} ชิ้นลงตะกร้าแล้ว`)}
+        />
+      ) : null}
     </div>
   );
 }

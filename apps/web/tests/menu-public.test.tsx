@@ -518,4 +518,43 @@ describe("หน้าเมนูสาธารณะ (Ticket 04)", () => {
     expect(screen.queryByText(foodName)).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("พบ 18 เมนู");
   });
+
+  it("กดการ์ดเมนูเปิดป๊อปอัปสั่งซื้อ แล้วเพิ่มลงตะกร้าได้ (#27)", async () => {
+    const user = userEvent.setup();
+    localStorage.clear();
+    stubFetch((url) => {
+      if (url.includes("/api/menu/public")) return { ok: true, json: async () => ({ groups }) };
+      return { ok: true, json: async () => ({}) };
+    });
+    render(
+      <MemoryRouter>
+        <MenuPublicPage />
+      </MemoryRouter>,
+    );
+    // ปุ่มบนการ์ดคือทางเข้าหลักของคีย์บอร์ด/สกรีนรีดเดอร์
+    await user.click(await screen.findByRole("button", { name: "สั่ง ข้าวผัดป้าอ้อ" }));
+    const dialog = screen.getByRole("dialog", { name: "ข้าวผัดป้าอ้อ" });
+    await user.click(within(dialog).getByRole("button", { name: "เพิ่มจำนวน" }));
+    await user.click(within(dialog).getByRole("button", { name: "เพิ่ม 2 ชิ้นลงตะกร้า" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByText("เพิ่ม ข้าวผัดป้าอ้อ 2 ชิ้นลงตะกร้าแล้ว")).toBeInTheDocument();
+    const saved = JSON.parse(localStorage.getItem("paor-cart-v1") ?? "[]") as { menuId: string; quantity: number }[];
+    expect(saved).toHaveLength(1);
+    expect(saved[0]!.quantity).toBe(2);
+  });
+
+  it("แตะตรงไหนของการ์ดก็เปิดป๊อปอัปได้ ไม่ต้องเล็งปุ่ม", async () => {
+    const user = userEvent.setup();
+    stubFetch((url) => {
+      if (url.includes("/api/menu/public")) return { ok: true, json: async () => ({ groups }) };
+      return { ok: true, json: async () => ({}) };
+    });
+    render(
+      <MemoryRouter>
+        <MenuPublicPage />
+      </MemoryRouter>,
+    );
+    await user.click(await screen.findByText("ชาเย็น"));
+    expect(screen.getByRole("dialog", { name: "ชาเย็น" })).toBeInTheDocument();
+  });
 });

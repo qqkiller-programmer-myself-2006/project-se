@@ -95,10 +95,17 @@ describe("หน้าแรกของลูกค้า (landing)", () => {
     renderLanding();
     // ข้อมูลบานหน้าต้องอ่านได้โดยไม่พึ่ง canvas (canvas เป็นของประดับ)
     expect(await screen.findByText(/บานหน้า: ข้าวผัดหมู/)).toBeInTheDocument();
+    // ปุ่มบนตู้โชว์เปิดป๊อปอัปสั่งซื้อ (เลือกตัวเลือก/จำนวนก่อน) ไม่ใช่ยัดลงตะกร้าทันที
     await userEvent.click(screen.getByRole("button", { name: /เพิ่มลงตะกร้า/ }));
-    expect(await screen.findByText("เพิ่ม ข้าวผัดหมู ลงตะกร้าแล้ว")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "ข้าวผัดหมู" })).toBeInTheDocument();
+    expect(localStorage.getItem(CART_STORAGE_KEY)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "เพิ่มจำนวน" }));
+    await userEvent.click(screen.getByRole("button", { name: "เพิ่ม 2 ชิ้นลงตะกร้า" }));
+    expect(await screen.findByText("เพิ่ม ข้าวผัดหมู 2 ชิ้นลงตะกร้าแล้ว")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     const saved = JSON.parse(localStorage.getItem(CART_STORAGE_KEY) ?? "[]") as { menuId: string; quantity: number }[];
-    expect(saved).toEqual([{ menuId: "m1", quantity: 1, note: "", options: [], specialRequest: "" }]);
+    expect(saved).toEqual([{ menuId: "m1", quantity: 2, note: "", options: [], specialRequest: "" }]);
+    expect(screen.getByRole("link", { name: /ไปที่ตะกร้า \(2\)/ })).toBeInTheDocument();
   });
 
   it("หมุนด้วยปุ่มถัดไปแล้วบานหน้าเปลี่ยน", async () => {

@@ -82,6 +82,49 @@ export function saveCart(cart: Cart, storage?: Pick<Storage, "setItem" | "remove
   }
 }
 
+/**
+ * ดึงจำนวนให้อยู่ในช่วงที่สั่งได้จริง: จำนวนเต็ม 1..CART_QTY_MAX
+ *
+ * ติดลบ, 0, ทศนิยม, NaN, Infinity, ข้อความที่แปลงไม่ได้ → ไม่มีทางหลุดออกไปเป็นจำนวนที่สั่ง
+ * ทศนิยมปัดลง (2.9 → 2) เพราะปัดขึ้นจะกลายเป็นสั่งเกินที่ลูกค้าตั้งใจ
+ */
+export function clampQuantity(value: unknown): number {
+  const n = typeof value === "string" ? Number(value.trim()) : typeof value === "number" ? value : NaN;
+  if (!Number.isFinite(n)) return 1;
+  const whole = Math.floor(n);
+  if (whole < 1) return 1;
+  if (whole > CART_QTY_MAX) return CART_QTY_MAX;
+  return whole;
+}
+
+/**
+ * เพิ่มบรรทัดจากป๊อปอัปสั่งซื้อ: จำนวน + ตัวเลือก + หมายเหตุ ในครั้งเดียว
+ *
+ * - จำนวนผ่าน {@link clampQuantity} เสมอ — ส่งค่าติดลบมาก็ไม่มีวันลดของในตะกร้า
+ * - มีบรรทัดเมนู+ตัวเลือกเดียวกันอยู่แล้ว → รวมจำนวน (ไม่เกิน 20) แทนการแตกบรรทัดซ้ำ
+ *   ซึ่ง server จะปฏิเสธ; หมายเหตุใหม่ที่ไม่ว่างแทนของเดิม (คำสั่งล่าสุดของลูกค้าชนะ)
+ */
+export function addLineToCart(
+  cart: Cart,
+  line: { menuId: string; quantity: unknown; options?: string[]; note?: string },
+): Cart {
+  const id = line.menuId.trim();
+  if (!id) return cart;
+  const quantity = clampQuantity(line.quantity);
+  const options = [...new Set((line.options ?? []).filter((o) => typeof o === "string" && o.trim().length > 0))];
+  const note = (line.note ?? "").trim().slice(0, CART_NOTE_MAX);
+  const key = cartLineKey({ menuId: id, options });
+  const found = cart.find((l) => cartLineKey(l) === key);
+  if (found) {
+    return cart.map((l) =>
+      cartLineKey(l) === key
+        ? { ...l, quantity: Math.min(CART_QTY_MAX, l.quantity + quantity), note: note || l.note }
+        : l,
+    );
+  }
+  return [...cart, { menuId: id, quantity, note, options, specialRequest: "" }];
+}
+
 /** เพิ่มเมนูลงตะกร้า (มีบรรทัดเดียวกันแล้ว +1, ยังไม่มีเริ่ม 1) — เกิน 20 ชิ้นต่อบรรทัดไม่เพิ่มแล้ว */
 export function addToCart(cart: Cart, menuId: string, options: string[] = []): Cart {
   const id = menuId.trim();
