@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { TABLE_ZONES, TABLE_ZONE_LABELS, api, type ShopTable, type TableZone } from "../../lib/api";
 import {
   Alert,
@@ -12,6 +12,9 @@ import {
   successButtonClass,
   dangerButtonClass,
 } from "../../components/ui";
+import { TableQrCode } from "../../components/TableQrCode";
+import { TableQrSheet } from "../../components/TableQrSheet";
+import { isLocalBaseUrl, siteBaseUrl, tableOrderUrl } from "../../lib/tableQr";
 
 function parseZone(value: string): TableZone | null {
   return (TABLE_ZONES as readonly string[]).includes(value) ? (value as TableZone) : null;
@@ -45,6 +48,12 @@ export default function TablesPage() {
   const [editCapacity, setEditCapacity] = useState("");
   const [editZone, setEditZone] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
+  // QR สั่งอาหารของโต๊ะที่กางดูอยู่ (ทีละโต๊ะ) และโหมดพิมพ์ป้ายทุกโต๊ะ
+  const [qrOpenId, setQrOpenId] = useState<string | null>(null);
+  const [printing, setPrinting] = useState(false);
+  const qrBase = siteBaseUrl();
+  const qrBaseIsLocal = isLocalBaseUrl(qrBase);
+  const donePrinting = useCallback(() => setPrinting(false), []);
 
   async function refresh() {
     try {
@@ -130,6 +139,7 @@ export default function TablesPage() {
   }
 
   const enabledCount = tables.filter((t) => t.isEnabled).length;
+  const printableTables = tables.filter((t) => t.isEnabled);
 
   return (
     <div className="space-y-5">
@@ -137,6 +147,37 @@ export default function TablesPage() {
         title="จัดการโต๊ะ"
         description={`เพิ่ม แก้ชื่อ/ความจุ/โซน และสลับพร้อมใช้งาน–งดใช้งาน (ไม่มีการลบข้อมูล) · พร้อมใช้งาน ${enabledCount} จากทั้งหมด ${tables.length} โต๊ะ`}
       />
+
+      <Panel label="QR สั่งอาหารที่โต๊ะ" className="space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="font-semibold text-ink-900">QR สั่งอาหารที่โต๊ะ</h2>
+            <p className="mt-1 max-w-xl text-sm text-ink-600">
+              พิมพ์ป้าย QR ติดโต๊ะ ลูกค้าสแกนแล้วสั่งจากมือถือได้ คำสั่งซื้อผูกกับโต๊ะเองเมื่อโต๊ะเช็กอินแล้ว
+              พิมพ์เฉพาะโต๊ะที่พร้อมใช้งาน
+            </p>
+            <p className="mt-1 break-all text-xs text-ink-500">ลิงก์ใน QR ชี้ไปที่ {qrBase}</p>
+          </div>
+          <button
+            type="button"
+            className={primaryButtonClass}
+            disabled={printableTables.length === 0 || printing}
+            onClick={() => setPrinting(true)}
+          >
+            {printing ? "กำลังเปิดหน้าต่างพิมพ์…" : `พิมพ์ป้าย QR (${printableTables.length} โต๊ะ)`}
+          </button>
+        </div>
+        {qrBaseIsLocal ? (
+          // คำแนะนำการตั้งค่าที่อยู่ถาวร ไม่ใช่เหตุการณ์ด่วน — จึงไม่ใช้ role="alert" (ซึ่งจะแย่ง
+          // การประกาศของ error จริงบนหน้านี้) ใช้ข้อความธรรมดาที่เด่นพอให้เห็นก่อนกดพิมพ์
+          <p className="rounded-lg border border-brand-300 bg-brand-50 px-3 py-2.5 text-sm font-medium text-brand-800">
+            ลิงก์ใน QR ชี้ไปที่เครื่องนี้ ({qrBase}) มือถือลูกค้าจะเปิดไม่ได้ — ตั้ง VITE_PUBLIC_SITE_URL
+            เป็นโดเมนจริงของร้านก่อนพิมพ์ป้ายไปติดโต๊ะ
+          </p>
+        ) : null}
+      </Panel>
+
+      {printing ? <TableQrSheet tables={printableTables} base={qrBase} onDone={donePrinting} /> : null}
 
       <div aria-live="polite" className="space-y-3">
         {error && (
@@ -239,6 +280,15 @@ export default function TablesPage() {
                   >
                     แก้ชื่อ/ความจุ/โซน
                   </button>
+                  <button
+                    type="button"
+                    className={secondaryButtonClass}
+                    aria-expanded={qrOpenId === t.id}
+                    aria-controls={`table-qr-${t.id}`}
+                    onClick={() => setQrOpenId((cur) => (cur === t.id ? null : t.id))}
+                  >
+                    {qrOpenId === t.id ? "ซ่อน QR" : "QR สั่งอาหาร"}
+                  </button>
                   {t.isEnabled ? (
                     <button type="button" disabled={busyId === t.id} className={dangerButtonClass} onClick={() => void toggle(t)}>
                       {busyId === t.id ? "กำลังบันทึก…" : "งดใช้งาน"}
@@ -249,6 +299,18 @@ export default function TablesPage() {
                     </button>
                   )}
                 </div>
+                {qrOpenId === t.id ? (
+                  <div id={`table-qr-${t.id}`} className="flex flex-wrap items-center gap-4 rounded-lg border border-ink-200 bg-ink-50 p-3">
+                    <TableQrCode value={tableOrderUrl(t.id, qrBase)} label={`QR สั่งอาหารโต๊ะ ${t.name}`} />
+                    <div className="min-w-0 flex-1 space-y-1 text-sm">
+                      <p className="font-semibold text-ink-900">สแกนแล้วเปิดหน้าสั่งอาหารของโต๊ะ {t.name}</p>
+                      <p className="break-all text-xs text-ink-600">{tableOrderUrl(t.id, qrBase)}</p>
+                      {t.isEnabled ? null : (
+                        <p className="text-xs font-semibold text-brand-700">โต๊ะนี้งดใช้งานอยู่ — สแกนแล้วจะสั่งที่โต๊ะนี้ไม่ได้</p>
+                      )}
+                    </div>
+                  </div>
+                ) : null}
               </li>
             ))}
           </ul>

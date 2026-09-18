@@ -705,3 +705,62 @@ body {
     transform: none !important;
   }
 }
+
+/* ---------- แผ่นป้าย QR ติดโต๊ะ (พิมพ์เท่านั้น) ---------- */
+.table-qr-sheet {
+  display: none;
+}
+@media print {
+  /* พิมพ์เฉพาะแผ่นป้าย — ส่วนอื่นของแอปไม่ต้องออกมาบนกระดาษ */
+  body > *:not(.table-qr-sheet) {
+    display: none !important;
+  }
+  body {
+    background: #fff !important;
+  }
+  .table-qr-sheet {
+    display: grid !important;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10mm;
+    padding: 8mm;
+    color: #14110f;
+    font-family: var(--font-sans);
+  }
+  .table-qr-sheet__card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2mm;
+    padding: 8mm 6mm;
+    border: 0.4mm solid #a8853f;
+    border-radius: 4mm;
+    text-align: center;
+    /* ไม่ให้ป้ายใบไหนถูกตัดครึ่งข้ามหน้ากระดาษ */
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .table-qr-sheet__shop {
+    font-size: 9pt;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: #6f5527;
+  }
+  .table-qr-sheet__table {
+    font-family: var(--font-display);
+    font-size: 30pt;
+    font-weight: 700;
+    line-height: 1.1;
+  }
+  .table-qr-sheet__zone {
+    font-size: 11pt;
+    color: #514a41;
+  }
+  .table-qr-sheet__how {
+    font-size: 13pt;
+    font-weight: 600;
+  }
+  .table-qr-sheet__note {
+    font-size: 9pt;
+    color: #514a41;
+  }
+}
