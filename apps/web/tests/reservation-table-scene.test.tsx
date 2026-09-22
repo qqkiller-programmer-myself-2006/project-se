@@ -80,8 +80,8 @@ describe("ขั้นเลือกโซนและโต๊ะ (หนึ�
     expect(within(section("โซนศาลากลางแจ้ง")).getByText("น้ำแข็ง · แก้วน้ำ")).toBeInTheDocument();
     expect(within(section("โซนอื่น ๆ")).getByRole("button", { name: /โต๊ะ X1 / })).toBeInTheDocument();
 
-    // jsdom ไม่มี WebGL → ทุกโซนแสดงข้อความสำรองแทนโมเดล
-    expect(await screen.findAllByText(/อุปกรณ์นี้แสดงโมเดลสามมิติไม่ได้/)).toHaveLength(4);
+    // ผังภาพรวมเป็น SVG ที่ใช้งานได้แม้เครื่องไม่มี WebGL
+    expect(document.querySelector("svg.floor-plan")).toBeInTheDocument();
   });
 
   it("ปุ่มไปที่โซนเลื่อนหน้าไปยังส่วนของโซนนั้น", async () => {
