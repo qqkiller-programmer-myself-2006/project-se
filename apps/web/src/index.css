@@ -54,6 +54,8 @@
   --hairline-gold: rgba(168, 133, 63, 0.38);
   --shadow-paper: 0 1px 2px rgba(20, 17, 15, 0.04), 0 12px 32px -24px rgba(20, 17, 15, 0.3);
   --shadow-raised: 0 2px 4px rgba(20, 17, 15, 0.05), 0 26px 50px -30px rgba(20, 17, 15, 0.42);
+  --depth-ledge: 0 1px 0 rgba(255, 255, 255, 0.72) inset, 0 2px 0 rgba(20, 17, 15, 0.04), 0 18px 36px -28px rgba(20, 17, 15, 0.5);
+  --depth-rule: linear-gradient(90deg, transparent, rgba(168, 133, 63, 0.5), transparent);
   color-scheme: light;
 }
 
@@ -77,6 +79,30 @@ body {
   --role-surface: #fbf9f6;
   background: var(--role-surface);
 }
+.role-customer,
+.role-admin,
+.role-owner,
+.role-kitchen,
+.role-staff {
+  position: relative;
+  isolation: isolate;
+}
+.role-customer::before,
+.role-admin::before,
+.role-owner::before,
+.role-kitchen::before,
+.role-staff::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 18rem;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(168, 133, 63, 0.08), transparent 78%);
+}
+.role-admin::before,
+.role-kitchen::before { background: linear-gradient(180deg, rgba(71, 85, 105, 0.07), transparent 78%); }
+.role-owner::before { background: linear-gradient(180deg, rgba(29, 78, 216, 0.08), transparent 78%); }
 .customer-header {
   box-shadow: 0 18px 45px -30px rgba(20, 17, 15, .55);
 }
@@ -97,6 +123,15 @@ body {
   top: 0;
   z-index: 20;
 }
+.role-kitchen .luxe-card,
+.role-admin .luxe-card,
+.role-owner .luxe-card {
+  --surface: #fffefa;
+  --shadow-paper: 0 1px 0 rgba(255,255,255,.8) inset, 0 10px 24px -22px rgba(15,23,42,.55);
+}
+.role-kitchen .luxe-card { border-radius: .75rem; }
+.role-admin .luxe-card { border-radius: .7rem; }
+.role-owner .luxe-card { border-radius: .9rem; }
 .role-kitchen .role-main { max-width: 88rem; }
 .role-kitchen .pa-lift:hover,
 .role-kitchen .pa-lift:focus-visible { transform: none; box-shadow: 0 4px 12px -8px rgba(15, 118, 110, .35); }
@@ -259,21 +294,33 @@ body {
 
 /* Paper card: hairline border, ivory face, shadow that suggests a sheet on a table */
 .luxe-card {
+  position: relative;
+  isolation: isolate;
   background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: 1rem;
-  box-shadow: var(--shadow-paper);
+  box-shadow: var(--depth-ledge), var(--shadow-paper);
   transition:
     transform var(--motion-base) var(--motion-ease),
     box-shadow var(--motion-base) var(--motion-ease),
     border-color var(--motion-base) var(--motion-ease);
 }
+.luxe-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 1rem;
+  left: 1rem;
+  height: 1px;
+  background: var(--depth-rule);
+  pointer-events: none;
+  opacity: .7;
+}
 .luxe-card:hover,
 .luxe-card:focus-within {
-  /* ยกขึ้นมาหาคนดูจริง ๆ ไม่ใช่แค่เลื่อนขึ้น — perspective อยู่ในตัว transform เอง
-     จึงไม่ต้องให้ parent ตั้ง preserve-3d (parent ที่ overflow:hidden จะทำลาย 3D) */
-  transform: perspective(900px) translate3d(0, -4px, 16px);
-  box-shadow: var(--shadow-raised);
+  /* ยกขึ้นมาหาคนดูด้วยระยะเลื่อนและเงา โดยไม่สร้าง 3D containing block ให้ popup ลูก */
+  transform: translateY(-4px);
+  box-shadow: var(--depth-ledge), var(--shadow-raised);
   border-color: var(--hairline-gold);
 }
 
@@ -489,7 +536,8 @@ body {
 
 /* Layered hero depth: ambient blobs float gently behind content */
 .pa-depth-hero {
-  transform-style: preserve-3d;
+  /* Keep the hero out of the 3D containing-block chain so fixed overlays remain viewport-fixed. */
+  isolation: isolate;
 }
 .pa-depth-content {
   position: relative;
@@ -637,19 +685,17 @@ body {
 @keyframes luxe-page-in-3d {
   from {
     opacity: 0;
-    transform: perspective(1400px) translate3d(0, 10px, -60px) rotateX(3.5deg);
   }
   to {
     opacity: 1;
-    transform: none;
   }
 }
 .luxe-scene .pa-page-enter {
   /* backwards (ไม่ใช่ both): ไม่ค้าง transform หลังจบ — เหตุผลเดียวกับ .pa-page-enter เดิม */
-  animation: luxe-page-in-3d var(--motion-slow) var(--motion-ease) backwards;
+  animation: luxe-page-in-3d var(--motion-base) var(--motion-ease) backwards;
 }
 
-/* เนื้อหาที่ไหลเข้ามาตอนเลื่อนจอก็เอนขึ้นมาแบบเดียวกัน */
+/* เนื้อหาที่ไหลเข้ามาตอนเลื่อนจอใช้การเลื่อนระยะสั้นแบบ 2D เพื่อคง containing block */
 .luxe-scene .pa-reveal {
   transform: perspective(1400px) translate3d(0, 14px, -40px) rotateX(3deg);
 }

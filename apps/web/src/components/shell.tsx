@@ -99,7 +99,7 @@ export function PublicShell({ children }: { children: ReactNode }) {
       <a href="#public-main" className="ui-skip-link">
         ข้ามไปยังเนื้อหาหลัก
       </a>
-      <header className="customer-header bg-ink-900 text-ink-50">
+      <header className="customer-header role-header bg-ink-900 text-ink-50">
         <div className="mx-auto w-full max-w-6xl px-4 pb-4 pt-4 sm:px-6">
           <div className="flex flex-wrap items-center gap-3">
             <Link
