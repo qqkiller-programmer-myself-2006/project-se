@@ -305,6 +305,14 @@
 - งานที่ข้าม: external services, provider login และ browser E2E จริง
 - รายละเอียด: `.scratch/pa-or-restaurant/issues/17-pa-or-logo-customer-3d.md`
 
+### Ticket 17 — Luxury minimal storefront polish (2026-09-22)
+
+- ปรับ `Landing.tsx` ให้ hero มีลำดับ CTA ชัดเจน และเปลี่ยนส่วนจุดเด่นเป็น luxe dark panel ที่ใช้ typography/divider เดียวกับ design system
+- ปรับ `PublicShell` ให้ navigation บนมือถือเลื่อนแนวนอนได้โดยไม่ตัด route และย่อ footer โดยคงที่อยู่/เวลาเปิด
+- ปรับ `MenuShowcase3D` ด้วย ambient/rim/fill lighting, `MeshStandardMaterial` สำหรับกรอบทองเหลือง, คง low-power/no shadow map/reduced-motion/WebGL fallback และแก้ราคาเป็น “บาท”
+- Verification: `npm run typecheck -w apps/web`, `npm run build -w apps/web`, `npm test -w apps/web` และ `git diff --check` ผ่าน; agy independent review ไม่พบ Critical/High/Medium finding
+- ข้อสังเกต deferred: mobile nav อาจเพิ่ม gradient hint ได้ภายหลัง, fallback 2D อาจแสดงรูปอาหารได้, Vite ยังมี warning เรื่อง chunk Three.js ขนาดใหญ่
+
 ## Roadmap หลัง Ticket 06
 
 - Ticket 07: ตัวเลือกเมนู สูตร และสต๊อก

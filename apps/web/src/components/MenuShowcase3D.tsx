@@ -43,7 +43,7 @@ function prefersReducedMotion(): boolean {
 }
 
 function fmtPrice(n: number): string {
-  return `${n.toLocaleString("th-TH", { maximumFractionDigits: 0 })}฻`;
+  return `${n.toLocaleString("th-TH", { maximumFractionDigits: 0 })} บาท`;
 }
 
 function roundedRect(
@@ -204,6 +204,17 @@ export function MenuShowcase3D({ items, activeIndex, onActiveIndexChange }: Menu
     const carousel = new THREE.Group();
     scene.add(carousel);
 
+    // แสงนุ่มแบบพรีเมียม: ambient อุ่น + rim เย็นจากด้านหลัง + fill เบา ๆ ด้านหน้า
+    // ตั้งใจไม่เปิด shadow map — คง low-power และใช้เงาวงรีจาก CSS แทน
+    const ambient = new THREE.AmbientLight(0xfff6e5, 0.85);
+    scene.add(ambient);
+    const rim = new THREE.DirectionalLight(0xe9dcb9, 1.1);
+    rim.position.set(-3.5, 4, -4);
+    scene.add(rim);
+    const fill = new THREE.DirectionalLight(0xffffff, 0.35);
+    fill.position.set(3, 1.5, 5);
+    scene.add(fill);
+
     const glassTexture = makeGlassTexture();
     if (glassTexture) disposables.push(glassTexture);
 
@@ -211,10 +222,12 @@ export function MenuShowcase3D({ items, activeIndex, onActiveIndexChange }: Menu
     const frameGeometry = new THREE.PlaneGeometry(PANEL_WIDTH + 0.12, PANEL_HEIGHT + 0.12);
     disposables.push(panelGeometry, frameGeometry);
 
-    const frameMaterial = new THREE.MeshBasicMaterial({
+    const frameMaterial = new THREE.MeshStandardMaterial({
       color: 0xa8853f,
+      metalness: 0.65,
+      roughness: 0.32,
       transparent: true,
-      opacity: 0.85,
+      opacity: 0.95,
       side: THREE.DoubleSide,
     });
     disposables.push(frameMaterial);

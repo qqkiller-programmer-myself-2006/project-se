@@ -8,9 +8,9 @@ import { api } from "../lib/api";
 import { useCustomerSession } from "../lib/customerSession";
 
 const NAV_BASE =
-  "pa-lift pa-press inline-flex min-h-[44px] items-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold tracking-wide transition-colors";
-const NAV_IDLE = "border-white/15 text-ink-100 hover:border-gold-500 hover:text-gold-200";
-const NAV_ACTIVE = "border-gold-500 bg-gold-500/15 text-gold-100";
+  "pa-press inline-flex min-h-[44px] shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-[13px] font-semibold tracking-wide transition-colors sm:border sm:px-4 sm:text-sm";
+const NAV_IDLE = "border-transparent text-ink-300 hover:text-gold-200 sm:border-white/15 sm:text-ink-100 sm:hover:border-gold-500 sm:hover:text-gold-200";
+const NAV_ACTIVE = "border-transparent text-gold-200 sm:border-gold-500 sm:bg-gold-500/15 sm:text-gold-100";
 
 function navClass(isActive: boolean): string {
   return `${NAV_BASE} ${isActive ? NAV_ACTIVE : NAV_IDLE}`;
@@ -129,7 +129,7 @@ export function PublicShell({ children }: { children: ReactNode }) {
             </Link>
             <AccountBar />
           </div>
-          <nav aria-label="เมนูลูกค้า" className="mt-4 flex flex-wrap gap-2">
+          <nav aria-label="เมนูลูกค้า" className="mt-3 flex gap-1 overflow-x-auto pb-1 sm:flex-wrap sm:gap-2 sm:overflow-visible sm:pb-0">
             {PUBLIC_NAV.map((item) => (
               <NavLink key={item.to} to={item.to} end={item.end} className={({ isActive }) => navClass(isActive)}>
                 <Icon name={item.icon} size={18} />
@@ -152,10 +152,10 @@ export function PublicShell({ children }: { children: ReactNode }) {
       >
         <PageEnter>{children}</PageEnter>
       </main>
-      <footer className="mx-auto w-full max-w-6xl px-4 pb-10 sm:px-6">
-        <hr className="luxe-rule mb-5" />
-        <div className="flex flex-wrap items-center gap-3 text-xs text-ink-600">
-          <FoodMotif className="h-8 w-8 text-brand-700" />
+      <footer className="mx-auto w-full max-w-6xl px-4 pb-6 sm:px-6">
+        <hr className="luxe-rule mb-4" />
+        <div className="flex flex-wrap items-center gap-2 text-xs text-ink-600">
+          <FoodMotif className="h-6 w-6 shrink-0 text-brand-700" />
           <p className="min-w-0 flex-1">
             ร้านป้าอ้ออาหารตามสั่ง · ใกล้มหาวิทยาลัยราชภัฏเลย ต.เมืองเลย จ.เลย · เปิดทุกวัน 9:00–21:00 ·
             รับทำข้าวกล่องงานมหาวิทยาลัย สั่งล่วงหน้าอย่างน้อย 30 นาที

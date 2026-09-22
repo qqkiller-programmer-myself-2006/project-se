@@ -369,17 +369,24 @@ export default function LandingPage() {
       ) : null}
 
       {/* ---------- สามเหตุผล ---------- */}
-      <section aria-label="จุดเด่นของร้าน" className="grid gap-px overflow-hidden rounded-2xl border border-ink-200 bg-ink-200 sm:grid-cols-3">
-        {[
-          { title: "ผัดสดทีละจาน", body: "ไม่ตักจากหม้อรวม สั่งแล้วลงกระทะ ได้กลิ่นกระทะจริง" },
-          { title: "ราคานักศึกษา", body: "ตั้งราคาสำหรับคนแถว มรภ.เลย รับทำข้าวกล่องงานมหาวิทยาลัย" },
-          { title: "จองโต๊ะล่วงหน้า", body: "เลือกโต๊ะและเวลาได้เอง ถึงร้านแล้วเช็กอินที่หน้าร้าน" },
-        ].map((f) => (
-          <div key={f.title} className="bg-white px-6 py-8 text-center">
-            <p className="pa-display text-lg text-ink-900">{f.title}</p>
-            <p className="mt-2 text-sm text-ink-600">{f.body}</p>
-          </div>
-        ))}
+      <section aria-label="จุดเด่นของร้าน" className="pa-hero px-6 py-10 sm:px-10">
+        <p className="luxe-kicker text-center text-gold-200">ทำไมต้องร้านป้าอ้อ</p>
+        <div className="mt-8 grid gap-8 sm:grid-cols-3 sm:gap-0 sm:divide-x sm:divide-white/10">
+          {[
+            { title: "ผัดสดทีละจาน", body: "ไม่ตักจากหม้อรวม สั่งแล้วลงกระทะ ได้กลิ่นกระทะจริง" },
+            { title: "ราคานักศึกษา", body: "ตั้งราคาสำหรับคนแถว มรภ.เลย รับทำข้าวกล่องงานมหาวิทยาลัย" },
+            { title: "จองโต๊ะล่วงหน้า", body: "เลือกโต๊ะและเวลาได้เอง ถึงร้านแล้วเช็กอินที่หน้าร้าน" },
+          ].map((f, index) => (
+            <div key={f.title} className="px-2 text-center sm:px-8">
+              <p aria-hidden="true" className="pa-display text-sm tracking-[0.2em] text-gold-500">
+                0{index + 1}
+              </p>
+              <p className="pa-display mt-2 text-lg text-ink-50">{f.title}</p>
+              <hr aria-hidden="true" className="luxe-rule mx-auto my-3 w-12" />
+              <p className="text-sm text-ink-200">{f.body}</p>
+            </div>
+          ))}
+        </div>
       </section>
 
       {/* ---------- ปิดท้าย ---------- */}

@@ -25,3 +25,5 @@ Assignee: Codex implementation fallback
 ## Comments
 
 - งานบริการภายนอกและ provider login ไม่อยู่ใน scope ตามนโยบายโปรเจกต์
+- 2026-09-22: ปรับ customer storefront ต่อจาก Ticket 17 ให้เป็น luxury minimal: ลด visual clutter ของ hero และ feature section, ลดความแน่นของ mobile navigation/footer, เพิ่ม ambient/rim/fill lighting ให้ 3D showcase โดยไม่เปิด shadow map, แก้ formatter ราคาเป็น “บาท” และคง DOM fallback/accessibility/reduced-motion เดิม
+- 2026-09-22 Verification: `npm run typecheck -w apps/web` ผ่าน, `npm run build -w apps/web` ผ่าน, `npm test -w apps/web` ผ่าน และ `git diff --check` ผ่าน; independent review โดย agy ไม่พบ Critical/High/Medium finding
