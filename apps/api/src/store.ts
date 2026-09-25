@@ -9833,8 +9833,10 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
               shape.tableId,
             ])) as [Record<string, unknown>[], unknown];
             if (tableRows.length === 0) throw new NotFoundError("ไม่พบโต๊ะนี้");
+            // FOR UPDATE: ล็อกแถวรอบจนจบ tx — กัน closeTableRound ปิดรอบคั่นระหว่างอ่านกับ INSERT
+            // (อ่านแบบ snapshot ธรรมดาจะได้ order รอชำระผูกกับรอบที่ปิดไปแล้ว)
             const [openRows] = (await conn.query(
-              "SELECT id, table_id FROM table_rounds WHERE table_id = ? AND status = 'open' ORDER BY opened_at DESC LIMIT 1",
+              "SELECT id, table_id FROM table_rounds WHERE table_id = ? AND status = 'open' ORDER BY opened_at DESC LIMIT 1 FOR UPDATE",
               [shape.tableId],
             )) as [Record<string, unknown>[], unknown];
             if (openRows.length === 0) {
@@ -9843,7 +9845,8 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
             linkTableId = String(openRows[0]!["table_id"]);
             linkRoundId = String(openRows[0]!["id"]);
           } else {
-            const [roundRows] = (await conn.query("SELECT * FROM table_rounds WHERE id = ? LIMIT 1", [
+            // FOR UPDATE ด้วยเหตุผลเดียวกับด้านบน (แข่งกับ closeTableRound)
+            const [roundRows] = (await conn.query("SELECT * FROM table_rounds WHERE id = ? LIMIT 1 FOR UPDATE", [
               shape.roundId,
             ])) as [Record<string, unknown>[], unknown];
             if (roundRows.length === 0) throw new NotFoundError("ไม่พบรอบการใช้โต๊ะ");

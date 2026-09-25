@@ -14,7 +14,9 @@ import {
  * Ticket 04: กฎ validation เมนู (pure — ใช้ร่วมกันทั้ง memory/MySQL adapter ผ่าน store)
  * - category/name: trim แล้วต้องไม่ว่าง, จำกัดความยาว
  * - description: optional (null/"" → null), ยาวไม่เกิน 500
- * - imageUrl: optional (null/"" → null); ถ้าระบุต้องเป็น absolute http/https URL ยาวไม่เกิน 2048
+ * - imageUrl: optional (null/"" → null); ถ้าระบุต้องเป็น absolute http/https URL หรือ path
+ *   ภายในเว็บเดียวกันที่ขึ้นต้นด้วย "/" (เช่น /menu/items/cha-tai.png ที่ migration 016 seed ไว้)
+ *   ยาวไม่เกิน 2048
  *   (ยังไม่รองรับอัปโหลดไฟล์จริง — เก็บ URL อย่างเดียว)
  * - price: ตัวเลข finite, >= 0, <= 1,000,000, ทศนิยมไม่เกิน 2 ตำแหน่ง
  * - kind: food | drink; status: available | unavailable
@@ -79,6 +81,9 @@ export function normalizeImageUrl(value: unknown): string | null {
   if (!v) return null;
   if (v.length > MENU_IMAGE_URL_MAX) fail(`URL รูปภาพต้องไม่เกิน ${MENU_IMAGE_URL_MAX} ตัวอักษร`);
   if (/\s/.test(v)) fail("URL รูปภาพต้องไม่มีช่องว่าง");
+  // path ภายในเว็บ (ไฟล์ใน apps/web/public) — เมนูที่ seed ด้วย path แบบนี้ต้องแก้ไขต่อได้
+  // ห้าม "//host" (protocol-relative ชี้ออกนอกเว็บ) และ "\" ที่เบราว์เซอร์ตีความเป็น "/"
+  if (v.startsWith("/") && !v.startsWith("//") && !v.includes("\\")) return v;
   let url: URL;
   try {
     url = new URL(v);

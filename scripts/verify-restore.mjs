@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Ticket 14 — restore/migration verification แบบไม่ต้องมี Docker/MySQL.
- * ตรวจ static เท่านั้น: migration ครบ 14 ไฟล์ + ตรง MIGRATION_FILES +
+ * ตรวจ static เท่านั้น: migration ครบตาม EXPECTED + ตรง MIGRATION_FILES + RELEASE_MIGRATION_COUNT +
  * rerunnable guards + ไม่มี destructive statements/secrets + docs ครบ.
  * ใช้: node scripts/verify-restore.mjs (exit 0 = ผ่าน)
  */
@@ -55,6 +55,15 @@ const listed = m ? [...m[1].matchAll(/"([^"]+\.sql)"/g)].map((x) => x[1]) : [];
 check(
   JSON.stringify(listed) === JSON.stringify(EXPECTED),
   `MIGRATION_FILES matches 001-016 in order (found ${listed.length})`,
+);
+
+// 2b) RELEASE_MIGRATION_COUNT (รายงานใน /api/metrics/summary) ต้องตรงจำนวน migration จริง
+const obsSrc = readFileSync(join(root, "apps", "api", "src", "observability.ts"), "utf8");
+const countMatch = obsSrc.match(/export const RELEASE_MIGRATION_COUNT = (\d+);/);
+const releaseCount = countMatch ? Number(countMatch[1]) : NaN;
+check(
+  releaseCount === EXPECTED.length,
+  `RELEASE_MIGRATION_COUNT matches migrations (found ${releaseCount}, expected ${EXPECTED.length})`,
 );
 
 // 3) rerunnable + ไม่ destructive + ไม่มี secret

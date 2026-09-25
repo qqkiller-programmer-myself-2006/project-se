@@ -33,7 +33,8 @@ export default function MyOrdersPage() {
       setDemo(false);
       let me: PublicCustomer | null = null;
       try {
-        me = (await api.customerMe()).customer;
+        // session endpoint ตอบ 200 เสมอ — guest ได้ null ไม่ใช่ 401 ที่ค้างใน console
+        me = (await api.customerSession()).customer ?? null;
       } catch (sessionErr) {
         // Offline always falls back; demo mode also falls back on ANY session
         // failure (e.g. 401/empty) so the page stays inspectable. Real auth is

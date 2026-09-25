@@ -1264,7 +1264,10 @@ export const api = {
   orderLookup: (number: string, phone: string) =>
     req<{ order: OrderDetail }>(`/api/orders/lookup?number=${encodeURIComponent(number)}&phone=${encodeURIComponent(phone)}`),
   orderGet: (id: string, phone?: string) =>
-    req<{ order: OrderDetail }>(`/api/orders/${id}${phone ? `?phone=${encodeURIComponent(phone)}` : ""}`),
+    // id มาจาก URL (/pay/:id) ได้ — encode กัน "../" พาไป endpoint อื่น
+    req<{ order: OrderDetail }>(
+      `/api/orders/${encodeURIComponent(id)}${phone ? `?phone=${encodeURIComponent(phone)}` : ""}`,
+    ),
   ordersList: (q = "", status?: OrderStatus, limit = 50) => {
     const params = new URLSearchParams();
     if (q) params.set("q", q);

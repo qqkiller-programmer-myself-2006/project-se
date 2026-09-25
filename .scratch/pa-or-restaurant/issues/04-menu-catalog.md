@@ -68,3 +68,14 @@ Ticket นี้ครอบคลุมหมวดหมู่ ชื่อ �
   browser responsive/keyboard QA จริง
 - ที่ไม่รวมตาม scope (ไม่ implement): orders, cart, payment, stock/สูตร,
   image upload, Docker/MySQL runtime, external providers
+
+### 2026-09-25 — บั๊กสแกนหลัง resolved: imageUrl รับ path ภายในเว็บได้
+
+- พบ (bug scan, Claude): migration `016_seed_noonui_cha_tai.sql` seed เมนูเครื่องดื่ม 18
+  รายการด้วย `image_url` แบบ `/menu/items/*.png` (ไฟล์ static ใน `apps/web/public`) แต่
+  `normalizeImageUrl` เดิมรับเฉพาะ absolute `http(s)://` — แก้ไขราคา/รายละเอียดเมนูพวกนี้
+  ผ่านหน้า Admin ไม่ได้ (imageUrl เดิมถูกส่งกลับมาแล้วถูกปฏิเสธ 400)
+- แก้: `normalizeImageUrl` รับ path ที่ขึ้นต้นด้วย `/` เพิ่ม (root-relative ภายในเว็บเดียวกัน)
+  โดยยังกัน `//host` (protocol-relative ออกนอกเว็บ) และ `\` (เบราว์เซอร์ตีความเป็น `/`);
+  เพิ่ม test case ทั้งกรณีผ่านและกรณีถูกปฏิเสธใน `apps/api/tests/menu.test.ts`
+- HTTP HEAD ตรวจรูปอาหาร (R2) ทั้ง 60 URL จาก `seedMenu.ts` ผ่าน 200 ครบ (แยกจากปัญหานี้)

@@ -14,7 +14,9 @@ import { ConflictError, NotFoundError } from "./types.js";
 import {
   RELEASE_MIGRATION_COUNT,
   SERVICE_VERSION,
+  getRequestId,
   requestIdMiddleware,
+  sanitizeForLog,
   serviceUptimeSec,
   statusToErrorCode,
   toErrorBody,
@@ -795,8 +797,37 @@ export function createApp(opts: AppOptions): express.Express {
     }),
   );
 
+  /**
+   * 5xx ต้องทิ้งร่องรอยฝั่ง server — client ได้แค่ข้อความกลาง ถ้าไม่ log ที่นี่
+   * ความผิดพลาดจริง (เช่น SQL พัง) จะหายเงียบ ผูก requestId ให้ตามจาก header ได้
+   * ไม่ log body/cookie; sanitizeForLog ปกปิด key ที่เป็นความลับและเบอร์โทร
+   */
+  function logServerError(req: Request, status: number, err: unknown): void {
+    const detail =
+      err instanceof Error
+        ? {
+            name: err.name,
+            message: err.message,
+            code: (err as { code?: unknown }).code,
+            stack: err.stack,
+          }
+        : { message: String(err) };
+    console.error(
+      JSON.stringify(
+        sanitizeForLog({
+          level: "error",
+          requestId: getRequestId(req),
+          method: req.method,
+          path: req.path,
+          status,
+          error: detail,
+        }),
+      ),
+    );
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     // Ticket 14: error taxonomy แบบคงที่ — เติม `code` ทุก response โดยไม่เปลี่ยน
     // ข้อความ `error` ภาษาไทยเดิม (backward compatible กับ contract/tests เดิม)
     if (err instanceof ConflictError) {
@@ -809,11 +840,13 @@ export function createApp(opts: AppOptions): express.Express {
     }
     if (err && typeof err === "object" && "status" in err) {
       const status = Number((err as { status: number }).status) || 403;
+      if (status >= 500) logServerError(req, status, err);
       const message =
         "message" in err && typeof err.message === "string" ? err.message : "สิทธิ์ไม่เพียงพอ";
       res.status(status).json(toErrorBody(statusToErrorCode(status), message));
       return;
     }
+    logServerError(req, 500, err);
     res.status(500).json(toErrorBody("INTERNAL", "เกิดข้อผิดพลาดภายในระบบ"));
   });
 

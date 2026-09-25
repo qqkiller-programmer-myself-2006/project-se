@@ -85,3 +85,20 @@ App mount, orders linkage, lib/api, README ส่วน Ticket 06)
   browser responsive/keyboard QA จริง
 - ที่ไม่รวมตาม scope (ไม่ implement): LINE, payment/deposit, external notification,
   Docker/MySQL runtime, full waitlist, Prisma changes, experiments, package dependencies
+
+### 2026-09-25 — บั๊กสแกนหลัง resolved: race ที่ createOrder (MySQL) + timezone ของช่องเวลาจอง
+
+- พบ (codex, ตรวจ read-only, verify โดย Claude): `createMysqlStore().createOrder` อ่านแถว
+  `table_rounds` ที่เปิดอยู่โดยไม่ล็อก (`SELECT ... status='open'` ไม่มี `FOR UPDATE`) ก่อนผูก
+  คำสั่งซื้อกับรอบ — ถ้ามี request `closeTableRound` (ซึ่งล็อกด้วย `FOR UPDATE` ใน
+  `withReservationTx`) ปิดรอบคั่นกลางระหว่างอ่านกับ INSERT คำสั่งซื้อ จะได้คำสั่งซื้อ
+  `pending_payment` ผูกกับรอบที่ปิดไปแล้ว (ฝั่ง memory store ไม่มีปัญหานี้เพราะ synchronous)
+- แก้: เพิ่ม `FOR UPDATE` ให้ query อ่านรอบทั้งสองเส้นทางใน `createOrder`
+  (ระบุ `roundId` ตรง และค้นหารอบเปิดจาก `tableId`) ใน `apps/api/src/store.ts`
+  ยังไม่ได้รันยืนยันกับ MySQL จริง (เครื่อง dev ไม่มี MySQL/Docker) — ควรรันชุด
+  `*-mysql.int.test.ts` กับ `TEST_DATABASE_URL` ก่อน deploy
+- พบ (bug scan, Claude) เพิ่มเติม (ไม่เกี่ยวกับ MySQL): ช่องเวลาจองโต๊ะฝั่งเว็บ
+  (`apps/web/src/lib/reservationSlots.ts`) คำนวณเป็นเวลาท้องถิ่นของเครื่องลูกค้า
+  ขณะที่ API ตรวจเวลาเปิดร้านเป็นเวลากรุงเทพเสมอ — เครื่องที่ตั้งเขตเวลาอื่นจะเห็น/เลือก
+  ช่องเวลาผิดจากที่ API ยอมรับจริง แก้ให้คิดเป็นเวลากรุงเทพเสมอ (ไม่ขึ้นกับ timezone
+  ของเครื่อง) และเพิ่ม test ยืนยันผลเดียวกันไม่ว่า `TZ` ของเครื่องรัน test จะเป็นอะไร

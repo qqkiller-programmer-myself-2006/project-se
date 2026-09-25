@@ -153,6 +153,8 @@ describe("Ticket 04 menu catalog (public HTTP seam)", () => {
       { over: { status: "soldout" }, msg: /สถานะเมนู/ },
       { over: { imageUrl: "not-a-url" }, msg: /URL รูปภาพ/ },
       { over: { imageUrl: "ftp://example.com/x.jpg" }, msg: /URL รูปภาพ/ },
+      { over: { imageUrl: "//evil.example/x.jpg" }, msg: /URL รูปภาพ/ },
+      { over: { imageUrl: "/\\evil.example/x.jpg" }, msg: /URL รูปภาพ/ },
       { over: { sortOrder: -1 }, msg: /ลำดับ/ },
     ];
     for (const { over, msg } of cases) {
@@ -166,6 +168,14 @@ describe("Ticket 04 menu catalog (public HTTP seam)", () => {
     const ok = await owner.post("/api/menu").set("x-csrf-token", token).send(validMenu({ name: "เมนูไร้รูป", imageUrl: "" }));
     expect(ok.status).toBe(201);
     expect(ok.body.item.imageUrl).toBeNull();
+    // path ภายในเว็บ (แบบที่ migration 016 seed เมนูเครื่องดื่มไว้) ต้องบันทึก/แก้ไขต่อได้
+    const localToken = await csrfToken(owner);
+    const local = await owner
+      .post("/api/menu")
+      .set("x-csrf-token", localToken)
+      .send(validMenu({ name: "ชาใต้ทดสอบ", imageUrl: "/menu/items/cha-tai.png" }));
+    expect(local.status).toBe(201);
+    expect(local.body.item.imageUrl).toBe("/menu/items/cha-tai.png");
   });
 
   it("ชื่อซ้ำในหมวดเดียวกันถูกปฏิเสธ (409) แต่ซ้ำข้ามหมวดได้", async () => {

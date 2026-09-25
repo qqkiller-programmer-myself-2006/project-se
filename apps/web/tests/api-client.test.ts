@@ -56,3 +56,19 @@ describe("api client CSRF (หลาย tab, ไม่ cache)", () => {
     expect(calls.filter((c) => c.url.includes("/api/users"))).toHaveLength(1);
   });
 });
+
+describe("api client path params", () => {
+  it("orderGet encode id จาก URL — '../' ไม่พาไป endpoint อื่น", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        urls.push(String(url));
+        return { ok: true, status: 200, json: async () => ({ order: {} }) };
+      }),
+    );
+    await api.orderGet("../menu/public", "0812345678");
+    expect(urls[0]).toBe("/api/orders/..%2Fmenu%2Fpublic?phone=0812345678");
+    vi.unstubAllGlobals();
+  });
+});
