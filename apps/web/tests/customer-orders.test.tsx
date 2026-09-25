@@ -60,7 +60,7 @@ describe("หน้าคำสั่งซื้อของฉัน (Ticket 0
 
   it("สมาชิกเห็นเฉพาะคำสั่งซื้อของตนเองพร้อมรายการย่อย", async () => {
     stubFetch((url) => {
-      if (url.includes("/api/customers/me"))
+      if (url.includes("/api/customers/session"))
         return { ok: true, json: async () => ({ customer: { id: "c1", name: "ลูกค้า เอ" } }) };
       if (url.includes("/api/orders/mine")) return { ok: true, json: async () => ({ orders: [memberOrder] }) };
       return { ok: true, json: async () => ({}) };
@@ -78,7 +78,7 @@ describe("หน้าคำสั่งซื้อของฉัน (Ticket 0
 
   it("empty state เมื่อสมาชิกยังไม่มีคำสั่งซื้อ", async () => {
     stubFetch((url) => {
-      if (url.includes("/api/customers/me"))
+      if (url.includes("/api/customers/session"))
         return { ok: true, json: async () => ({ customer: { id: "c1", name: "ลูกค้า เอ" } }) };
       if (url.includes("/api/orders/mine")) return { ok: true, json: async () => ({ orders: [] }) };
       return { ok: true, json: async () => ({}) };
@@ -94,7 +94,7 @@ describe("หน้าคำสั่งซื้อของฉัน (Ticket 0
   it("Guest ค้นหาด้วยเลข + เบอร์สำเร็จ และเบอร์ผิดแสดง error", async () => {
     const user = userEvent.setup();
     stubFetch((url) => {
-      if (url.includes("/api/customers/me")) return { ok: false, status: 401, json: async () => ({ error: "x" }) };
+      if (url.includes("/api/customers/session")) return { ok: true, json: async () => ({ customer: null }) };
       if (url.includes("/api/orders/lookup")) {
         if (url.includes("phone=0899999999"))
           return { ok: false, status: 404, json: async () => ({ error: "ไม่พบคำสั่งซื้อ" }) };
@@ -123,7 +123,7 @@ describe("หน้าคำสั่งซื้อของฉัน (Ticket 0
     const user = userEvent.setup();
     let mineCalls = 0;
     stubFetch((url) => {
-      if (url.includes("/api/customers/me"))
+      if (url.includes("/api/customers/session"))
         return { ok: true, json: async () => ({ customer: { id: "c1", name: "ลูกค้า เอ" } }) };
       if (url.includes("/api/orders/mine")) {
         mineCalls += 1;

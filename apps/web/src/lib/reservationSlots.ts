@@ -2,8 +2,13 @@
  * ช่องวัน/เวลาสำหรับจองโต๊ะ (ฝั่งลูกค้า)
  * - กฎเดียวกับ API: จองล่วงหน้าอย่างน้อย 60 นาที และไม่เกิน 3 วัน
  * - ร้านเปิด 09:00–21:00 และถือโต๊ะให้ 120 นาที จึงเริ่มนัดได้ถึง 19:00 ทุก 30 นาที
- * - เวลาเป็นเวลาท้องถิ่นของเครื่อง (ร้านและลูกค้าอยู่ในเขตเวลาไทย)
+ * - คิดเป็นเวลากรุงเทพเสมอ (UTC+7 ไม่มี DST) ไม่ขึ้นกับ timezone ของเครื่องลูกค้า —
+ *   API ตรวจเวลาเปิดร้านเป็นเวลากรุงเทพ เครื่องที่ตั้ง timezone อื่นจะได้ช่องเวลาเพี้ยน
  */
+import { BANGKOK_OFFSET_MINUTES } from "./bangkok-time";
+
+const BANGKOK_OFFSET_MS = BANGKOK_OFFSET_MINUTES * 60_000;
+
 export const RESERVATION_MIN_LEAD_MINUTES = 60;
 export const RESERVATION_MAX_ADVANCE_DAYS = 3;
 export const FIRST_SLOT_MINUTES = 9 * 60;
@@ -20,14 +25,16 @@ export interface BookingDay {
 
 const pad = (n: number): string => String(n).padStart(2, "0");
 
+/** วันที่ตามปฏิทินกรุงเทพของ instant นี้ (YYYY-MM-DD) */
 export function toDateKey(d: Date): string {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const bkk = new Date(d.getTime() + BANGKOK_OFFSET_MS);
+  return `${bkk.getUTCFullYear()}-${pad(bkk.getUTCMonth() + 1)}-${pad(bkk.getUTCDate())}`;
 }
 
 export function slotToDate(dateKey: string, time: string): Date {
   const [y, m, d] = dateKey.split("-").map(Number);
   const [hh, mm] = time.split(":").map(Number);
-  return new Date(y!, (m ?? 1) - 1, d ?? 1, hh ?? 0, mm ?? 0, 0, 0);
+  return new Date(Date.UTC(y!, (m ?? 1) - 1, d ?? 1, hh ?? 0, mm ?? 0, 0, 0) - BANGKOK_OFFSET_MS);
 }
 
 function isBookable(at: Date, now: Date): boolean {
@@ -56,12 +63,21 @@ const DAY_NAMES = ["วันนี้", "พรุ่งนี้", "มะร�
  */
 export function buildBookingDays(now: Date): BookingDay[] {
   const days: BookingDay[] = [];
+  const today = new Date(now.getTime() + BANGKOK_OFFSET_MS);
   for (let offset = 0; offset <= RESERVATION_MAX_ADVANCE_DAYS; offset += 1) {
-    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
+    // เที่ยงวันกรุงเทพของวันนั้น — ห่างเที่ยงคืนพอให้ key/ป้ายวันไม่เลื่อนข้ามวัน
+    const d = new Date(
+      Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + offset, 12) - BANGKOK_OFFSET_MS,
+    );
     const key = toDateKey(d);
     const closed = buildTimeSlots(key, now).length === 0;
     if (closed && offset > 0) continue;
-    const dateLabel = d.toLocaleDateString("th-TH", { weekday: "short", day: "numeric", month: "short" });
+    const dateLabel = d.toLocaleDateString("th-TH", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      timeZone: "Asia/Bangkok",
+    });
     const day: BookingDay = { key, label: DAY_NAMES[offset] ?? `อีก ${offset} วัน`, dateLabel };
     if (closed) day.closed = true;
     days.push(day);
@@ -89,5 +105,12 @@ export function pickDefaultSlot(now: Date): { dateKey: string; time: string } | 
 }
 
 export function formatBookingDateTime(at: Date): string {
-  return at.toLocaleString("th-TH", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
+  return at.toLocaleString("th-TH", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Asia/Bangkok",
+  });
 }

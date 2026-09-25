@@ -1,6 +1,10 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { afterEach } from "vitest";
+
+// findBy*/waitFor รอ 1 วินาทีโดยค่าเริ่มต้น — หน้าเต็มที่ render ช้าลงตอนเครื่องมีงานอื่น
+// ล้มแบบสุ่มทั้งที่โค้ดถูก ขยายเป็น 5 วินาที (ยังสั้นกว่า testTimeout ใน vite.config.ts)
+configure({ asyncUtilTimeout: 5000 });
 
 afterEach(() => {
   cleanup();

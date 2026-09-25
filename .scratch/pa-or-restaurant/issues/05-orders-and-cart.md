@@ -73,3 +73,11 @@
   image/external storage, browser responsive/keyboard QA จริง
 - ที่ไม่รวมตาม scope (ไม่ implement): payment, stock/สูตร, reservation/รอบโต๊ะ,
   งานคิวครัว/เครื่องดื่ม, LINE, Docker/MySQL runtime, Prisma/experiments
+
+### 2026-09-25 — บั๊กสแกนหลัง resolved: id จาก URL ไม่ได้ encode ก่อนต่อ path
+
+- พบ (bug scan, Claude): `api.orderGet(id, phone)` ใน `apps/web/src/lib/api.ts` ต่อ
+  `id` (มาจาก route param `/pay/:id`) เข้า path ของ fetch โดยไม่ encode — ค่าเช่น
+  `../menu/public` เปลี่ยนปลายทาง request ไปเรียก endpoint อื่นได้
+- แก้: `encodeURIComponent(id)` ก่อนต่อ path; เพิ่ม test ใน
+  `apps/web/tests/api-client.test.ts` ยืนยันว่า `../` ถูก encode เป็น `..%2F`

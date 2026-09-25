@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import request, { type Agent } from "supertest";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
@@ -319,6 +319,27 @@ describe("Ticket 14 release hardening (local fake E2E + security + observability
     expect((cleaned["nested"] as Record<string, unknown>)["accessToken"]).toBe("[REDACTED]");
     expect(cleaned["username"]).toBe("owner");
     expect(cleaned["phone"]).toBe("08******78");
+  });
+
+  it("500 ที่ไม่คาดคิดถูก log ฝั่ง server พร้อม request-id โดยไม่รั่ว secret", async () => {
+    // จำลอง DB พังระหว่างอ่านเมนูสาธารณะ
+    store.listPublicMenuWithOptions = async () => {
+      throw Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED", sessionToken: "s3cr3t" });
+    };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const res = await request(app).get("/api/menu/public").set(REQUEST_ID_HEADER, "boom-1");
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ error: "เกิดข้อผิดพลาดภายในระบบ", code: "INTERNAL" });
+      expect(spy).toHaveBeenCalledTimes(1);
+      const logged = String(spy.mock.calls[0]![0]);
+      expect(logged).toContain("boom-1");
+      expect(logged).toContain("ECONNREFUSED");
+      expect(logged).toContain("/api/menu/public");
+      expect(logged).not.toContain("s3cr3t");
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("audit ที่เขียนจริงทั้งหมดใช้ action ที่รู้จัก (กัน typo ของ action ใหม่)", async () => {
