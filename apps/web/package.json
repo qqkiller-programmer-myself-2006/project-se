@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --port 5173",
-    "build": "tsc --noEmit -p tsconfig.json && vite build",
-    "preview": "vite preview",
+    "dev": "node ../../node_modules/vite/bin/vite.js --port 5173",
+    "build": "tsc --noEmit -p tsconfig.json && node ../../node_modules/vite/bin/vite.js build",
+    "preview": "node ../../node_modules/vite/bin/vite.js preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
   },
