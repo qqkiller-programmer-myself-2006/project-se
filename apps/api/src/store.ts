@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { PoolConnection } from "mysql2/promise";
+import type { Pool, PoolConnection } from "mysql2/promise";
 import type {
   AuditAction,
   AuditEntry,
@@ -6762,7 +6762,7 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
 }
 
 // ---- MySQL persistence (runtime จริงใช้ MySQL เท่านั้น ไม่มี memory fallback) ----
-const MIGRATION_FILES = [
+export const MIGRATION_FILES = [
   "001_staff_accounts.sql",
   "002_credential_version.sql",
   "003_shop_status_tables.sql",
@@ -6807,7 +6807,9 @@ export function isDuplicateColumnError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const e = err as { code?: unknown; errno?: unknown; sqlMessage?: unknown; message?: unknown };
   if (e.code === "ER_DUP_FIELDNAME") return true;
+  if (e.code === "42701") return true; // PostgreSQL duplicate_column (เส้นทาง Supabase)
   if (e.errno === 1060) return true;
+  if (e.errno === 42701) return true;
   const msg =
     (typeof e.sqlMessage === "string" && e.sqlMessage) ||
     (typeof e.message === "string" && e.message) ||
@@ -7970,13 +7972,31 @@ function dupReservationKeyName(err: unknown): string {
 }
 
 export async function createMysqlStore(databaseUrl: string): Promise<Store> {
-  const { default: mysql } = await import("mysql2/promise");
-  const pool = mysql.createPool({
-    uri: databaseUrl,
-    waitForConnections: true,
-    connectionLimit: 10,
-    timezone: "Z",
-  });
+  // เส้นทางชั่วคราว Vercel + Supabase: postgres:// วิ่งผ่าน pg-compat adapter
+  // ที่มีรูปร่างเดียวกับ mysql2 Pool — ห้ามปล่อย mysql2 รับ PostgreSQL URL
+  // ตรง ๆ เด็ดขาด (wire protocol คนละชนิด) ส่วน mysql:// พฤติกรรมเดิมทุกประการ
+  const { getDatabaseDialect } = await import("./db-url.js");
+  const dialect = getDatabaseDialect(databaseUrl);
+  let pool: Pool;
+  if (dialect === "postgres") {
+    const { createPgCompatPool, resolveSupabaseMigrationsDir } = await import("./pg-compat.js");
+    if (!process.env["MIGRATIONS_DIR"]) {
+      const dir = resolveSupabaseMigrationsDir();
+      if (!dir) {
+        throw new Error("หาโฟลเดอร์ db/supabase (schema ฉบับ PostgreSQL) ไม่พบ — ตั้ง MIGRATIONS_DIR เองหรือตรวจว่าไฟล์ถูก deploy มาด้วย");
+      }
+      process.env["MIGRATIONS_DIR"] = dir;
+    }
+    pool = (await createPgCompatPool(databaseUrl)) as unknown as Pool;
+  } else {
+    const { default: mysql } = await import("mysql2/promise");
+    pool = mysql.createPool({
+      uri: databaseUrl,
+      waitForConnections: true,
+      connectionLimit: 10,
+      timezone: "Z",
+    });
+  }
 
   const conn = await pool.getConnection();
   try {
@@ -13468,14 +13488,17 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
 }
 
 /**
- * Runtime (index/bootstrap) ใช้ MySQL จริงเท่านั้น — ไม่มี memory fallback
- * memory store ฉีดได้เฉพาะใน unit tests ผ่าน createMemoryStore โดยตรง
+ * Runtime (index/bootstrap/serverless):
+ * - mysql:// → MySQL จริงผ่าน mysql2 (ค่าเริ่มต้นของ local/Docker)
+ * - postgres:// → Supabase PostgreSQL ผ่าน pg-compat (เส้นทางชั่วคราว Vercel)
+ * ไม่มี memory fallback — memory store ฉีดได้เฉพาะใน unit tests ผ่าน
+ * createMemoryStore โดยตรง
  */
 export function createStoreFromEnv(): Promise<Store> {
   const url = process.env["DATABASE_URL"];
   if (!url) {
     throw new Error(
-      "ต้องตั้งค่า DATABASE_URL ที่ชี้ MySQL จริง (เช่น mysql://user:pass@host:3306/paor)",
+      "ต้องตั้งค่า DATABASE_URL (MySQL: mysql://user:pass@host:3306/paor หรือ Supabase PostgreSQL: postgres://...)",
     );
   }
   return createMysqlStore(url);

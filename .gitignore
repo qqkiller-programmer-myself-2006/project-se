@@ -3,6 +3,10 @@ dist/
 .env
 .env.*
 !.env.example
+!.env-now.example
+# สัญญา deploy ชั่วคราว (placeholders เท่านั้น) — ห้ามเข้า repo เด็ดขาด
+# (.env.* ไม่คลุมชื่อนี้เพราะไม่มีจุดหลัง .env)
+.env-now
 *.log
 coverage/
 *.tsbuildinfo
@@ -12,3 +16,5 @@ coverage/
 # ต้นฉบับรูปเมนูอาหาร 60 จาน (~140 MB) — เว็บไม่เสิร์ฟจากที่นี่
 # ข้อมูลเมนูชี้ URL บน Cloudflare R2 (key food-menu/NN-slug.png) ดู docs/menu-seed.md
 apps/web/public/food-menu/
+
+.vercel

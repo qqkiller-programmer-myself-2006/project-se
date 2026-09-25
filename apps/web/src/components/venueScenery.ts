@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { buildPhotoBackdrop, STOREFRONT_PHOTO, type PhotoBackdrop } from "./venuePhotoLayers";
 import { FRONT_FLOOR_Y, KITCHEN_FLOOR_Y, SALA_FLOOR_Y, SHOP_FLOOR_Y, type Rect, type TableStyle } from "./venueModel";
 
 /**
@@ -199,6 +200,7 @@ export interface SceneryOptions {
 }
 
 const SITE = "/venue/site/";
+const RES = "/venue/reservations/";
 
 /**
  * สร้างอาคาร โซน จุดสำคัญ และของตกแต่งทั้งหมด (ไม่รวมโต๊ะที่จองได้) ตามผังและรูปถ่ายจริง
@@ -206,9 +208,10 @@ const SITE = "/venue/site/";
  * - ด้านหน้าเป็นลานจอดรถลูกรังมีต้นไม้กลางลาน ฝั่งตรงข้ามเป็นอาคารพาณิชย์สองชั้นหลังคาแดง
  * - ห้องอาหารอยู่ใน "อาคาร 3 ขวัญใจ" ป้ายไวนิลอาหาร/เครื่องดื่มเหนือหน้าร้าน
  */
-export function buildScenery({ scene, track, onTextureLoad }: SceneryOptions): { fadeables: Fadeable[] } {
+export function buildScenery({ scene, track, onTextureLoad }: SceneryOptions): { fadeables: Fadeable[]; backdrop: PhotoBackdrop } {
   const loader = new THREE.TextureLoader();
   const fadeables: Fadeable[] = [];
+  let backdrop: PhotoBackdrop;
   const std = (params: THREE.MeshStandardMaterialParameters) =>
     track(new THREE.MeshStandardMaterial({ roughness: 0.85, ...params }));
 
@@ -286,7 +289,13 @@ export function buildScenery({ scene, track, onTextureLoad }: SceneryOptions): {
   box(26, 6, 5, shopWall, 3.5, 3, 26.5);
   box(26.4, 0.9, 0.3, redRoof, 3.5, 6.3, 23.9);
   box(26.4, 0.25, 2.2, std({ color: 0xd9dcdf, metalness: 0.3 }), 3.5, 3.0, 23.0);
-  for (let sx = -8; sx <= 15; sx += 3.3) box(2.8, 2.6, 0.05, std({ map: stripes(track, "#c9c6bf", "rgba(0,0,0,0.25)", 16, 1), metalness: 0.3 }), sx, 1.3, 23.98);
+  // หน้าตึกฝั่งตรงข้าม: ตัดจากรูปจริง storefront-seating.jpg (ประตูม้วนและป้ายร้าน) ปูสลับกระจกให้ขอบต่อกัน
+  const facadePhoto = photo(STOREFRONT_PHOTO, { x: 0.585, y: 0.26, w: 0.345, h: 0.215 });
+  for (const [fx, mirror] of [[-3.0, false], [10.0, true]] as const) {
+    const facade = panel(13, 6.2, facadePhoto, fx, 3.1, 23.97, Math.PI);
+    if (mirror) facade.scale.x = -1;
+  }
+  backdrop = buildPhotoBackdrop({ scene, track, onTextureLoad });
   const car = std({ color: 0xf1f1f1, roughness: 0.4, metalness: 0.3 });
   const glass = std({ color: 0x3b4450, roughness: 0.2, metalness: 0.2 });
   box(1.8, 0.8, 4.2, car, 8.5, 0.55, 21.3, Math.PI / 2 - 0.1);
@@ -323,7 +332,8 @@ export function buildScenery({ scene, track, onTextureLoad }: SceneryOptions): {
   const posterB = photo("/venue/reservations/dining-room.jpg", { x: 0, y: 0.159, w: 0.105, h: 0.119 });
   const kPosterRice = photo(SITE + "kitchen-stall-tables.jpg", { x: 0.815, y: 0.257, w: 0.18, h: 0.213 });
   const kPosterCrab = photo(SITE + "kitchen-stall-tables.jpg", { x: 0.77, y: 0.05, w: 0.135, h: 0.18 });
-  const kPosterMenu = photo(SITE + "kitchen-stall-tables.jpg", { x: 0.5, y: 0.0, w: 0.07, h: 0.26 });
+  // ป้ายไวนิลเมนูอาหารตัวจริง (food-menu.jpg) ติดฝั่งครัวของผนังกั้น
+  const kPosterMenu = photo(RES + "food-menu.jpg", { x: 0, y: 0, w: 1, h: 1 });
   wall("z", 0, [[-7.5, -0.95], [-0.1, 0.6]], 3.0, yellowWall, [posterA, posterB, kPosterRice, kPosterCrab, kPosterMenu]);
   panel(0.6, 1.6, posterA, 0.09, 1.95, -4.4, Math.PI / 2);
   panel(0.95, 1.1, posterB, 0.09, 1.95, -2.2, Math.PI / 2);
@@ -331,7 +341,7 @@ export function buildScenery({ scene, track, onTextureLoad }: SceneryOptions): {
   box(0.12, 0.2, 0.12, white, 0.14, 2.3, -3.2);
   panel(1.3, 1.05, kPosterRice, -0.09, 1.6, -2.3, -Math.PI / 2);
   panel(1.1, 0.8, kPosterCrab, -0.09, 2.35, -3.8, -Math.PI / 2);
-  panel(0.55, 1.6, kPosterMenu, -0.09, 2.1, -5.4, -Math.PI / 2);
+  panel(0.9, 1.2, kPosterMenu, -0.09, 1.95, -5.4, -Math.PI / 2);
   box(0.2, 0.04, 2.6, weathered, -0.2, 2.0, -3.3);
   for (const pz of [-4.3, -3.4, -2.5]) plant(-0.2, 2.02, pz, 0.45);
   box(0.05, 0.05, 1.3, lamp, 0.12, 2.9, -5.4);
@@ -340,7 +350,8 @@ export function buildScenery({ scene, track, onTextureLoad }: SceneryOptions): {
   // ผนังขวา (ต่อไปถึงห้องน้ำ) + ภาพร้านกาแฟอิฐเหนือบาร์น้ำ
   const mural = photo("/venue/reservations/counter.jpg", { x: 0.227, y: 0.13, w: 0.5, h: 0.432 });
   const muralB = photo(SITE + "front-dining-view.jpg", { x: 0.89, y: 0.11, w: 0.11, h: 0.263 });
-  wall("z", 9.3, [[-9.5, 0.6]], 3.0, yellowWall, [mural, muralB]);
+  const drinkStrip = photo(RES + "counter.jpg", { x: 0.783, y: 0.103, w: 0.06, h: 0.73 });
+  wall("z", 9.3, [[-9.5, 0.6]], 3.0, yellowWall, [mural, muralB, drinkStrip]);
   panel(3.2, 2.1, mural, 9.21, 2.0, -2.4, -Math.PI / 2);
   panel(1.2, 2.1, muralB, 9.21, 2.0, -0.2, -Math.PI / 2);
 
@@ -350,6 +361,10 @@ export function buildScenery({ scene, track, onTextureLoad }: SceneryOptions): {
   box(0.9, 0.06, 3.6, std({ color: 0xa8703f, roughness: 0.5 }), 8.6, SHOP_FLOOR_Y + 1.08, -1.8);
   for (let pz = -3.4; pz <= -0.2; pz += 0.2) box(0.05, 0.25 + ((pz * 7) % 3) * 0.06, 0.18, pallet, 8.26, SHOP_FLOOR_Y + 1.2, pz);
   panel(0.66, 0.74, photo("/venue/reservations/counter.jpg", { x: 0.492, y: 0.667, w: 0.133, h: 0.198 }), 8.23, SHOP_FLOOR_Y + 0.55, -1.2, -Math.PI / 2);
+  // เมนูชาใต้ตัวจริง (drink-menu.jpg) ติดหน้าบาร์ + แถบภาพเครื่องดื่มบนผนังขวา (counter.jpg)
+  const drinkMenu = photo(RES + "drink-menu.jpg", { x: 0, y: 0, w: 1, h: 1 });
+  panel(0.6, 0.8, drinkMenu, 8.23, SHOP_FLOOR_Y + 0.55, -2.55, -Math.PI / 2);
+  panel(0.5, 1.75, drinkStrip, 9.21, 1.95, -4.9, -Math.PI / 2);
   box(0.3, 0.4, 0.3, black, 8.85, SHOP_FLOOR_Y + 1.31, -2.9);
   box(0.28, 0.34, 0.28, std({ color: 0x3a3a3a, metalness: 0.4 }), 8.85, SHOP_FLOOR_Y + 1.28, -2.4);
   for (let i = 0; i < 4; i++) {
@@ -564,7 +579,7 @@ export function buildScenery({ scene, track, onTextureLoad }: SceneryOptions): {
 
   // วัสดุที่จางได้ต้องรองรับความโปร่งใส
   for (const f of fadeables) for (const m of f.materials) m.userData["baseOpacity"] = m.opacity;
-  return { fadeables };
+  return { fadeables, backdrop };
 }
 
 export interface FurnitureParts {

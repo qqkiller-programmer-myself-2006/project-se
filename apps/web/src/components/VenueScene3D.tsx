@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import type { TableZone } from "../lib/api";
 import { getZone, landmarks, type CameraView, type LandmarkKind, type PlacedTable } from "./venueModel";
+import type { PhotoBackdrop } from "./venuePhotoLayers";
 import { buildFurniture, buildScenery, type Fadeable, type Track } from "./venueScenery";
 
 export type VenueScene3DProps = {
@@ -146,6 +147,7 @@ export function VenueScene3D({
     let tween: null | { from: Orbit; to: Orbit; start: number } = null;
 
     let fadeables: Fadeable[] = [];
+    let backdrop: PhotoBackdrop | null = null;
     const side = new THREE.Vector3();
     /** ผนัง/หลังคาที่บังระหว่างกล้องกับจุดที่มองจะจางลง (แบบบ้านตุ๊กตา) */
     function updateFades() {
@@ -196,6 +198,7 @@ export function VenueScene3D({
         target.z + radius * Math.sin(phi) * Math.cos(theta),
       );
       camera.lookAt(target);
+      backdrop?.update(camera);
       updateFades();
     }
     function applyCamera() {
@@ -257,7 +260,10 @@ export function VenueScene3D({
       scene.add(light);
     }
 
-    fadeables = buildScenery({ scene, track, onTextureLoad: invalidate }).fadeables;
+    const built = buildScenery({ scene, track, onTextureLoad: invalidate });
+    fadeables = built.fadeables;
+    backdrop = built.backdrop;
+    backdrop.update(camera);
 
     // ---------- โต๊ะ (สร้างใหม่เมื่อโครงสร้างชุดโต๊ะเปลี่ยน) ----------
     const tableRoot = new THREE.Group();
@@ -473,9 +479,16 @@ export function VenueScene3D({
       e.preventDefault();
       zoomBy(e.deltaY > 0 ? 1.1 : 1 / 1.1);
     }
+    // context หลุดชั่วคราว (มือถือ/แท็บพื้นหลัง) — รอให้เบราว์เซอร์คืนก่อน ค่อยยอมแพ้ถ้าไม่คืนใน 2.5 วินาที
+    let lostTimer = 0;
     function onContextLost(e: Event) {
       e.preventDefault();
-      setFailed(true);
+      window.clearTimeout(lostTimer);
+      lostTimer = window.setTimeout(() => setFailed(true), 2500);
+    }
+    function onContextRestored() {
+      window.clearTimeout(lostTimer);
+      invalidate();
     }
 
     canvas.addEventListener("pointerdown", onPointerDown);
@@ -484,6 +497,7 @@ export function VenueScene3D({
     canvas.addEventListener("pointercancel", onPointerUp);
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("webglcontextlost", onContextLost);
+    canvas.addEventListener("webglcontextrestored", onContextRestored);
 
     function handleResize() {
       camera.aspect = width() / height();
@@ -505,6 +519,8 @@ export function VenueScene3D({
       apiRef.current = null;
       if (raf) cancelAnimationFrame(raf);
       window.clearTimeout(hintTimer);
+      window.clearTimeout(lostTimer);
+      canvas.removeEventListener("webglcontextrestored", onContextRestored);
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerup", onPointerUp);

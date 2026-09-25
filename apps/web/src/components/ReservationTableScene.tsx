@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import { Component, Suspense, lazy, useEffect, type ReactNode, useMemo, useRef, useState } from "react";
 import { TABLE_ZONE_LABELS, type TableAvailability, type TableZone } from "../lib/api";
 import { VenueFloorPlan } from "./VenueFloorPlan";
 import {
@@ -69,14 +69,43 @@ function useNearViewport<T extends Element>(): [boolean, React.RefObject<T>] {
   const ref = useRef<T>(null);
   const [near, setNear] = useState(() => typeof IntersectionObserver === "undefined");
   useEffect(() => {
-    if (typeof IntersectionObserver === "undefined" || !ref.current) return;
-    const io = new IntersectionObserver((entries) => setNear(entries[entries.length - 1]!.isIntersecting), {
-      rootMargin: "600px 0px",
-    });
-    io.observe(ref.current);
-    return () => io.disconnect();
+    const el = ref.current;
+    if (typeof IntersectionObserver === "undefined" || !el) return;
+    // มี hysteresis: เมานต์เมื่อเข้าใกล้ (600px) แต่ถอดเมื่อไกลมากเท่านั้น (1800px)
+    // กันโมเดลถูกถอด/ใส่ซ้ำตอนเลื่อนไปมาใกล้ขอบ หรือตอนเลย์เอาต์ขยับเพราะข้อมูลโต๊ะโหลดเสร็จ
+    const last = (entries: IntersectionObserverEntry[]) => entries[entries.length - 1]!.isIntersecting;
+    const enter = new IntersectionObserver((entries) => {
+      if (last(entries)) setNear(true);
+    }, { rootMargin: "600px 0px" });
+    const leave = new IntersectionObserver((entries) => {
+      if (!last(entries)) setNear(false);
+    }, { rootMargin: "1800px 0px" });
+    enter.observe(el);
+    leave.observe(el);
+    return () => {
+      enter.disconnect();
+      leave.disconnect();
+    };
   }, []);
   return [near, ref];
+}
+
+/** โหลดชิ้นส่วนสามมิติไม่สำเร็จ (เครือข่ายหลุด) ต้องไม่ทำให้ทั้งหน้าจองล้ม — แสดงข้อความแทน */
+class SceneBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  override state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  override render() {
+    if (this.state.failed) {
+      return (
+        <div className="venue-scene-3d venue-scene-3d--fallback venue-scene-3d--placeholder" role="note">
+          <p>อุปกรณ์นี้แสดงโมเดลสามมิติไม่ได้ เลือกโต๊ะจากรายการด้านล่างได้เลย</p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 type TableListProps = {
@@ -219,6 +248,7 @@ function ZoneSection({
             </button>
           </div>
           {near ? (
+            <SceneBoundary>
             <Suspense
               fallback={
                 <div className="venue-scene-3d venue-scene-3d--fallback venue-scene-3d--placeholder" role="status">
@@ -236,6 +266,7 @@ function ZoneSection({
                 onTableClick={onSelectId}
               />
             </Suspense>
+            </SceneBoundary>
           ) : (
             <div className="venue-scene-3d venue-scene-3d--fallback venue-scene-3d--placeholder">
               <p>เลื่อนมาที่ส่วนนี้เพื่อโหลดโมเดลสามมิติ</p>

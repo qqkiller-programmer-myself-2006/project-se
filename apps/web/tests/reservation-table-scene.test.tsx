@@ -1,9 +1,13 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ReservationTableScene } from "../src/components/ReservationTableScene";
 import type { TableAvailability } from "../src/lib/api";
+
+vi.mock("../src/components/VenueScene3D", () => ({
+  VenueScene3D: ({ focusZoneId }: { focusZoneId: string }) => <div data-testid={`scene-${focusZoneId}`} />,
+}));
 
 const tables: TableAvailability[] = [
   { id: "t-f1", name: "F1", capacity: 4, zone: "front", status: "available" },
@@ -168,5 +172,70 @@ describe("ขั้นเลือกโซนและโต๊ะ (หนึ�
     expect(within(kitchen).getByRole("button", { name: /^ขยายรูป ซุ้มครัว \(ซ้าย\)/ })).toHaveFocus();
     // รูปของโซนอื่นไม่เปลี่ยนตาม
     expect(within(section("โซนหน้าร้าน (ใต้กันสาด)")).getByRole("button", { name: /^ขยายรูป โต๊ะหน้าร้านติดประตู/ })).toBeInTheDocument();
+  });
+});
+
+describe("โมเดลสามมิติแบบโหลดตามการเลื่อน", () => {
+  type Observer = { margin: string; cb: IntersectionObserverCallback; target: Element };
+  const observers: Observer[] = [];
+  const original = globalThis.IntersectionObserver;
+
+  afterEach(() => {
+    globalThis.IntersectionObserver = original;
+    observers.length = 0;
+  });
+
+  function fakeObserver() {
+    globalThis.IntersectionObserver = class {
+      private entry?: Observer;
+      constructor(private cb: IntersectionObserverCallback, opts?: IntersectionObserverInit) {
+        this.margin = opts?.rootMargin ?? "";
+      }
+      margin: string;
+      observe(target: Element) {
+        this.entry = { margin: this.margin, cb: this.cb, target };
+        observers.push(this.entry);
+      }
+      disconnect() {}
+      unobserve() {}
+      takeRecords() {
+        return [];
+      }
+    } as unknown as typeof IntersectionObserver;
+  }
+
+  function fire(zone: string, margin: string, isIntersecting: boolean) {
+    const target = document.querySelector(`#zone-section-${zone} .zone-section__model`)!;
+    for (const o of observers.filter((x) => x.target === target && x.margin === margin)) {
+      act(() => o.cb([{ isIntersecting, target } as IntersectionObserverEntry], {} as IntersectionObserver));
+    }
+  }
+
+  it("โซนที่ยังไกลแสดงข้อความแทน แล้วเมานต์เมื่อเข้าใกล้ และไม่ถอดจนกว่าจะไกลมาก", () => {
+    fakeObserver();
+    render(<Harness />);
+    expect(screen.queryByTestId("scene-dining")).not.toBeInTheDocument();
+    expect(within(section("โซนห้องอาหาร")).getByText("เลื่อนมาที่ส่วนนี้เพื่อโหลดโมเดลสามมิติ")).toBeInTheDocument();
+
+    fire("dining", "600px 0px", true);
+    return screen.findByTestId("scene-dining").then(() => {
+      // ออกจากระยะ 600px แต่ยังอยู่ในระยะ 1800px → ยังต้องอยู่
+      fire("dining", "600px 0px", false);
+      expect(screen.getByTestId("scene-dining")).toBeInTheDocument();
+      // ไกลเกิน 1800px → ถอดคืน WebGL context
+      fire("dining", "1800px 0px", false);
+      expect(screen.queryByTestId("scene-dining")).not.toBeInTheDocument();
+      // เข้าใกล้อีกครั้ง → กลับมาแสดง
+      fire("dining", "600px 0px", true);
+      return screen.findByTestId("scene-dining");
+    });
+  });
+
+  it("เบราว์เซอร์ที่ไม่มี IntersectionObserver เมานต์ทุกโซนทันที", async () => {
+    // @ts-expect-error จำลองสภาพแวดล้อมที่ไม่รองรับ
+    delete globalThis.IntersectionObserver;
+    render(<Harness />);
+    expect(await screen.findByTestId("scene-front")).toBeInTheDocument();
+    expect(await screen.findByTestId("scene-sala")).toBeInTheDocument();
   });
 });
