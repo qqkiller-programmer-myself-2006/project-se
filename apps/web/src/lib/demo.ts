@@ -47,7 +47,8 @@ export function isOfflineError(err: unknown): boolean {
  */
 export function isDemoModeEnabled(): boolean {
   try {
-    const env = (import.meta as unknown as { env?: Record<string, unknown> })?.env;
+    // ต้องเขียน import.meta.env ตรง ๆ — `import.meta?.env` Vite ไม่แทนค่า เบราว์เซอร์จะอ่านได้ undefined เสมอ
+    const env = import.meta.env as unknown as Record<string, unknown> | undefined;
     if (!env) return false;
     const flag = String(env["VITE_DEMO_MODE"] ?? "").toLowerCase() === "true";
     if (!flag) return false;

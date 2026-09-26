@@ -700,6 +700,11 @@
     font-size: 0.75rem;
   }
 
+  /* จอแคบป้ายโต๊ะว่างซ้อนกันจนอ่านไม่ออก — เหลือแค่ชื่อโต๊ะ (จำนวนที่นั่งอยู่ในรายการโต๊ะใต้โมเดล) */
+  .venue-pin--table.is-available > span {
+    display: none;
+  }
+
   .venue-pin--mark {
     font-size: 0.58rem;
   }

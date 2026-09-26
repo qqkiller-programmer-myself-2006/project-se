@@ -30,7 +30,8 @@
 }
 
 /* จุดบอกตำแหน่งบาน — เป็นปุ่มจริง กดเลือกบานได้ */
-.menu-showcase__dot {
+.menu-showcase__dot,
+.menu-showcase__arrow {
   width: 44px;
   height: 44px;
   display: inline-flex;
@@ -39,6 +40,15 @@
   background: none;
   border: 0;
   cursor: pointer;
+}
+/* จอแคบ: 7 จุด + ลูกศร 2 ปุ่มกว้างเกินแถว ลูกศร "ถัดไป" ตกไปบรรทัดใหม่ — บีบเฉพาะความกว้างจุด (สูงคง 44px) */
+@media (max-width: 479px) {
+  .menu-showcase__nav {
+    gap: 0;
+  }
+  .menu-showcase__nav .menu-showcase__dot {
+    width: 32px;
+  }
 }
 .menu-showcase__dot::before {
   content: "";

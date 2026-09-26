@@ -373,6 +373,9 @@ export function VenueScene3D({
         const hidden = projected.z > 1 || x < -40 || x > w + 40 || y < -20 || y > h + 60;
         el.style.transform = `translate(-50%, -100%) translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
         el.style.visibility = hidden ? "hidden" : "visible";
+        // ป้ายโต๊ะที่ใกล้กล้องกว่าต้องทับป้ายที่อยู่ไกล (ลำดับใน DOM ไม่เกี่ยวกับระยะ) · โต๊ะที่เลือกอยู่บนสุดเสมอ
+        const depth = Math.round((1 - projected.z) * 1000);
+        el.style.zIndex = String(el.classList.contains("is-selected") ? 5000 + depth : depth);
       }
     }
 

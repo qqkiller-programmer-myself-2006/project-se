@@ -37,7 +37,8 @@ function fmtPrice(n: number): string {
  */
 function isDevMenuFallbackEnabled(): boolean {
   try {
-    const env = (import.meta as unknown as { env?: Record<string, unknown> })?.env;
+    // ต้องเขียน import.meta.env ตรง ๆ — `import.meta?.env` Vite ไม่แทนค่า เบราว์เซอร์จะอ่านได้ undefined เสมอ
+    const env = import.meta.env as unknown as Record<string, unknown> | undefined;
     return env?.["DEV"] === true;
   } catch {
     return false;
@@ -52,8 +53,8 @@ function isMenuFallbackError(err: unknown): boolean {
   return isOfflineError(err);
 }
 
-function openingText(status: ShopStatus | null): string {
-  if (!status) return "กำลังตรวจสอบเวลาเปิด…";
+function openingText(status: ShopStatus | null, loading: boolean): string {
+  if (!status) return loading ? "กำลังตรวจสอบเวลาเปิด…" : "ยังตรวจสอบเวลาเปิดไม่ได้ ดูได้ที่หน้าสถานะร้าน";
   if (!status.isOpen) {
     return status.reason ? `ปิดชั่วคราว · ${status.reason}` : "ปิดอยู่ในขณะนี้";
   }
@@ -102,7 +103,8 @@ export default function LandingPage() {
         setStatus(null);
         setDemo(true);
       } else {
-        setError(err instanceof Error ? err.message : "โหลดหน้าแรกไม่สำเร็จ");
+        // ข้อความดิบของเบราว์เซอร์ ("Failed to fetch") เป็นภาษาอังกฤษ ลูกค้าไม่เข้าใจ
+        setError(isOfflineError(err) ? "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่" : err instanceof Error ? err.message : "โหลดหน้าแรกไม่สำเร็จ");
       }
     } finally {
       setLoading(false);
@@ -178,7 +180,7 @@ export default function LandingPage() {
           </Link>
         </div>
         <p className="luxe-line-in mt-8 text-sm text-ink-300" style={{ ["--motion-delay" as string]: "360ms" }}>
-          {demo ? "ข้อมูลตัวอย่าง (API ใช้ไม่ได้)" : openingText(status)}
+          {demo ? "ข้อมูลตัวอย่าง (API ใช้ไม่ได้)" : openingText(status, loading)}
         </p>
         {demo ? (
           <div className="mt-4 flex justify-center">
@@ -278,12 +280,12 @@ export default function LandingPage() {
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center justify-center gap-1">
+              <div className="menu-showcase__nav flex items-center justify-center gap-1">
                 <button
                   type="button"
                   onClick={() => rotate(-1)}
                   aria-label="หมุนไปเมนูก่อนหน้า"
-                  className="menu-showcase__dot text-ink-50"
+                  className="menu-showcase__arrow text-ink-50"
                 >
                   <Icon name="chevronLeft" size={20} />
                 </button>
@@ -301,7 +303,7 @@ export default function LandingPage() {
                   type="button"
                   onClick={() => rotate(1)}
                   aria-label="หมุนไปเมนูถัดไป"
-                  className="menu-showcase__dot text-ink-50"
+                  className="menu-showcase__arrow text-ink-50"
                 >
                   <Icon name="chevronRight" size={20} />
                 </button>

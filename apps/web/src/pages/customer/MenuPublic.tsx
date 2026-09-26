@@ -27,7 +27,8 @@ function fmtDelta(n: number): string {
  */
 function isDevMenuFallbackEnabled(): boolean {
   try {
-    const env = (import.meta as unknown as { env?: Record<string, unknown> })?.env;
+    // ต้องเขียน import.meta.env ตรง ๆ — `import.meta?.env` Vite ไม่แทนค่า เบราว์เซอร์จะอ่านได้ undefined เสมอ
+    const env = import.meta.env as unknown as Record<string, unknown> | undefined;
     return env?.["DEV"] === true;
   } catch {
     return false;
@@ -82,7 +83,7 @@ export default function MenuPublicPage() {
         setDemo(true);
         setError(null);
       } else {
-        setError(err instanceof Error ? err.message : "โหลดเมนูไม่สำเร็จ");
+        setError(isOfflineError(err) ? "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่" : err instanceof Error ? err.message : "โหลดเมนูไม่สำเร็จ");
       }
     } finally {
       setLoading(false);

@@ -386,7 +386,13 @@ export function buildScenery({ scene, track, onTextureLoad }: SceneryOptions): {
   box(0.5, 0.15, 0.35, white, 7.3, 0.85, -9.3);
 
   // หน้าอาคาร: ป้ายหลังคาแดง "อาคาร 3 ขวัญใจ" + ป้ายไวนิลอาหาร/เครื่องดื่ม + ประตูกระจกบานเลื่อน (จางเมื่อมองเข้าไปในร้าน)
-  const fascia = track(new THREE.MeshStandardMaterial({ map: textTexture(track, "อาคาร 3 ขวัญใจ", "#9c3a2c", "#f7efe6"), roughness: 0.6 }));
+  // canvas ต้องสัดส่วนเท่าป้ายจริง (15.5 × 0.9 ม.) ไม่งั้นตัวหนังสือถูกยืดแนวนอน ~2.7 เท่า
+  const fascia = track(
+    new THREE.MeshStandardMaterial({
+      map: textTexture(track, "อาคาร 3 ขวัญใจ", "#9c3a2c", "#f7efe6", 2048, Math.round((2048 * 0.9) / 15.5), 76),
+      roughness: 0.6,
+    }),
+  );
   const bannerFood = photo(SITE + "exterior-from-parking.jpg", { x: 0.4325, y: 0.243, w: 0.2275, h: 0.098 });
   const bannerDrink = photo(SITE + "exterior-from-parking.jpg", { x: 0.66, y: 0.243, w: 0.19, h: 0.098 });
   const pillar = std({ ...yellowWall });
@@ -652,7 +658,9 @@ export function buildFurniture(
       : style === "dark"
         ? darkWood
         : legBlack;
-  const legGeo = getGeo(`leg-${height}`, () => new THREE.BoxGeometry(style === "folding" ? 0.04 : 0.07, height, style === "folding" ? 0.04 : 0.07));
+  // ขนาดขาต่างกันตามสไตล์ — key ต้องรวมความหนา ไม่งั้นโต๊ะพับได้ขาหนาตามโต๊ะไม้ที่สร้างก่อน (แคชใช้ร่วมทั้งร้าน)
+  const legSize = style === "folding" ? 0.04 : 0.07;
+  const legGeo = getGeo(`leg-${legSize}-${height}`, () => new THREE.BoxGeometry(legSize, height, legSize));
   for (const sx of [-1, 1]) {
     for (const sz of [-1, 1]) add(legGeo, legMat, sx * (length / 2 - 0.08), height / 2, sz * (depth / 2 - 0.08));
   }
@@ -694,7 +702,8 @@ export function buildFurniture(
   // ของบนโต๊ะ (เหยือกน้ำฝาชมพู กล่องทิชชู) ตามรูปห้องอาหาร
   if (style !== "bar") {
     add(getGeo("jug", () => new THREE.CylinderGeometry(0.07, 0.08, 0.22, 10)), getMat("jug", () => new THREE.MeshStandardMaterial({ color: 0xeaf4f7, roughness: 0.2, transparent: true, opacity: 0.8 })), -length / 2 + 0.2, height + 0.14, -0.1);
-    add(getGeo("jug-lid", () => new THREE.CylinderGeometry(0.075, 0.075, 0.04, 10)), getMat("jug-lid", () => new THREE.MeshStandardMaterial({ color: style === "wood" ? 0xf08bb4 : 0x7fd3c4 })), -length / 2 + 0.2, height + 0.27, -0.1);
+    const lidColor = style === "wood" ? 0xf08bb4 : 0x7fd3c4;
+    add(getGeo("jug-lid", () => new THREE.CylinderGeometry(0.075, 0.075, 0.04, 10)), getMat(`jug-lid-${lidColor}`, () => new THREE.MeshStandardMaterial({ color: lidColor })), -length / 2 + 0.2, height + 0.27, -0.1);
     add(getGeo("tissue", () => new THREE.BoxGeometry(0.16, 0.08, 0.1)), getMat("tissue", () => new THREE.MeshStandardMaterial({ color: 0x8a5a33 })), -length / 2 + 0.45, height + 0.07, 0.1);
   }
 
