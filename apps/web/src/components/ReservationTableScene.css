@@ -637,6 +637,8 @@
   inset: 0;
   overflow: hidden;
   pointer-events: none;
+  /* z-index ของป้าย (ตามระยะจากกล้อง) ต้องไม่หลุดไปแข่งกับแถบจอง/dialog/lightbox ของหน้า */
+  isolation: isolate;
 }
 
 .venue-pin {
@@ -738,7 +740,6 @@
   background: var(--tp-selected);
   border-color: var(--tp-selected);
   transform-origin: bottom center;
-  z-index: 2;
 }
 
 .venue-pin em {

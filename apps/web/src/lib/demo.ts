@@ -33,6 +33,34 @@ export function isOfflineError(err: unknown): boolean {
 }
 
 /**
+ * fetch ล้มเหลวระดับเครือข่ายจริง (ดูจากข้อความของเบราว์เซอร์) — แคบกว่า isOfflineError
+ * ซึ่งนับ TypeError ทุกตัว (รวม bug ในโค้ด/response ผิดรูป) ไม่ให้บอกลูกค้าผิดว่าเน็ตมีปัญหา
+ */
+function isNetworkFailure(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  return /failed to fetch|networkerror|network error|fetch failed|load failed/i.test(msg);
+}
+
+/** ข้อความ error สำหรับลูกค้า: เครือข่ายล้มเหลวเป็นภาษาไทย (แทน "Failed to fetch") ที่เหลือใช้ข้อความจริง */
+export function loadErrorMessage(err: unknown, fallback: string): string {
+  if (isNetworkFailure(err)) return "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่";
+  return err instanceof Error ? err.message : fallback;
+}
+
+/**
+ * true เฉพาะ dev server — ต้องเขียน import.meta.env ตรง ๆ
+ * (`import.meta?.env` Vite ไม่แทนค่า เบราว์เซอร์จะอ่านได้ undefined เสมอ · build จริงแทนเป็น DEV: false)
+ */
+export function isDevEnv(): boolean {
+  try {
+    const env = import.meta.env as unknown as Record<string, unknown> | undefined;
+    return env?.["DEV"] === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Safe dev-only demo-mode flag.
  *
  * Enabled ONLY when ALL hold:

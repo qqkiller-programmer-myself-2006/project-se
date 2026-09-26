@@ -151,7 +151,9 @@ function textTexture(track: Track, text: string, bg: string, fg: string, width =
     ctx.fillRect(0, 0, width, height);
     // ลอนหลังคาเมทัลชีท
     ctx.fillStyle = "rgba(0,0,0,0.08)";
-    for (let x = 0; x < width; x += 24) ctx.fillRect(x, 0, 10, height);
+    // ระยะลอนคิดตามสัดส่วนความกว้าง canvas — ป้ายที่ใช้ canvas กว้างขึ้นลอนต้องไม่ถี่ขึ้น
+    const rib = width / 1024;
+    for (let x = 0; x < width; x += 24 * rib) ctx.fillRect(x, 0, 10 * rib, height);
     ctx.fillStyle = fg;
     ctx.font = `bold ${font}px Tahoma, 'Noto Sans Thai', sans-serif`;
     ctx.textBaseline = "middle";

@@ -357,6 +357,7 @@ export function VenueScene3D({
     function positionPins() {
       const w = width();
       const h = height();
+      const selectedKey = `table:${stateRef.current.selected}`;
       for (const [key, el] of pins) {
         if (key.startsWith("mark:")) {
           const anchor = markAnchors.get(key.slice(5) as LandmarkKind);
@@ -367,6 +368,8 @@ export function VenueScene3D({
           if (!v) continue;
           v.anchor.getWorldPosition(projected);
         }
+        // ระยะจริงจากกล้อง (NDC z ไม่เป็นเส้นตรง — โต๊ะไกล ๆ จะได้ค่าเท่ากันหมด)
+        const distance = camera.position.distanceTo(projected);
         projected.project(camera);
         const x = (projected.x * 0.5 + 0.5) * w;
         const y = (-projected.y * 0.5 + 0.5) * h;
@@ -374,8 +377,8 @@ export function VenueScene3D({
         el.style.transform = `translate(-50%, -100%) translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
         el.style.visibility = hidden ? "hidden" : "visible";
         // ป้ายโต๊ะที่ใกล้กล้องกว่าต้องทับป้ายที่อยู่ไกล (ลำดับใน DOM ไม่เกี่ยวกับระยะ) · โต๊ะที่เลือกอยู่บนสุดเสมอ
-        const depth = Math.round((1 - projected.z) * 1000);
-        el.style.zIndex = String(el.classList.contains("is-selected") ? 5000 + depth : depth);
+        const depth = Math.max(0, Math.round(1000 - distance * 10));
+        el.style.zIndex = String(key === selectedKey ? 2000 + depth : depth);
       }
     }
 

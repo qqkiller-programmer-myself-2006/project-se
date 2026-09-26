@@ -7,7 +7,7 @@ import {
   type ShopStatus,
 } from "../../lib/api";
 import { cartCount, loadCart } from "../../lib/cart";
-import { DEMO_MENU_GROUPS_WITH_FOOD, isOfflineError } from "../../lib/demo";
+import { DEMO_MENU_GROUPS_WITH_FOOD, isDevEnv, isOfflineError, loadErrorMessage } from "../../lib/demo";
 import { ConnectionBanner, DemoBadge } from "../../components/demo";
 import { resolveTableContext } from "../../lib/tableContext";
 import { Alert, primaryButtonClass, secondaryButtonClass } from "../../components/ui";
@@ -36,13 +36,7 @@ function fmtPrice(n: number): string {
  * build production จึงไม่มีทางตกไปใช้ข้อมูลตัวอย่างเองได้
  */
 function isDevMenuFallbackEnabled(): boolean {
-  try {
-    // ต้องเขียน import.meta.env ตรง ๆ — `import.meta?.env` Vite ไม่แทนค่า เบราว์เซอร์จะอ่านได้ undefined เสมอ
-    const env = import.meta.env as unknown as Record<string, unknown> | undefined;
-    return env?.["DEV"] === true;
-  } catch {
-    return false;
-  }
+  return isDevEnv();
 }
 
 /**
@@ -104,7 +98,7 @@ export default function LandingPage() {
         setDemo(true);
       } else {
         // ข้อความดิบของเบราว์เซอร์ ("Failed to fetch") เป็นภาษาอังกฤษ ลูกค้าไม่เข้าใจ
-        setError(isOfflineError(err) ? "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่" : err instanceof Error ? err.message : "โหลดหน้าแรกไม่สำเร็จ");
+        setError(loadErrorMessage(err, "โหลดหน้าแรกไม่สำเร็จ"));
       }
     } finally {
       setLoading(false);

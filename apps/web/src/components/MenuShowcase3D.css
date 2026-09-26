@@ -46,8 +46,15 @@
   .menu-showcase__nav {
     gap: 0;
   }
+  /* 7×28 + 2×44 = 284px พอดีจอ 360px (หักขอบหน้าและขอบตู้ 72px) */
   .menu-showcase__nav .menu-showcase__dot {
-    width: 32px;
+    width: 28px;
+  }
+}
+/* จอเล็กกว่านั้นจุดจะถูกบีบต่ำกว่าเป้าแตะ — เหลือลูกศร (ชื่อเมนูหน้าตู้อ่านได้จาก live region) */
+@media (max-width: 359px) {
+  .menu-showcase__nav .menu-showcase__dot {
+    display: none;
   }
 }
 .menu-showcase__dot::before {

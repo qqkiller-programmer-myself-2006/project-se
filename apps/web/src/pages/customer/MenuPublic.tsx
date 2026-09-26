@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { MENU_KIND_LABELS, api, type MenuKind, type PublicMenuGroupWithOptions } from "../../lib/api";
-import { DEMO_MENU_GROUPS_WITH_FOOD, isOfflineError } from "../../lib/demo";
+import { DEMO_MENU_GROUPS_WITH_FOOD, isDevEnv, isOfflineError, loadErrorMessage } from "../../lib/demo";
 import { Alert, Badge, Panel } from "../../components/ui";
 import { DepthHero, MotionReveal, Skeleton, StaggerItem, StaggerList, TiltCard } from "../../components/motion";
 import { ConnectionBanner, DemoBadge } from "../../components/demo";
@@ -26,13 +26,7 @@ function fmtDelta(n: number): string {
  * so production builds can never automatically fall back to fixtures.
  */
 function isDevMenuFallbackEnabled(): boolean {
-  try {
-    // ต้องเขียน import.meta.env ตรง ๆ — `import.meta?.env` Vite ไม่แทนค่า เบราว์เซอร์จะอ่านได้ undefined เสมอ
-    const env = import.meta.env as unknown as Record<string, unknown> | undefined;
-    return env?.["DEV"] === true;
-  } catch {
-    return false;
-  }
+  return isDevEnv();
 }
 
 /**
@@ -83,7 +77,8 @@ export default function MenuPublicPage() {
         setDemo(true);
         setError(null);
       } else {
-        setError(isOfflineError(err) ? "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่" : err instanceof Error ? err.message : "โหลดเมนูไม่สำเร็จ");
+        // ข้อความดิบของเบราว์เซอร์ ("Failed to fetch") เป็นภาษาอังกฤษ ลูกค้าไม่เข้าใจ
+        setError(loadErrorMessage(err, "โหลดเมนูไม่สำเร็จ"));
       }
     } finally {
       setLoading(false);
