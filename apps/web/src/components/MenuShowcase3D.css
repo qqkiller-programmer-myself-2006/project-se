@@ -30,7 +30,8 @@
 }
 
 /* จุดบอกตำแหน่งบาน — เป็นปุ่มจริง กดเลือกบานได้ */
-.menu-showcase__dot {
+.menu-showcase__dot,
+.menu-showcase__arrow {
   width: 44px;
   height: 44px;
   display: inline-flex;
@@ -39,6 +40,22 @@
   background: none;
   border: 0;
   cursor: pointer;
+}
+/* จอแคบ: 7 จุด + ลูกศร 2 ปุ่มกว้างเกินแถว ลูกศร "ถัดไป" ตกไปบรรทัดใหม่ — บีบเฉพาะความกว้างจุด (สูงคง 44px) */
+@media (max-width: 479px) {
+  .menu-showcase__nav {
+    gap: 0;
+  }
+  /* 7×28 + 2×44 = 284px พอดีจอ 360px (หักขอบหน้าและขอบตู้ 72px) */
+  .menu-showcase__nav .menu-showcase__dot {
+    width: 28px;
+  }
+}
+/* จอเล็กกว่านั้นจุดจะถูกบีบต่ำกว่าเป้าแตะ — เหลือลูกศร (ชื่อเมนูหน้าตู้อ่านได้จาก live region) */
+@media (max-width: 359px) {
+  .menu-showcase__nav .menu-showcase__dot {
+    display: none;
+  }
 }
 .menu-showcase__dot::before {
   content: "";

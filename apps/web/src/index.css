@@ -252,6 +252,10 @@ body {
 .pa-hero .text-ink-500 {
   color: var(--color-ink-50);
 }
+/* ป้ายโหมดสาธิตมีพื้นเหลืองอ่อนของตัวเอง — กฎ .pa-hero p ข้างบนทำให้ตัวหนังสือขาวบนเหลือง อ่านไม่ออก */
+.pa-hero .pa-demo-badge {
+  color: #713f12;
+}
 
 /* Section title: small brass rule above display type, not a coloured chip */
 .pa-section-title {

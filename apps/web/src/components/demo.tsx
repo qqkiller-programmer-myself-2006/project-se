@@ -6,7 +6,7 @@ export function DemoBadge({ className = "" }: { className?: string }) {
   return (
     <p
       role="status"
-      className={`inline-flex min-h-[44px] items-center gap-2 rounded-full border border-[#A16207] bg-[#FEF3C7] px-4 py-2 text-sm font-bold text-[#713F12] ${className}`}
+      className={`pa-demo-badge inline-flex min-h-[44px] items-center gap-2 rounded-full border border-[#A16207] bg-[#FEF3C7] px-4 py-2 text-sm font-bold text-[#713F12] ${className}`}
     >
       <Icon name="flame" size={18} />
       {DEMO_MODE_LABEL}

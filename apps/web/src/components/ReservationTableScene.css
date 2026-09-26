@@ -637,6 +637,8 @@
   inset: 0;
   overflow: hidden;
   pointer-events: none;
+  /* z-index ของป้าย (ตามระยะจากกล้อง) ต้องไม่หลุดไปแข่งกับแถบจอง/dialog/lightbox ของหน้า */
+  isolation: isolate;
 }
 
 .venue-pin {
@@ -700,6 +702,11 @@
     font-size: 0.75rem;
   }
 
+  /* จอแคบป้ายโต๊ะว่างซ้อนกันจนอ่านไม่ออก — เหลือแค่ชื่อโต๊ะ (จำนวนที่นั่งอยู่ในรายการโต๊ะใต้โมเดล) */
+  .venue-pin--table.is-available > span {
+    display: none;
+  }
+
   .venue-pin--mark {
     font-size: 0.58rem;
   }
@@ -733,7 +740,6 @@
   background: var(--tp-selected);
   border-color: var(--tp-selected);
   transform-origin: bottom center;
-  z-index: 2;
 }
 
 .venue-pin em {
