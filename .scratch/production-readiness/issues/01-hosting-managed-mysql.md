@@ -176,3 +176,26 @@ Managed MySQL (vendor เดียว)**
 2. Vitess compatibility (ถ้าจะใช้ชุดสำรอง) — ยกให้ Ticket 05
 3. Reconcile จำนวน migration (14/15/16) — ยกให้ Ticket 05/08
 4. Backup automation + restore rehearsal จริง — Ticket 08; release E2E — Ticket 09
+
+## Comments
+
+- 2026-09-25/27: Owner ไม่ได้ทำตามคำแนะนำข้อ 3 ข้างบน — ระบบถูก deploy จริงบน **Vercel
+  (Web static + `api/index.ts` เป็น serverless function) + Supabase Managed PostgreSQL**
+  (`db.fvdyeblfpeyuqwgtbgzr.supabase.co`, region `ap-southeast-1`) แทน DigitalOcean App
+  Platform + DigitalOcean Managed MySQL ตามคำแนะนำในข้อ 3
+  - หลักฐาน: commit `4923db8` (`feat: connect Supabase deployment...`) เพิ่ม
+    `apps/api/src/db-url.ts`/`pg-compat.ts` (แปล SQL สำเนียง MySQL ให้รันบน Postgres),
+    `db/supabase/*.sql` (migration เดิมพอร์ตมาเป็น Postgres DDL), `vercel.json`
+  - `getDatabaseDialect()` (`apps/api/src/db-url.ts`) ยังรองรับทั้ง `mysql://` และ
+    `postgres://` — MySQL ยังเป็นค่าเริ่มต้นของ local/dev/tests ตาม comment ในไฟล์
+    (pg-compat ระบุว่าเป็น "เส้นทางชั่วคราว") แต่ **production ที่ใช้งานจริงคือ Postgres
+    ผ่าน Vercel/Supabase ไม่ใช่ MySQL ตามคำแนะนำเดิม**
+  - ยืนยันจริงผ่าน Vercel MCP (2026-09-27): production (`project-se-rose.vercel.app`)
+    ตอบ 200 พร้อมข้อมูลจาก Supabase จริง (`x-menu-source: db`, เมนู 38 รายการ)
+  - ผลคือ **ตาราง 2.1/2.2 และคำแนะนำในข้อ 3 (DigitalOcean A+D, สำรอง Railway+PlanetScale
+    B+E) ไม่ตรงกับ stack จริงอีกต่อไป** — เก็บไว้เป็นหลักฐานการตัดสินใจ ณ วันที่ตรวจ
+    (2026-09-18) แต่ Ticket 04/05/09 ที่อ้างอิง MySQL/DigitalOcean ต้องอ่านคู่กับ comment
+    นี้ ไม่ใช่ใช้เป็น current-state โดยตรง
+  - Vercel มี dashboard access ที่ session นี้ยังอ่าน environment variables ไม่ได้ (403) —
+    ยังไม่มีหลักฐานจาก repo ว่า Owner ตัดสินใจย้าย stack ด้วยเหตุผลอะไร (ราคา/ความเร็ว
+    ตั้งค่า/อื่น ๆ) — ควรให้ Owner ยืนยันเหตุผลไว้เป็นบันทึกถ้าต้องการอ้างอิงภายหลัง

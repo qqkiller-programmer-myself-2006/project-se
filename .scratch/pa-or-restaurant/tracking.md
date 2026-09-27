@@ -313,6 +313,33 @@
 - Verification: `npm run typecheck -w apps/web`, `npm run build -w apps/web`, `npm test -w apps/web` และ `git diff --check` ผ่าน; agy independent review ไม่พบ Critical/High/Medium finding
 - ข้อสังเกต deferred: mobile nav อาจเพิ่ม gradient hint ได้ภายหลัง, fallback 2D อาจแสดงรูปอาหารได้, Vite ยังมี warning เรื่อง chunk Three.js ขนาดใหญ่
 
+### Ticket 17 — Browser QA bugfix pass + production deploy fix (2026-09-26/27)
+
+- **PR #29** (`claude/ui-ux-3d-model-bugs-txer1d`, merged): พบและแก้บัค UI/UX + 3D 12 จุด
+  ผ่าน browser QA จริง (Playwright + `code-review` skill) ไม่ใช่จาก unit test — สรุปรายละเอียด
+  อยู่ใน `.scratch/pa-or-restaurant/issues/17-pa-or-logo-customer-3d.md` comment 2026-09-26/27
+  - 3D: tainted-canvas WebGL error บนตู้โชว์เมนู (รูปจาก R2 ไม่ตั้ง CORS), pin โต๊ะจัดลำดับความลึก
+    ผิดจน z-index ทับ reservation bar, cache ของเฟอร์นิเจอร์ปนกันข้ามสไตล์โต๊ะ
+  - UI: `import.meta.env` เขียนผิดรูปแบบใน 3 ไฟล์ทำให้ Vite ไม่ inline ค่าตอน build (demo
+    fallback ไม่ทำงานจริง), ปุ่มเลื่อนตู้โชว์ล้นจอมือถือแคบ, demo badge อ่านไม่ออก
+  - Verification: typecheck ผ่าน, vitest 350 ผ่าน/1 ข้าม, build ผ่าน, ยืนยัน visual bug ด้วย
+    screenshot จริงและจำลอง environment จริง (CORS-less local server, `isolation: auto`
+    override เพื่อพิสูจน์ regression)
+- **PR #30** (`claude/ui-ux-3d-model-bugs-txer1d`, merged): พบและแก้บัค deploy — Owner รายงาน
+  "หน้าเว็บไม่ขึ้นข้อมูล แต่ Supabase ยังโหลดไม่จบ" ตรวจจริงผ่าน Vercel/Supabase MCP พบว่า
+  ข้อมูลใน Supabase สมบูรณ์และ production ทำงานถูกอยู่แล้ว (`x-menu-source: db`); 503 ทั้งหมด
+  (22 ครั้งใน 24 ชม.) มาจาก **Preview** deployment ที่ไม่มี `DATABASE_URL` — ไม่ใช่บัคของโค้ด
+  - แก้ที่ทำได้จากโค้ด: `vercel.json` เพิ่ม `regions: ["sin1"]` ให้ทุก deployment รันข้าง
+    Supabase (`ap-southeast-1`) เสมอ (ไม่พึ่งค่า default ของ dashboard); `apps/web/src/lib/api.ts`
+    แปล `{"error":"service_unavailable"}` เป็นข้อความไทยแทนโชว์รหัสดิบ
+  - Owner action ที่ยังต้องทำเอง (บันทึกไว้ใน Ticket 04 ของ `production-readiness`):
+    ตั้ง `DATABASE_URL` ให้ environment Preview ใน Vercel dashboard — session นี้อ่าน env vars
+    ของ Vercel project ไม่ได้ (403)
+  - ผลข้างเคียงสำคัญ: พบว่า stack จริงที่ deploy คือ **Vercel + Supabase PostgreSQL** ไม่ใช่
+    DigitalOcean + MySQL ตามคำแนะนำเดิมของ `.scratch/production-readiness/issues/01-*.md`
+    — อัปเดต comment ของ ticket 01/04/05/09 ใน `production-readiness` ให้ตรงกับ stack จริงแล้ว
+    (ดูรายละเอียดที่ไฟล์เหล่านั้น)
+
 ## Roadmap หลัง Ticket 06
 
 - Ticket 07: ตัวเลือกเมนู สูตร และสต๊อก
