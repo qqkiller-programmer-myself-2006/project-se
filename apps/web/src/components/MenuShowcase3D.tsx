@@ -185,6 +185,7 @@ export function MenuShowcase3D({ items, activeIndex, onActiveIndexChange }: Menu
     const step = (Math.PI * 2) / count;
     const radius = Math.max(2.4, (count * PANEL_WIDTH * PANEL_GAP) / (Math.PI * 2));
 
+    let disposed = false;
     const disposables: { dispose: () => void }[] = [];
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
@@ -255,8 +256,13 @@ export function MenuShowcase3D({ items, activeIndex, onActiveIndexChange }: Menu
 
         if (item.imageUrl) {
           const image = new Image();
+          // รูปเมนูจริงอยู่บน R2 (คนละ origin) — ต้องขอแบบ CORS ไม่งั้น canvas ติด taint
+          // แล้ว WebGL อัปโหลดเป็น texture ไม่ได้ (SecurityError) บานจะค้างเป็น "ปอ" ตลอด
+          // เซิร์ฟเวอร์ที่ไม่ตอบ CORS header → รูปโหลดไม่ขึ้น (onerror) บานคงเป็น "ปอ" แต่ไม่พัง
+          image.crossOrigin = "anonymous";
           image.decoding = "async";
           image.onload = () => {
+            if (disposed) return;
             loaded = image;
             repaint();
           };
@@ -265,10 +271,11 @@ export function MenuShowcase3D({ items, activeIndex, onActiveIndexChange }: Menu
         }
       }
 
+      // ด้านหน้าอย่างเดียว — บานฝั่งหลังตู้จะเห็นแผ่นทองเหลือง ไม่ใช่ตัวหนังสือกลับด้าน
       const panelMaterial = new THREE.MeshBasicMaterial({
         map: texture,
         transparent: true,
-        side: THREE.DoubleSide,
+        side: THREE.FrontSide,
       });
       disposables.push(panelMaterial);
 
@@ -292,7 +299,7 @@ export function MenuShowcase3D({ items, activeIndex, onActiveIndexChange }: Menu
           opacity: 0.5,
           blending: THREE.AdditiveBlending,
           depthWrite: false,
-          side: THREE.DoubleSide,
+          side: THREE.FrontSide,
         });
         disposables.push(glassMaterial);
         const glass = new THREE.Mesh(panelGeometry, glassMaterial);
@@ -309,7 +316,6 @@ export function MenuShowcase3D({ items, activeIndex, onActiveIndexChange }: Menu
     let dragMoved = false;
     let lastX = 0;
     let raf: number | null = null;
-    let disposed = false;
 
     function targetAngle(): number {
       // เลือกรอบที่ใกล้มุมปัจจุบันที่สุด ไม่ให้หมุนย้อนข้ามทั้งวงเมื่อวนกลับ index 0
@@ -340,9 +346,12 @@ export function MenuShowcase3D({ items, activeIndex, onActiveIndexChange }: Menu
       camera.updateProjectionMatrix();
     }
 
+    /** ตู้อยู่นอกจอ → หยุด render (ไม่งั้นมือถือเผา GPU/แบตทั้งที่ไม่มีใครเห็น) */
+    let onScreen = true;
+
     function frame() {
       raf = null;
-      if (disposed) return;
+      if (disposed || !onScreen) return;
       if (!dragging) {
         if (!reduced && performance.now() > idleUntilRef.current) {
           // ไหลไปบานถัดไปเองเมื่อผู้ใช้ไม่ได้แตะมาสักพัก
@@ -404,6 +413,14 @@ export function MenuShowcase3D({ items, activeIndex, onActiveIndexChange }: Menu
 
     const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(resize) : null;
     resizeObserver?.observe(stage);
+    const visibilityObserver =
+      typeof IntersectionObserver !== "undefined"
+        ? new IntersectionObserver((entries) => {
+            onScreen = entries[entries.length - 1]!.isIntersecting;
+            if (onScreen && raf === null && !disposed) frame();
+          })
+        : null;
+    visibilityObserver?.observe(stage);
     window.addEventListener("resize", resize);
     resize();
     frame();
@@ -412,6 +429,7 @@ export function MenuShowcase3D({ items, activeIndex, onActiveIndexChange }: Menu
       disposed = true;
       if (raf !== null) cancelAnimationFrame(raf);
       resizeObserver?.disconnect();
+      visibilityObserver?.disconnect();
       window.removeEventListener("resize", resize);
       renderer.domElement.removeEventListener("pointerdown", onPointerDown);
       renderer.domElement.removeEventListener("pointermove", onPointerMove);

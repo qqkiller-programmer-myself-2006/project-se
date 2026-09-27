@@ -7,7 +7,7 @@ import {
   type ShopStatus,
 } from "../../lib/api";
 import { cartCount, loadCart } from "../../lib/cart";
-import { DEMO_MENU_GROUPS_WITH_FOOD, isOfflineError } from "../../lib/demo";
+import { DEMO_MENU_GROUPS_WITH_FOOD, isDevEnv, isOfflineError, loadErrorMessage } from "../../lib/demo";
 import { ConnectionBanner, DemoBadge } from "../../components/demo";
 import { resolveTableContext } from "../../lib/tableContext";
 import { Alert, primaryButtonClass, secondaryButtonClass } from "../../components/ui";
@@ -36,12 +36,7 @@ function fmtPrice(n: number): string {
  * build production จึงไม่มีทางตกไปใช้ข้อมูลตัวอย่างเองได้
  */
 function isDevMenuFallbackEnabled(): boolean {
-  try {
-    const env = (import.meta as unknown as { env?: Record<string, unknown> })?.env;
-    return env?.["DEV"] === true;
-  } catch {
-    return false;
-  }
+  return isDevEnv();
 }
 
 /**
@@ -52,8 +47,8 @@ function isMenuFallbackError(err: unknown): boolean {
   return isOfflineError(err);
 }
 
-function openingText(status: ShopStatus | null): string {
-  if (!status) return "กำลังตรวจสอบเวลาเปิด…";
+function openingText(status: ShopStatus | null, loading: boolean): string {
+  if (!status) return loading ? "กำลังตรวจสอบเวลาเปิด…" : "ยังตรวจสอบเวลาเปิดไม่ได้ ดูได้ที่หน้าสถานะร้าน";
   if (!status.isOpen) {
     return status.reason ? `ปิดชั่วคราว · ${status.reason}` : "ปิดอยู่ในขณะนี้";
   }
@@ -102,7 +97,8 @@ export default function LandingPage() {
         setStatus(null);
         setDemo(true);
       } else {
-        setError(err instanceof Error ? err.message : "โหลดหน้าแรกไม่สำเร็จ");
+        // ข้อความดิบของเบราว์เซอร์ ("Failed to fetch") เป็นภาษาอังกฤษ ลูกค้าไม่เข้าใจ
+        setError(loadErrorMessage(err, "โหลดหน้าแรกไม่สำเร็จ"));
       }
     } finally {
       setLoading(false);
@@ -178,7 +174,7 @@ export default function LandingPage() {
           </Link>
         </div>
         <p className="luxe-line-in mt-8 text-sm text-ink-300" style={{ ["--motion-delay" as string]: "360ms" }}>
-          {demo ? "ข้อมูลตัวอย่าง (API ใช้ไม่ได้)" : openingText(status)}
+          {demo ? "ข้อมูลตัวอย่าง (API ใช้ไม่ได้)" : openingText(status, loading)}
         </p>
         {demo ? (
           <div className="mt-4 flex justify-center">
@@ -278,12 +274,12 @@ export default function LandingPage() {
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center justify-center gap-1">
+              <div className="menu-showcase__nav flex items-center justify-center gap-1">
                 <button
                   type="button"
                   onClick={() => rotate(-1)}
                   aria-label="หมุนไปเมนูก่อนหน้า"
-                  className="menu-showcase__dot text-ink-50"
+                  className="menu-showcase__arrow text-ink-50"
                 >
                   <Icon name="chevronLeft" size={20} />
                 </button>
@@ -301,7 +297,7 @@ export default function LandingPage() {
                   type="button"
                   onClick={() => rotate(1)}
                   aria-label="หมุนไปเมนูถัดไป"
-                  className="menu-showcase__dot text-ink-50"
+                  className="menu-showcase__arrow text-ink-50"
                 >
                   <Icon name="chevronRight" size={20} />
                 </button>
