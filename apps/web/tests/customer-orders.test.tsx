@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import MyOrdersPage from "../src/pages/customer/MyOrders";
@@ -74,6 +74,34 @@ describe("หน้าคำสั่งซื้อของฉัน (Ticket 0
     expect(screen.getByText(/ข้าวผัดป้าอ้อ/)).toBeInTheDocument();
     expect(screen.getByText(/ไม่ใส่ผัก/)).toBeInTheDocument();
     expect(screen.getByText("รอชำระเงิน")).toBeInTheDocument();
+  });
+
+  it("ช่องค้นหา Guest อยู่บนสุด และกรองคำสั่งซื้อตามวันที่สั่ง (เวลาไทย)", async () => {
+    const user = userEvent.setup();
+    const older = { ...memberOrder, id: "o2", orderNumber: "ORD-20260913-ZZ99", createdAt: "2026-09-13T03:00:00.000Z" };
+    // 2026-09-14T20:00Z = 15 ก.ย. 03:00 เวลาไทย — ต้องนับเป็นวันที่ 15 ไม่ใช่ 14
+    const lateNight = { ...memberOrder, id: "o3", orderNumber: "ORD-20260915-LN01", createdAt: "2026-09-14T20:00:00.000Z" };
+    stubFetch((url) => {
+      if (url.includes("/api/customers/me")) return { ok: true, json: async () => ({ customer: { id: "c1", name: "สมชาย" } }) };
+      if (url.includes("/api/orders/mine")) return { ok: true, json: async () => ({ orders: [memberOrder, older, lateNight] }) };
+      return { ok: true, json: async () => ({}) };
+    });
+    render(
+      <MemoryRouter>
+        <MyOrdersPage />
+      </MemoryRouter>,
+    );
+    await screen.findByText(/พบ 3 คำสั่งซื้อ/);
+    const headings = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent);
+    expect(headings[0]).toMatch(/Guest/);
+
+    fireEvent.change(screen.getByLabelText("กรองตามวันที่สั่ง"), { target: { value: "2026-09-15" } });
+    expect(screen.getByText("พบ 1 จาก 3 คำสั่งซื้อในวันที่เลือก")).toBeInTheDocument();
+    expect(screen.getByText(/ORD-20260915-LN01/)).toBeInTheDocument();
+    expect(screen.queryByText(/ORD-20260913-ZZ99/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "ดูทุกวัน" }));
+    expect(screen.getByText("พบ 3 คำสั่งซื้อ")).toBeInTheDocument();
   });
 
   it("empty state เมื่อสมาชิกยังไม่มีคำสั่งซื้อ", async () => {

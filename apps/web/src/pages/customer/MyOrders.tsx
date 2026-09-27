@@ -8,6 +8,11 @@ import { ConnectionBanner, DemoBadge } from "../../components/demo";
 import { Icon } from "../../components/icons";
 import { DEMO_ORDERS, isDemoModeEnabled, shouldFallbackToDemo } from "../../lib/demo";
 
+/** วันที่ตามเวลาไทยแบบ YYYY-MM-DD ให้เทียบกับค่า input type="date" ได้ตรง ๆ */
+function bangkokDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-CA", { timeZone: "Asia/Bangkok" });
+}
+
 /**
  * หน้าคำสั่งซื้อของฉัน (Ticket 05):
  * - สมาชิกที่ login แล้วเห็นคำสั่งซื้อของตนเอง (ไม่เห็นของผู้อื่น)
@@ -25,6 +30,9 @@ export default function MyOrdersPage() {
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupError, setLookupError] = useState<string | null>(null);
   const [lookupOrder, setLookupOrder] = useState<OrderDetail | null>(null);
+  /** YYYY-MM-DD ตามเวลาไทย — ว่าง = ทุกวัน */
+  const [dateFilter, setDateFilter] = useState("");
+  const shownOrders = dateFilter ? orders.filter((o) => bangkokDate(o.createdAt) === dateFilter) : orders;
 
   async function loadMine() {
     try {
@@ -151,45 +159,7 @@ export default function MyOrdersPage() {
           </div>
         ) : (
           <>
-            {(sessionChecked && customer) || demo ? (
-              <Panel label="คำสั่งซื้อของสมาชิก">
-                <div className="space-y-3">
-                  <h2 className="pa-display text-base text-ink-900">
-                    {customer ? `คำสั่งซื้อของ ${customer.name}` : "คำสั่งซื้อตัวอย่าง"}
-                  </h2>
-                  {orders.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-ink-300 px-4 py-8 text-center">
-                      <p className="font-semibold text-ink-800">ยังไม่มีคำสั่งซื้อ</p>
-                      <p className="mt-1 text-sm text-ink-600">
-                        <Link to="/cart" className="font-semibold text-brand-700 underline underline-offset-2">
-                          ไปเลือกเมนูที่ตะกร้า
-                        </Link>
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      <p role="status" className="text-sm text-ink-600">
-                        พบ {orders.length} คำสั่งซื้อ
-                      </p>
-                      {orders.map((o, index) => (
-                        <MotionReveal key={o.id} index={index}>
-                          <OrderCard order={o} payTo={`/pay/${o.id}`} />
-                        </MotionReveal>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </Panel>
-            ) : sessionChecked && !demo ? (
-              <Alert tone="info" role="status">
-                ยังไม่ได้เข้าสู่ระบบบัญชีลูกค้า — สมาชิก{" "}
-                <Link to="/customer/login" className="font-semibold text-brand-700 underline underline-offset-2">
-                  เข้าสู่ระบบ
-                </Link>{" "}
-                เพื่อดูประวัติ หรือค้นหาด้วยเลขคำสั่งซื้อด้านล่าง
-              </Alert>
-            ) : null}
-
+            {/* ค้นหาแบบ Guest อยู่บนสุด — ลูกค้าที่ไม่ได้ล็อกอินไม่ต้องเลื่อนหา */}
             <Panel label="ค้นหาคำสั่งซื้อ Guest">
               <div className="space-y-3">
                 <h2 className="pa-display text-base text-ink-900">ค้นหาด้วยเลขคำสั่งซื้อ (Guest)</h2>
@@ -237,6 +207,67 @@ export default function MyOrdersPage() {
                 {lookupOrder ? <OrderCard order={lookupOrder} payTo={`/pay/${lookupOrder.id}?phone=${encodeURIComponent(lookupPhone.trim())}`} /> : null}
               </div>
             </Panel>
+
+            {(sessionChecked && customer) || demo ? (
+              <Panel label="คำสั่งซื้อของสมาชิก">
+                <div className="space-y-3">
+                  <h2 className="pa-display text-base text-ink-900">
+                    {customer ? `คำสั่งซื้อของ ${customer.name}` : "คำสั่งซื้อตัวอย่าง"}
+                  </h2>
+                  {orders.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-ink-300 px-4 py-8 text-center">
+                      <p className="font-semibold text-ink-800">ยังไม่มีคำสั่งซื้อ</p>
+                      <p className="mt-1 text-sm text-ink-600">
+                        <Link to="/cart" className="font-semibold text-brand-700 underline underline-offset-2">
+                          ไปเลือกเมนูที่ตะกร้า
+                        </Link>
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap items-end gap-2">
+                        <div>
+                          <label htmlFor="orders-date" className="mb-1 block text-sm font-semibold text-ink-800">
+                            กรองตามวันที่สั่ง
+                          </label>
+                          <input
+                            id="orders-date"
+                            type="date"
+                            className={inputClass}
+                            value={dateFilter}
+                            onChange={(e) => setDateFilter(e.target.value)}
+                          />
+                        </div>
+                        {dateFilter ? (
+                          <button type="button" onClick={() => setDateFilter("")} className={secondaryButtonClass}>
+                            ดูทุกวัน
+                          </button>
+                        ) : null}
+                      </div>
+                      <p role="status" className="text-sm text-ink-600">
+                        {dateFilter
+                          ? `พบ ${shownOrders.length} จาก ${orders.length} คำสั่งซื้อในวันที่เลือก`
+                          : `พบ ${orders.length} คำสั่งซื้อ`}
+                      </p>
+                      {shownOrders.map((o, index) => (
+                        <MotionReveal key={o.id} index={index}>
+                          <OrderCard order={o} payTo={`/pay/${o.id}`} />
+                        </MotionReveal>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </Panel>
+            ) : sessionChecked && !demo ? (
+              <Alert tone="info" role="status">
+                ยังไม่ได้เข้าสู่ระบบบัญชีลูกค้า — สมาชิก{" "}
+                <Link to="/customer/login" className="font-semibold text-brand-700 underline underline-offset-2">
+                  เข้าสู่ระบบ
+                </Link>{" "}
+                เพื่อดูประวัติ หรือค้นหาด้วยเลขคำสั่งซื้อด้านล่าง
+              </Alert>
+            ) : null}
+
           </>
         )}
       </main>

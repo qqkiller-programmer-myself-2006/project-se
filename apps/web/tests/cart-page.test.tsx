@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import CartPage from "../src/pages/customer/Cart";
@@ -82,7 +82,7 @@ describe("หน้าตะกร้าและยืนยันคำสั�
     expect(screen.getByText("ตะกร้ายังว่างอยู่")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "เพิ่มข้าวผัดป้าอ้อลงตะกร้า" }));
-    expect(await screen.findByText("ในตะกร้า 1")).toBeInTheDocument();
+    expect(await screen.findByRole("group", { name: "จำนวนข้าวผัดป้าอ้อในตะกร้า" })).toHaveTextContent("1");
     expect(screen.getByText(/ยอดรวมโดยประมาณ 50 บาท/)).toBeInTheDocument();
 
     // ยังไม่กรอกชื่อ Guest → server ปฏิเสธ
@@ -114,5 +114,39 @@ describe("หน้าตะกร้าและยืนยันคำสั�
     expect(await screen.findByRole("alert")).toHaveTextContent("เซิร์ฟเวอร์ขัดข้อง");
     await user.click(screen.getByRole("button", { name: "ลองใหม่" }));
     expect(await screen.findByText("ยังไม่มีเมนูพร้อมขาย")).toBeInTheDocument();
+  });
+
+  it("ปุ่ม +/− บนรายการเมนูปรับจำนวนได้เลย และหมวดที่สองพับไว้ก่อน", async () => {
+    const user = userEvent.setup();
+    const twoGroups = [
+      groups[0]!,
+      {
+        category: "เครื่องดื่ม",
+        items: [{ ...groups[0]!.items[0]!, id: "d1", category: "เครื่องดื่ม", name: "ชาใต้", price: 29, kind: "drink" }],
+      },
+    ];
+    stubFetch((url) => {
+      if (url.includes("/api/menu/public")) return { ok: true, json: async () => ({ groups: twoGroups }) };
+      return { ok: false, status: 401, json: async () => ({ error: "x" }) };
+    });
+    render(
+      <MemoryRouter>
+        <CartPage />
+      </MemoryRouter>,
+    );
+    const first = (await screen.findByText("อาหารจานเดียว", { selector: "summary span" })).closest("details")!;
+    const second = screen.getByText("เครื่องดื่ม", { selector: "summary span" }).closest("details")!;
+    expect(first).toHaveAttribute("open");
+    expect(second).not.toHaveAttribute("open");
+
+    await user.click(screen.getByRole("button", { name: "เพิ่มข้าวผัดป้าอ้อลงตะกร้า" }));
+    const stepper = screen.getByRole("group", { name: "จำนวนข้าวผัดป้าอ้อในตะกร้า" });
+    await user.click(within(stepper).getByRole("button", { name: "เพิ่มจำนวนข้าวผัดป้าอ้อ" }));
+    expect(stepper).toHaveTextContent("2");
+    await user.click(within(stepper).getByRole("button", { name: "ลดจำนวนข้าวผัดป้าอ้อ" }));
+    await user.click(within(stepper).getByRole("button", { name: "ลดจำนวนข้าวผัดป้าอ้อ" }));
+    // ลดจนเป็น 0 → กลับเป็นปุ่ม "เพิ่ม" และบรรทัดหายจากตะกร้า
+    expect(screen.getByRole("button", { name: "เพิ่มข้าวผัดป้าอ้อลงตะกร้า" })).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "จำนวนข้าวผัดป้าอ้อในตะกร้า" })).not.toBeInTheDocument();
   });
 });

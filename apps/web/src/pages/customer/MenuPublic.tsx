@@ -106,6 +106,10 @@ export default function MenuPublicPage() {
   }, [groups, kind, q]);
 
   const total = useMemo(() => filtered.reduce((n, g) => n + g.items.length, 0), [filtered]);
+  const suggestions = useMemo(
+    () => [...new Set(groups.flatMap((g) => g.items.filter((m) => kind === "" || m.kind === kind).map((m) => m.name)))],
+    [groups, kind],
+  );
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-5 px-4 py-6 sm:px-6">
@@ -113,15 +117,7 @@ export default function MenuPublicPage() {
         ข้ามไปยังรายการเมนู
       </a>
       <DepthHero>
-        <img
-          src="/venue/site/pa-or-menu-hero.jpg"
-          alt="ป้ายเมนูเครื่องดื่มหนูนุ้ย ชาใต้ ที่ร้านป้าอ้อ"
-          title="เมนูเครื่องดื่มหนูนุ้ย ชาใต้ ที่ร้านป้าอ้อ"
-          className="h-auto w-full rounded-2xl object-cover"
-          loading="eager"
-          decoding="async"
-        />
-        <h1 className="font-display mt-2 text-xl font-bold text-ink-900 sm:text-2xl">เมนูร้านป้าอ้ออาหารตามสั่ง</h1>
+        <h1 className="font-display text-xl font-bold text-ink-900 sm:text-2xl">เมนูร้านป้าอ้ออาหารตามสั่ง</h1>
         <p className="mt-1 text-sm text-ink-600">
           ดูเมนูอาหารและเครื่องดื่มพร้อมขายแยกตามหมวดหมู่ได้โดยไม่ต้องเข้าสู่ระบบ
         </p>
@@ -132,7 +128,8 @@ export default function MenuPublicPage() {
         ) : null}
       </DepthHero>
 
-      <RealMenuPhotoGallery />
+      {/* ภาพป้ายเมนูจริงเป็นส่วน hero ของหน้า — เลื่อนภาพเองทุก 5 วินาที */}
+      <RealMenuPhotoGallery autoPlayMs={5000} />
 
       {demo ? <ConnectionBanner onRetry={() => void load()} /> : null}
 
@@ -150,7 +147,15 @@ export default function MenuPublicPage() {
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 placeholder="เช่น ข้าวผัดหมู ชาใต้"
+                list="menu-search-suggestions"
+                autoComplete="off"
               />
+              {/* ตัวเลือกชื่อเมนูขึ้นให้เลือกขณะพิมพ์ (เบราว์เซอร์กรองตามที่พิมพ์ให้เอง) */}
+              <datalist id="menu-search-suggestions">
+                {suggestions.map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
             </div>
             <div>
               <label htmlFor="menu-kind" className="mb-1 block text-sm font-semibold text-ink-800">

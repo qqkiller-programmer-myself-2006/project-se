@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { RealMenuPhotoGallery } from "../src/components/RealMenuPhotoGallery";
 
 describe("แกลเลอรีเมนูจากร้านจริง", () => {
@@ -49,5 +49,41 @@ describe("แกลเลอรีเมนูจากร้านจริง"
       "src",
       "/venue/reservations/drink-menu.jpg",
     );
+  });
+
+  describe("เลื่อนภาพอัตโนมัติ", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function activeSrc() {
+      return screen.getByRole("figure").querySelector("img")!.getAttribute("src");
+    }
+
+    it("เลื่อนไปภาพถัดไปเองตามเวลา และวนกลับภาพแรก", () => {
+      vi.useFakeTimers();
+      render(<RealMenuPhotoGallery autoPlayMs={5000} />);
+      expect(activeSrc()).toBe("/venue/latest/real-menu-board.jpg");
+      act(() => void vi.advanceTimersByTime(5000));
+      expect(activeSrc()).toBe("/venue/reservations/food-menu.jpg");
+      // ตัวจับเวลาตั้งใหม่หลังเปลี่ยนภาพแต่ละครั้ง จึงเดินทีละรอบ
+      for (let i = 0; i < 3; i++) act(() => void vi.advanceTimersByTime(5000));
+      expect(activeSrc()).toBe("/venue/latest/real-menu-board.jpg");
+    });
+
+    it("หยุดเลื่อนเมื่อเมาส์ชี้อยู่ในแกลเลอรี", () => {
+      vi.useFakeTimers();
+      render(<RealMenuPhotoGallery autoPlayMs={5000} />);
+      fireEvent.mouseEnter(screen.getByRole("region", { name: "เมนูจากร้านจริง" }));
+      act(() => void vi.advanceTimersByTime(20000));
+      expect(activeSrc()).toBe("/venue/latest/real-menu-board.jpg");
+    });
+
+    it("ไม่ส่ง autoPlayMs = ไม่เลื่อนเอง", () => {
+      vi.useFakeTimers();
+      render(<RealMenuPhotoGallery />);
+      act(() => void vi.advanceTimersByTime(20000));
+      expect(activeSrc()).toBe("/venue/latest/real-menu-board.jpg");
+    });
   });
 });
