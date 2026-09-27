@@ -1107,6 +1107,8 @@ async function csrfToken(): Promise<string> {
   return after;
 }
 
+export const SERVICE_UNAVAILABLE_MESSAGE = "ระบบยังเชื่อมต่อฐานข้อมูลไม่ได้ กรุณาลองใหม่อีกครั้งในอีกสักครู่";
+
 async function req<T>(path: string, init?: RequestInit, withCsrf = false): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (withCsrf) headers[CSRF_HEADER] = await csrfToken();
@@ -1116,6 +1118,8 @@ async function req<T>(path: string, init?: RequestInit, withCsrf = false): Promi
     headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },
   });
   const data = (await res.json().catch(() => ({}))) as T & { error?: string };
+  // api/index.ts ตอบรหัสนี้เมื่อต่อฐานข้อมูลไม่ได้ตอนเริ่ม (เช่น deployment ไม่มี DATABASE_URL) — ไม่โชว์รหัสดิบให้ผู้ใช้
+  if (data.error === "service_unavailable") throw new Error(SERVICE_UNAVAILABLE_MESSAGE);
   // ตั้งใจไม่ retry mutation อัตโนมัติเมื่อ CSRF ล้มเหลว (กันส่งซ้ำ) ให้ผู้ใช้โหลดหน้าใหม่
   if (!res.ok) throw new Error(data.error ?? `เกิดข้อผิดพลาด (${res.status})`);
   return data as T;
