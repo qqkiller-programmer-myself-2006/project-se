@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import App from "../src/App";
+import { CustomerSessionProvider } from "../src/lib/customerSession";
 import type { PublicCustomer } from "../src/lib/api";
 
 function customer(): PublicCustomer {
@@ -31,6 +32,11 @@ function stubApp(signedIn: boolean) {
       if (u.endsWith("/api/auth/csrf")) return ok({ csrfToken: "t" });
       if (u.endsWith("/api/auth/me")) return err(401, "กรุณาเข้าสู่ระบบก่อน");
       if (u.endsWith("/api/auth/session")) return ok({ user: null });
+      if (u.endsWith("/api/customers/login") || u.endsWith("/api/customers/register")) {
+        me = customer();
+        return ok({ customer: me });
+      }
+      if (u.endsWith("/api/customers/line/status")) return ok({ linked: false, available: false });
       if (u.endsWith("/api/customers/logout")) {
         me = null;
         return ok({ ok: true });
@@ -102,5 +108,50 @@ describe("แถบบัญชีสมาชิกในเชลล์ลู�
     const bar = await screen.findByRole("navigation", { name: "บัญชีสมาชิก" });
     await waitFor(() => expect(bar).toHaveTextContent("เข้าสู่ระบบ"));
     expect(screen.queryByRole("button", { name: /ออกจากระบบ/ })).not.toBeInTheDocument();
+  });
+
+  // main.tsx ครอบแอปด้วย provider — หัวเว็บกับหน้าเข้าสู่ระบบต้องใช้ session ก้อนเดียวกัน
+  function renderWithSession(path: string) {
+    return render(
+      <CustomerSessionProvider>
+        <MemoryRouter initialEntries={[path]}>
+          <App />
+        </MemoryRouter>
+      </CustomerSessionProvider>,
+    );
+  }
+
+  it("เข้าสู่ระบบสำเร็จแล้วหัวเว็บเปลี่ยนเป็นชื่อสมาชิกทันที ไม่ต้องรีเฟรช", async () => {
+    stubApp(false);
+    renderWithSession("/customer/login");
+    const bar = await screen.findByRole("navigation", { name: "บัญชีสมาชิก" });
+    await waitFor(() => expect(bar).toHaveTextContent("เข้าสู่ระบบ"));
+    await userEvent.type(await screen.findByLabelText(/เบอร์โทร/), "0812345678");
+    await userEvent.type(screen.getByLabelText(/รหัสผ่าน/), "Password11");
+    await userEvent.click(screen.getByRole("button", { name: /^เข้าสู่ระบบ$/ }));
+    await waitFor(() => expect(bar).toHaveTextContent("สมชาย ใจดี"));
+    expect(bar).not.toHaveTextContent("สมัครสมาชิก");
+  });
+
+  it("สมัครสมาชิกสำเร็จแล้วหัวเว็บเปลี่ยนเป็นชื่อสมาชิกทันที", async () => {
+    stubApp(false);
+    renderWithSession("/register");
+    const bar = await screen.findByRole("navigation", { name: "บัญชีสมาชิก" });
+    await waitFor(() => expect(bar).toHaveTextContent("เข้าสู่ระบบ"));
+    await userEvent.type(await screen.findByLabelText(/ชื่อ/), "สมชาย ใจดี");
+    await userEvent.type(screen.getByLabelText(/เบอร์โทร/), "0812345678");
+    await userEvent.type(screen.getByLabelText(/รหัสผ่าน/), "Password11");
+    await userEvent.click(screen.getByRole("button", { name: /^สมัครสมาชิก$/ }));
+    await waitFor(() => expect(bar).toHaveTextContent("สมชาย ใจดี"));
+  });
+
+  it("ออกจากระบบจากหน้าโปรไฟล์แล้วหัวเว็บกลับเป็น guest", async () => {
+    stubApp(true);
+    renderWithSession("/profile");
+    const bar = await screen.findByRole("navigation", { name: "บัญชีสมาชิก" });
+    await waitFor(() => expect(bar).toHaveTextContent("สมชาย ใจดี"));
+    const main = screen.getByRole("main");
+    await userEvent.click(await within(main).findByRole("button", { name: /ออกจากระบบ/ }));
+    await waitFor(() => expect(bar).toHaveTextContent("เข้าสู่ระบบ"));
   });
 });

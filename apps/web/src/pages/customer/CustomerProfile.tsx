@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, type LineStatus, type PublicCustomer } from "../../lib/api";
+import { useCustomerSession } from "../../lib/customerSession";
 import { Alert, Badge, dangerButtonClass, inputClass, PageHeader, Panel, primaryButtonClass, secondaryButtonClass, Spinner, successButtonClass } from "../../components/ui";
 
-export default function CustomerProfilePage({ onLoggedOut }: { onLoggedOut?: () => void }) {
+export default function CustomerProfilePage() {
   const nav = useNavigate();
+  const session = useCustomerSession();
   const [searchParams] = useSearchParams();
   const [customer, setCustomer] = useState<PublicCustomer | null>(null);
   const [line, setLine] = useState<LineStatus | null>(null);
@@ -79,6 +81,8 @@ export default function CustomerProfilePage({ onLoggedOut }: { onLoggedOut?: () 
     try {
       const updated = await api.updateCustomerProfile({ name: name.trim(), email: email.trim() ? email.trim() : null });
       setCustomer(updated.customer);
+      // ชื่อบนหัวเว็บมาจาก session กลาง — ถามใหม่ให้ตรงกับชื่อที่เพิ่งบันทึก
+      void session.refresh();
       setProfileMsg({ tone: "success", text: "บันทึกข้อมูลแล้ว" });
     } catch (err) {
       setProfileMsg({ tone: "error", text: err instanceof Error ? err.message : "บันทึกไม่สำเร็จ" });
@@ -97,7 +101,7 @@ export default function CustomerProfilePage({ onLoggedOut }: { onLoggedOut?: () 
     setPwMsg(null);
     try {
       await api.changeCustomerPassword(currentPw, newPw);
-      onLoggedOut?.();
+      session.clear();
       nav("/customer/login");
     } catch (err) {
       setPwMsg({ tone: "error", text: err instanceof Error ? err.message : "เปลี่ยนรหัสผ่านไม่สำเร็จ" });
@@ -152,7 +156,7 @@ export default function CustomerProfilePage({ onLoggedOut }: { onLoggedOut?: () 
     try {
       await api.customerLogout();
     } finally {
-      onLoggedOut?.();
+      session.clear();
       nav("/customer/login");
     }
   }
@@ -162,7 +166,7 @@ export default function CustomerProfilePage({ onLoggedOut }: { onLoggedOut?: () 
     setDeleteMsg(null);
     try {
       await api.deleteCustomerMe();
-      onLoggedOut?.();
+      session.clear();
       nav("/register");
     } catch (err) {
       setDeleteMsg(err instanceof Error ? err.message : "ลบบัญชีไม่สำเร็จ");

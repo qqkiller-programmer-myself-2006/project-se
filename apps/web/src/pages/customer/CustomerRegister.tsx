@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../../lib/api";
+import { useCustomerSession } from "../../lib/customerSession";
 import { previewThaiPhone } from "../../lib/phone";
 import { Alert, inputClass, primaryButtonClass } from "../../components/ui";
 
-export default function CustomerRegisterPage({ onRegistered }: { onRegistered?: () => Promise<void> }) {
+export default function CustomerRegisterPage() {
   const nav = useNavigate();
+  const session = useCustomerSession();
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
@@ -30,7 +32,8 @@ export default function CustomerRegisterPage({ onRegistered }: { onRegistered?: 
     try {
       await api.customerRegister(name.trim(), phone.trim(), password, email.trim() ? email.trim() : undefined);
       setPassword("");
-      await onRegistered?.();
+      // สมัครแล้ว server ล็อกอินให้เลย — อัปเดตหัวเว็บตามทันที
+      await session.refresh();
       nav("/profile");
     } catch (err) {
       setError(err instanceof Error ? err.message : "สมัครสมาชิกไม่สำเร็จ");
