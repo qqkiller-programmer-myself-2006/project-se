@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "../src/lib/api";
+import { SERVICE_UNAVAILABLE_MESSAGE, api } from "../src/lib/api";
 
 describe("api client CSRF (หลาย tab, ไม่ cache)", () => {
   beforeEach(() => {
@@ -54,5 +54,16 @@ describe("api client CSRF (หลาย tab, ไม่ cache)", () => {
     }));
     await expect(api.createUser("s", "Password11", ["kitchen"])).rejects.toThrow(/CSRF/);
     expect(calls.filter((c) => c.url.includes("/api/users"))).toHaveLength(1);
+  });
+});
+
+describe("api client เมื่อ backend ต่อฐานข้อมูลไม่ได้", () => {
+  it("503 service_unavailable แสดงข้อความไทยแทนรหัสดิบ", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 503, json: async () => ({ error: "service_unavailable" }) })),
+    );
+    await expect(api.shopStatus()).rejects.toThrow(SERVICE_UNAVAILABLE_MESSAGE);
+    vi.unstubAllGlobals();
   });
 });
