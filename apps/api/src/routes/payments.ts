@@ -238,6 +238,12 @@ export function createPaymentRouter(deps: PaymentRouterDeps): express.Router {
         res.status(400).json({ error: err instanceof Error ? err.message : "วิธีชำระเงินไม่ถูกต้อง" });
         return;
       }
+      // พร้อมเพย์มีแค่ provider จำลอง — นอก fake mode (เช่น Vercel ที่ NODE_ENV=production)
+      // ตอบ 503 พร้อมข้อความตามสัญญาข้างบน แทนที่ provider จะโยน error กลายเป็น 500
+      if (method === "promptpay" && !isFakePaymentMode()) {
+        res.status(503).json({ error: "ผู้ให้บริการชำระเงินจริงยังไม่เปิดใช้งาน กรุณาเลือกชำระเงินสด" });
+        return;
+      }
       const order = await store.getOrder(b.orderId.trim());
       if (!order) {
         res.status(404).json({ error: "ไม่พบคำสั่งซื้อ" });

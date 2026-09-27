@@ -122,6 +122,8 @@ describe("ชำระเงินฝั่งลูกค้า (Ticket 08)", (
     expect(await screen.findByText("ORD-20260914-AB12")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /สร้างคำขอชำระ/ }));
     expect(await screen.findByText("PROMPTPAY-FAKE:pay1:100")).toBeInTheDocument();
+    // ต้องมีรูป QR ให้สแกน ไม่ใช่แค่ข้อความ payload
+    expect(screen.getByRole("img", { name: /QR พร้อมเพย์/ })).toBeInTheDocument();
     await user.type(screen.getByLabelText(/เลขอ้างอิง slip/), "VALID-1");
     await user.click(screen.getByRole("button", { name: "ส่ง slip" }));
     expect(await screen.findByText("RCP-20260914-AB12")).toBeInTheDocument();

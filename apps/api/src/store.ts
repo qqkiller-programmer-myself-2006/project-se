@@ -11317,12 +11317,14 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
       return rows.length === 0 ? null : rowToPayment(rows[0]!);
     },
     async getOrderPaymentState(orderId: string) {
-      const [rows] = (await pool.query("SELECT status FROM payments WHERE order_id = ? LIMIT 1", [orderId])) as [
+      // ต้องอ่านทั้งแถว: rowToPayment แปลงคอลัมน์วันที่ทุกตัว — ถ้าเลือกแค่ status จะได้
+      // RangeError (Invalid time value) และ GET /api/orders/:id/payment ตอบ 500 ทุกครั้ง
+      const [rows] = (await pool.query("SELECT * FROM payments WHERE order_id = ? LIMIT 1", [orderId])) as [
         Record<string, unknown>[],
         unknown,
       ];
       if (rows.length === 0) return "pending_payment";
-      return paymentToOrderState(rowToPayment({ ...rows[0]!, method: "cash", amount: 0 }).status);
+      return paymentToOrderState(rowToPayment(rows[0]!).status);
     },
     async listPayments(filter: ListPaymentsFilter) {
       const n = Math.min(Math.max(filter.limit || 50, 1), 200);
