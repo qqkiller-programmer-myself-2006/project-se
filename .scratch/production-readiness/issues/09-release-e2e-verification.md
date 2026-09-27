@@ -28,6 +28,8 @@
   the fixed reservation bar — none of these would have been visible from the API/unit test
   suites this ticket's evidence relies on, which is worth noting for how much this
   ticket's checklist should trust green tests alone.
+  - GitHub issue opened: #39 (run release E2E against a staging Supabase project,
+    not production directly).
   - Still not done, and still this ticket's actual scope: no browser E2E has been run
     against an **isolated** staging Supabase project separate from the production one
     (`fvdyeblfpeyuqwgtbgzr`) — the checks above hit production directly, which is evidence

@@ -48,5 +48,6 @@ Assignee: Codex implementation fallback
     regression ด้วย `git stash` เทียบ pre-fix/post-fix; verification: typecheck ผ่าน,
     vitest 350 ผ่าน/1 ข้าม, build ผ่าน; ตรวจซ้ำด้วย browser screenshot จริงสำหรับบัคที่เห็นผลทาง
     ภาพเท่านั้น (tainted canvas, pin z-index, nav overflow)
+  - GitHub issue เปิดสำหรับ deferred polish: #40.
   - บทเรียนสำหรับ ticket นี้: unit/typecheck เขียวไม่ครอบคลุมบัคกลุ่มนี้เลย — ทั้งหมดต้องเจอผ่าน
     browser QA จริงหรือจำลอง environment จริง (เช่น local HTTP server ไม่มี CORS header)

@@ -32,6 +32,8 @@
     this stack (Ticket 05/08 assumed MySQL). No custom domain — production is still on the
     `*.vercel.app` default domain (`project-se-rose.vercel.app`), so the domain/DNS/TLS
     item from Ticket 01 §4.1 is unaddressed for this stack too.
+  - GitHub issues opened for the still-open items: #32 (DATABASE_URL missing on
+    Preview), #38 (custom domain/DNS/TLS).
   - Could not read Vercel project environment variables this session (`403 forbidden` —
     the connected Vercel account lacks that permission), so I could not add/confirm
     `DATABASE_URL` for Preview myself; that needs Owner action in the Vercel dashboard.

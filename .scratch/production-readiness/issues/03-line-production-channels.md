@@ -31,3 +31,7 @@ allowlist, tester/verified identity, Published production channel และ stag
 Ticket นี้จึง **blocked** จน Owner จัดเตรียม external inputs เหล่านี้
 
 - 2026-09-22: Added the repo-side runbook and `.env.example` environment contract. Kept blocked because provider setup, real credentials, HTTPS allowlist and staging evidence are not available in the repository.
+
+## Comments
+
+- 2026-09-27: GitHub issue opened to track this from the repo side: #35.

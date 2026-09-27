@@ -32,6 +32,8 @@
     6543 — not verified which mode Supabase is configured for in production), and
     transaction/constraint/concurrency behavior for reservation/order/payment under
     Postgres are all unverified.
+  - GitHub issues opened: #33 (verify Supavisor session-mode for pg-compat's
+    named lock), #34 (Postgres/Supabase migration + integration rehearsal).
   - Recommend either retitling/rescoping this ticket to Postgres+Supabase, or opening a
     new ticket for it and marking this one superseded — the MySQL path (`pg-compat.ts`'s
     own comment calls it "a temporary route") may not be the one that ships.
