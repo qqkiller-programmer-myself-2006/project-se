@@ -619,6 +619,21 @@ export interface QueueJob {
   tableName: string | null;
 }
 
+/** Issue #43: คิวรวมสาธารณะ — ไม่ระบุตัวตน (รหัสย่อ + สถานะ + จำนวนคิวก่อนหน้า) */
+export type PublicQueueStatus = "waiting" | "preparing" | "ready";
+
+export interface PublicQueueEntry {
+  ref: string;
+  status: PublicQueueStatus;
+  ahead: number;
+}
+
+export interface PublicQueueSnapshot {
+  entries: PublicQueueEntry[];
+  counts: Record<PublicQueueStatus, number>;
+  updatedAt: string;
+}
+
 export interface StationCapacity {
   station: QueueStation;
   perSlot: number;
@@ -1481,6 +1496,7 @@ export const api = {
     params.set("limit", String(q.limit ?? 50));
     return req<{ jobs: QueueJob[] }>(`/api/queue?${params.toString()}`);
   },
+  queuePublic: () => req<PublicQueueSnapshot>("/api/queue/public"),
   queueOrder: (orderId: string, phone?: string) =>
     req<{ jobs: QueueJob[]; orderNumber: string }>(
       `/api/queue/order/${orderId}${phone ? `?phone=${encodeURIComponent(phone)}` : ""}`,

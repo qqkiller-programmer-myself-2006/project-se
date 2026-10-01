@@ -6,6 +6,7 @@ import {
   type QueueJob,
   type WaitEstimate,
 } from "../../lib/api";
+import PublicQueueBoard from "./PublicQueueBoard";
 import {
   Alert,
   Badge,
@@ -42,7 +43,7 @@ function etaText(job: QueueJob): string {
  * - แสดงสถานะภาษาไทย queued/preparing/ready/delivered + เวลารอโดยประมาณ
  */
 export default function QueueTrackPage() {
-  const [mode, setMode] = useState<"member" | "guest">("guest");
+  const [mode, setMode] = useState<"member" | "guest" | "all">("guest");
   const [orders, setOrders] = useState<OrderDetail[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [ordersError, setOrdersError] = useState<string | null>(null);
@@ -196,9 +197,16 @@ export default function QueueTrackPage() {
           >
             สมาชิก (คำสั่งซื้อของฉัน)
           </button>
+          <button type="button" role="tab" aria-selected={mode === "all"} onClick={() => setMode("all")} className={mode === "all" ? primaryButtonClass : secondaryButtonClass}>
+            คิวทั้งหมด
+          </button>
         </div>
 
-        {mode === "guest" ? (
+        {mode === "all" ? (
+          <div className="mt-3">
+            <PublicQueueBoard />
+          </div>
+        ) : mode === "guest" ? (
           <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
             <div>
               <label htmlFor="track-number" className="mb-1 block text-sm font-semibold text-ink-800">
