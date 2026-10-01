@@ -208,7 +208,8 @@ export default function ReservationsPage() {
       setDemo(false);
       let me: PublicCustomer | null = null;
       try {
-        me = (await api.customerMe()).customer;
+        // session endpoint ตอบ 200 เสมอ — guest ได้ null ไม่ใช่ 401 ที่ค้างใน console
+        me = (await api.customerSession()).customer ?? null;
       } catch (sessionErr) {
         if (shouldFallbackToDemo(sessionErr)) {
           setCustomer(null);

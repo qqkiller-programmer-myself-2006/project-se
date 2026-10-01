@@ -1,0 +1,44 @@
+name: Bug report
+description: รายงานปัญหาที่ทำให้ระบบทำงานไม่ตรงที่คาด
+title: "[bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        กรุณาใส่ข้อมูลที่ทำให้ทำซ้ำได้ และลบข้อมูลส่วนบุคคลหรือ secret ออกก่อนส่ง
+  - type: textarea
+    id: summary
+    attributes:
+      label: สรุปปัญหา
+      description: เกิดอะไรขึ้น
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: ขั้นตอนทำซ้ำ
+      description: ใส่ขั้นตอนตั้งแต่เริ่มจนพบปัญหา
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: ผลที่คาดหวังและผลที่เกิดขึ้น
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: browser, OS, commit หรือ deployment ที่เกี่ยวข้อง
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs หรือภาพประกอบ
+      description: ลบ token, password, PII และ secret ก่อนวางข้อมูล
+      render: text

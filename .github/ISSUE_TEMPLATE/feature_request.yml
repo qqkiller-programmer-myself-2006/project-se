@@ -1,0 +1,34 @@
+name: Feature request
+description: เสนอความสามารถหรือการปรับปรุงที่มีประโยชน์ต่อระบบ
+title: "[feat] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: ปัญหาหรือผู้ใช้ที่ต้องการแก้
+      description: ใครเจอปัญหาอะไรในบริบทใด
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: ข้อเสนอ
+      description: อธิบายผลลัพธ์ที่ต้องการและทางเลือกที่พิจารณา
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: เงื่อนไขที่ใช้ตรวจรับงาน
+      placeholder: |
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: บริบทเพิ่มเติม
+      description: ลิงก์เอกสาร, screenshot หรือข้อจำกัดที่เกี่ยวข้อง

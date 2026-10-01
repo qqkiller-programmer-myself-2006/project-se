@@ -1,330 +1,83 @@
-# ร้านป้าอ้อ — บัญชี Owner/พนักงาน + สถานะร้านและโต๊ะ + บัญชีลูกค้า/LINE (Ticket 01–03)
+# ระบบร้านป้าอ๋อ
 
-Vertical slice แรกของระบบร้านป้าอ้ออาหารตามสั่ง: Owner bootstrap, บัญชีพนักงานหลายบทบาท,
-authentication ด้วย session คุกกี้, การจัดการบัญชี, และการตรวจ audit ผ่าน UI ภาษาไทย
-(Ticket 01) ต่อด้วยสถานะร้านสาธารณะ ตารางเวลาเปิดประจำสัปดาห์ คำสั่งเปิด–ปิดชั่วคราว
-และการจัดการโต๊ะ (Ticket 02) และบัญชีลูกค้าแยกจากพนักงานพร้อมการเชื่อม LINE Login v2.1
-(Ticket 03)
+ระบบจัดการร้านอาหารตามสั่งและการสั่งอาหารออนไลน์สำหรับลูกค้า พนักงาน และ Owner
+รองรับหน้าเว็บลูกค้า, ระบบหลังร้าน, คำสั่งซื้อ, โต๊ะ/การจอง, เมนู, การชำระเงิน
+และการเชื่อมต่อ LINE
 
-อ้างอิง: `.scratch/pa-or-restaurant/issues/01-staff-accounts.md`,
-`.scratch/pa-or-restaurant/issues/02-shop-status-and-tables.md`,
-`.scratch/pa-or-restaurant/issues/03-customer-accounts.md`, Spec D01/D02/D10
-(`.scratch/pa-or-restaurant/spec.md`), `docs/REQUIREMENTS.md`
+## ภาพรวมใน 5 นาที
 
-## สถาปัตยกรรม
+- API อยู่ที่ apps/api และมี Vercel entry ที่ api/index.ts
+- เว็บอยู่ที่ apps/web
+- ฐานข้อมูลและ migration อยู่ที่ db/
+- เอกสารทั้งหมดอยู่ที่ docs/ โดยเริ่มจาก docs/README.md
+- ข้อตกลงด้านคำศัพท์และบริบทอยู่ที่ CONTEXT.md
 
-| ส่วน | เทคโนโลยี | ที่อยู่ |
-|---|---|---|
-| API | Node.js + Express + TypeScript | `apps/api/src` |
-| UI | React + Tailwind CSS (ภาษาไทย, responsive) | `apps/web/src` |
-| ฐานข้อมูล | MySQL 8 ผ่าน Docker + phpMyAdmin (runtime ใช้ MySQL จริงเท่านั้น) | `docker-compose.yml`, `db/migrations/001_staff_accounts.sql`, `002_credential_version.sql`, `003_shop_status_tables.sql`, `004_customer_accounts.sql` |
-| LINE | LINE Login v2.1 Authorization Code + OIDC (backend-owned, fake ในเทสต์) | `apps/api/src/line/` |
+## Stack
 
-บทบาท: `owner` (เจ้าของร้าน) · `admin` (ผู้ดูแลระบบ) · `kitchen` (ครัว) · `drink` (เครื่องดื่ม)
-พนักงานหนึ่งบัญชีมีได้หลายบทบาท **การสร้าง/ดู/เปลี่ยนบทบาท/ปิด-เปิด/รีเซ็ตรหัสพนักงาน
-ทำได้เฉพาะ Owner คนเดียว** (server บังคับทุกครั้ง, UI ซ่อนเมนูไว้แล้ว)
-**การจัดการร้าน (เวลา/เปิด–ปิดชั่วคราว) และโต๊ะ ทำได้เฉพาะ Owner และ Admin**
-(server บังคับทุกครั้ง, UI ซ่อนเมนูจาก kitchen/drink) หน้าสาธารณะ `/status` ดูได้โดยไม่ login
+- TypeScript, Express, React และ Vite
+- npm workspaces: apps/api และ apps/web
+- MySQL สำหรับ local development และ Supabase สำหรับ deployment ที่เกี่ยวข้อง
+- Vitest สำหรับ API/web tests
+- Docker Compose สำหรับ MySQL ในเครื่อง
 
 ## เริ่มต้นใช้งาน
 
-### 1. เตรียม environment (ไม่มี secret จริงใน repo)
+ต้องมี Node.js 22, npm และ Docker Desktop
 
-```powershell
+1. สร้างไฟล์ environment จากตัวอย่าง แล้วเติมค่าที่จำเป็น
+
+~~~powershell
 Copy-Item .env.example .env
-# เปิด .env แล้วตั้ง DB_PASSWORD / DB_ROOT_PASSWORD / DATABASE_URL ให้เรียบร้อย
-# compose จะ fail ทันทีถ้าไม่ตั้ง DB_PASSWORD / DB_ROOT_PASSWORD (ไม่มีค่าเริ่มต้น)
-```
+~~~
 
-`apps/api` โหลด `.env` ที่ project root ผ่าน `dotenv` อัตโนมัติ ทั้ง `npm run dev:api`
-และ `npm run bootstrap` (เมื่อรันจาก project root)
+2. ติดตั้ง dependency และเริ่ม MySQL
 
-### 2. เริ่ม MySQL + API ด้วย Docker
+~~~powershell
+npm ci
+docker compose up -d
+~~~
 
-```powershell
-docker compose up -d --build
-docker compose exec api npm run bootstrap:prod
-```
+3. เปิด API และเว็บใน terminal แยกกัน
 
-- `bootstrap:prod` รันโค้ดคอมไพล์แล้ว (`node dist/src/bootstrap.js` ตรงกับ `CMD`
-  ของ image; image ไม่มี `tsx` เพราะ prune dev deps) ส่วน dev ใช้ `npm run bootstrap`
-- `npm start -w apps/api` รัน `node dist/src/index.js` ตรงกับ tsc output
-  (`outDir: dist` + `rootDir: "."`) และ `CMD` ของ image
-- bootstrap จะถามรหัสผ่านแบบซ่อน (ไม่ผ่าน argv/shell history) หรือตั้ง
-  `BOOTSTRAP_USERNAME` / `BOOTSTRAP_PASSWORD` เป็น env ให้ process นั้นก็ได้
-- เปิด phpMyAdmin ได้ที่ `http://localhost:8081` (ค่า `PMA_PORT` ใน `.env`)
+~~~powershell
+npm run dev:api
+npm run dev:web
+~~~
 
-### 3. เริ่มแบบพัฒนาในเครื่อง (ต้องมี MySQL จริง)
+โหมดสาธิตหน้าเว็บที่ไม่ใช้ API เปิดได้ด้วย VITE_DEMO_MODE=true ตามรายละเอียดใน
+docs/development-guide.md
 
-```powershell
-npm install
-# ตั้ง DATABASE_URL ใน .env ให้ชี้ MySQL จริงก่อน (runtime ไม่มี memory fallback)
-npm run dev:api    # http://localhost:4000 (โหลด .env ที่ root อัตโนมัติ)
-npm run dev:web    # http://localhost:5173 (proxy /api ไป :4000)
-```
+## คำสั่งตรวจสอบ
 
-### 3.1 โหมดสาธิตฝั่งเว็บ (dev-only, ไม่แตะ `.env` จริง)
+~~~powershell
+npm run typecheck
+npm run test:api
+npm run test:web
+npm run build
+~~~
 
-```powershell
-# เปิดเฉพาะตอนพัฒนา UI — ไม่ต้องมี API/DB ก็ดูดีไซน์ครบ 7 หน้าลูกค้าได้
-$env:VITE_DEMO_MODE = "true"; npm run dev:web    # http://localhost:5173
-# หรือใส่ในไฟล์ local ของ shell ตัวเอง (ห้าม commit ค่าจริง): VITE_DEMO_MODE=true
-```
+## โครงสร้างโฟลเดอร์
 
-- เมื่อ `VITE_DEMO_MODE=true` หน้า `/menu` `/cart` `/orders` `/track`
-  `/reservations` `/rewards` `/notifications` จะแสดงข้อมูลตัวอย่างจาก
-  `apps/web/src/lib/demo.ts` พร้อมป้าย `โหมดสาธิต · ข้อมูลตัวอย่าง`
-  (ส่วนหัวเชลล์ + แบนเนอร์เชื่อมต่อ) แม้ API ว่างเปล่าหรือตอบ error ใด ๆ
-- ปิด flag (`false`/ไม่ตั้ง) = พฤติกรรม API จริงล้วน (คง fallback ออฟไลน์เดิม
-  เฉพาะ network ล้มเหลวเท่านั้น)
-- ปลอดภัย: guard คู่ (`VITE_DEMO_MODE` + `import.meta.env.DEV`/`MODE !== "production"`)
-  ทำให้ production build ไม่มีทางเข้าโหมดสาธิต; เฉพาะ READ fallback เท่านั้น
-  ทุก mutation (สั่งซื้อ/จอง/แลกแต้ม/ชำระเงิน) ยังเรียก API จริงพร้อม CSRF/auth —
-  fixtures ไม่มี secret หรือ PII จริง
+~~~text
+.
+├── api/                 Vercel HTTP entry
+├── apps/api/            Express API, domain modules และ tests
+├── apps/web/            React/Vite web app และ tests
+├── db/                  migrations และ Supabase schema
+├── docs/                requirements, runbooks, research และ reports
+├── scripts/             งานตรวจสอบ/ปฏิบัติการที่ใช้ซ้ำ
+├── .scratch/            local Markdown issue tracker
+├── .agents/             skills ของ tooling
+└── docker-compose.yml   MySQL สำหรับ local development
+~~~
 
-### 4. สร้าง Owner คนแรก (บังคับระบุ credentials ชัดเจน)
+## อ่านต่อ
 
-```powershell
-$env:BOOTSTRAP_USERNAME = "<ชื่อ>"; $env:BOOTSTRAP_PASSWORD = "<รหัสผ่าน>"
-npm run bootstrap -w apps/api
-# หรือ: npm run bootstrap -w apps/api -- --username <ชื่อ>  (ถามรหัสผ่านแบบซ่อน)
-```
+- [สารบัญเอกสาร](docs/README.md)
+- [คู่มือการพัฒนาและรายละเอียดระบบฉบับเต็ม](docs/development-guide.md)
+- [แนวทางการมีส่วนร่วม](CONTRIBUTING.md)
+- [นโยบายความปลอดภัย](SECURITY.md)
+- [คู่มือเตรียมค่า GitHub สำหรับเจ้าของ repo](docs/ops/github-repo-setup.md)
+- [บริบทและ glossary ของระบบ](CONTEXT.md)
 
-- ไม่มีรหัสผ่านตั้งต้นในโค้ด ไม่รับรหัสผ่านผ่าน argv และไม่พิมพ์ secret ลง log
-- สร้างแบบ atomic (`GET_LOCK` + ตรวจก่อน insert ใน lock เดียวกัน) ถ้ามี Owner อยู่แล้ว
-  จะปฏิเสธและ exit 1 — ไม่มี endpoint สมัคร Owner สาธารณะ
-
-## API หลัก (public HTTP seam)
-
-| เมธอด | เส้นทาง | สิทธิ์ |
-|---|---|---|
-| POST | `/api/auth/login` | สาธารณะ + rate-limit + **ต้องมี CSRF token** |
-| POST | `/api/auth/logout` | เข้าสู่ระบบ + CSRF |
-| GET | `/api/auth/me` | เข้าสู่ระบบ |
-| POST | `/api/auth/change-password` | เข้าสู่ระบบ + CSRF |
-| GET/POST | `/api/users` | **Owner เท่านั้น** |
-| PATCH | `/api/users/:id/roles` | **Owner เท่านั้น** (ห้ามกำหนด/ถอดบทบาท owner ผ่าน API) |
-| GET | `/api/shop/status` | สาธารณะ (snapshot แคบ ๆ ไม่มีข้อมูลหลังร้าน/ส่วนบุคคล) |
-| GET | `/api/shop/schedule` | **Owner/Admin** |
-| PUT | `/api/shop/schedule` | **Owner/Admin** + CSRF (ชื่อร้าน + ตาราง 7 วัน) |
-| POST | `/api/shop/override` | **Owner/Admin** + CSRF (ปิดชั่วคราวต้องมีเหตุผล ชนะตารางเสมอ) |
-| DELETE | `/api/shop/override` | **Owner/Admin** + CSRF (ล้างกลับไปใช้ตาราง) |
-| GET/POST | `/api/tables` | **Owner/Admin** (ชื่อไม่ซ้ำ trim, ความจุ int 1–50) |
-| PATCH | `/api/tables/:id` | **Owner/Admin** + CSRF (แก้ชื่อ/ความจุ/พร้อมใช้งาน–งดใช้งาน — ไม่มี DELETE) |
-| GET | `/api/audit/shop` | **Owner/Admin** |
-| POST | `/api/users/:id/deactivate` | **Owner เท่านั้น** |
-| POST | `/api/users/:id/activate` | **Owner เท่านั้น** |
-| POST | `/api/users/:id/reset-password` | **Owner เท่านั้น** |
-| GET | `/api/audit/logins`, `/api/audit/accounts` | Owner เท่านั้น |
-| GET | `/api/auth/csrf`, `/api/health` | สาธารณะ |
-| POST | `/api/customers/register` | สาธารณะ + rate-limit + **ต้องมี CSRF token** (สมัครแล้ว login ทันที) |
-| POST | `/api/customers/login` | สาธารณะ + rate-limit + **ต้องมี CSRF token** |
-| POST | `/api/customers/logout` | ลูกค้า + CSRF |
-| GET | `/api/customers/me` | ลูกค้า |
-| PATCH | `/api/customers/me` | ลูกค้า + CSRF (แก้ชื่อ/อีเมล) |
-| POST | `/api/customers/change-password` | ลูกค้า + CSRF (ล้างทุกเซสชัน ต้อง login ใหม่) |
-| DELETE | `/api/customers/me` | ลูกค้า + CSRF (PII นิรนาม + ถอน LINE + ล้างเซสชัน) |
-| POST | `/api/customers/line/start` | ลูกค้า + CSRF (สร้าง state/nonce/PKCE อายุ 10 นาที) |
-| GET | `/api/customers/line/callback` | สาธารณะ (callback จาก LINE — ระบุตัวตนจาก state ครั้งเดียว ไม่รับ sub จาก body) |
-| GET | `/api/customers/line/status` | ลูกค้า |
-| POST | `/api/customers/line/unlink` | ลูกค้า + CSRF (ลบ link + แจ้ง adapter) |
-| GET | `/api/admin/customers`, `/api/admin/customers/:id` | **Owner/Admin** (safe fields + สถานะ LINE) |
-| POST | `/api/admin/customers/:id/deactivate`, `/activate` | **Owner/Admin** + CSRF (ปิดแล้วยกเลิกเซสชัน) |
-| GET | `/api/audit/customers` | **Owner/Admin** |
-
-กฎสำคัญ:
-
-- เปลี่ยนรหัส/รีเซ็ต/ปิดบัญชี/เปลี่ยนบทบาท → เซสชันเดิมทั้งหมดถูกยกเลิกทันที
-- กัน reset/login race ด้วย `password_version`: login ตรวจ hash สดซ้ำหลัง compare
-  (หลักฐาน stale ถูกปฏิเสธ) เซสชันผูก version ตอนสร้าง ถ้า version ไม่ตรง user
-  ปัจจุบันจะใช้ไม่ได้แม้แถว session ยังอยู่
-- รหัสผ่านเก็บแบบ bcrypt hash **บังคับไม่เกิน 72 ไบต์ (UTF-8) ทุกจุด**
-  (login/create/change/reset/bootstrap) เพราะ bcrypt ตัดส่วนเกินแบบเงียบ
-- ไม่ส่ง hash/รหัสผ่านใน response/log; audit เก็บเฉพาะผลลัพธ์ ไม่เก็บ secret
-- `trust proxy` ค่าเริ่มต้น `false` (เพิกเฉย `X-Forwarded-For` ดิบเสมอ)
-  ตั้ง `TRUSTED_PROXY` (คั่นด้วย comma) เฉพาะเมื่ออยู่หลัง reverse proxy ที่ไว้ใจได้จริง
-
-กฎสำคัญ (Ticket 02 เพิ่มเติม):
-- ตารางเวลาเปิดประจำสัปดาห์คำนวณฝั่ง `Asia/Bangkok` รองรับปิดทั้งวันและช่วงข้ามเที่ยงคืน
-  (overnight ต้องเป็นช่วงสุดท้ายได้วันละ 1 ช่วง และไม่ซ้อนวันถัดไป) กฎรวมใน
-  `apps/api/src/shop/schedule.ts` — routes ห้าม duplicate กฎ
-- คำสั่งเปิด–ปิดชั่วคราวชนะตารางเสมอ ปิดต้องมีเหตุผล (≤300 ตัวอักษร)
-  `expectedReopenAt` (คาดว่าจะเปิด = แสดงผลเท่านั้น) แยกจาก `expiresAt`
-  (หมดอายุคำสั่ง = มีผลจริง ต้องอยู่ในอนาคต) ของหมดอายุไม่ถือว่า active
-  (`override: null` + `expiredOverride`) ทั้ง public และ management
-- ช่องวันเวลาใน UI เป็น wall-clock กรุงเทพ (Asia/Bangkok, UTC+07:00 ไม่มี DST):
-  `apps/web/src/lib/bangkok-time.ts` แปลงเป็น UTC ISO แบบ pure
-  (เช่น `2026-09-12T18:30` กรุงเทพ = `2026-09-12T11:30:00.000Z` เสมอ
-  ไม่พึ่ง timezone เครื่อง) ค่าผิด/เป็นไปไม่ได้ถูกปฏิเสธฝั่ง client ด้วยข้อความไทย
-  ก่อนเรียก API; server แปลง ISO↔DATETIME ด้วย UTC getters (pool `timezone: Z`)
-  และรับเฉพาะ ISO ที่มี timezone ชัดเจน (ลงท้าย `Z` หรือ `±HH:MM` —
-  ค่าไม่มี timezone ถูกปฏิเสธ 400)
-- public snapshot แสดง `serviceWindow` (รอบที่เปิดอยู่จริง `{sourceWeekday, open, close, overnight}`)
-  ถ้าเปิดจาก overnight เมื่อวานจะชี้ช่วงของเมื่อวาน ไม่ใช่ตารางวันนี้
-- mutation ร้าน/โต๊ะทุกตัวเป็น atomic พร้อม audit ผ่าน Store
-  (`saveShopConfig` คืน `ShopConfigSnapshot` เฉพาะชื่อ/ตาราง/override ไม่แตะ tables;
-  `setShopOverride`/`clearShopOverride`/`createShopTable`/`updateShopTable`):
-  event action/detail สร้างจาก factory กลาง `apps/api/src/shop/audit-events.ts`
-  (Memory/MySQL ใช้ semantics เดียวกัน);
-  MySQL ใช้ transaction บน connection เดียว (begin/commit/rollback + release เสมอ),
-  memory rollback ทั้ง state และลำดับ audit; public status อ่านจาก
-  `getShopSnapshot()` (snapshot คงเส้นคงวาชุดเดียว)
-- โต๊ะเก็บเฉพาะ `พร้อมใช้งาน/งดใช้งาน` (ไม่มี `occupied` boolean หลอก) โต๊ะว่าง =
-  โต๊ะพร้อมใช้งาน − รอบเปิดจาก `OccupancyProvider` (default zero จนกว่า ticket รอบการใช้โต๊ะ
-  จะมา implement) ชื่อ trim ไม่ซ้ำ ความจุ int 1–50 ไม่มี endpoint ลบ
-- นาฬิกาฉีดผ่าน `AppOptions.now` (default เวลาจริง) เทสต์กำหนดเวลาตายตัวผ่าน seam นี้
-- Ticket 02 routes อยู่ใน `apps/api/src/routes/shop.ts` (รับ middleware/clock/occupancy
-  ผ่าน deps) `app.ts` เหลือ Ticket 01 + mount router; web ใช้ `WeekdayKey`/`WEEKDAY_KEYS`
-  ร่วมกัน และประวัติร้านใช้ `AuditItem` ตัวเดียว (ไม่มี `ShopAuditItem` ซ้ำ)
-
-กฎสำคัญ (Ticket 03 — บัญชีลูกค้าและการเชื่อม LINE):
-
-- บัญชีลูกค้าแยกจากพนักงานโดยสิ้นเชิง: ตาราง (`customers`/`customer_sessions`),
-  คุกกี้ (`csid` vs `sid`) และ middleware แยกกัน session ข้ามชนิดใช้แทนกันไม่ได้ (server ตรวจทุกครั้ง)
-- เบอร์โทร normalize กฎไทยที่ `apps/api/src/customer/phone.ts` (ตัดขีด/ช่องว่าง/วงเล็บ,
-  `+66`/`66` → `0`, ต้องได้ 10 หลักขึ้นต้น `0`) ซ้ำกันถูกปฏิเสธ 409 แม้เขียนต่างรูปแบบ
-  อีเมล optional (ว่าง = null, trim + ตัวพิมพ์เล็ก, ซ้ำถูกปฏิเสธ 409)
-- รหัสผ่าน bcrypt ขีด 72 ไบต์เหมือนพนักงานทุกจุด; เปลี่ยนรหัส/ปิดบัญชี → ล้างเซสชันลูกค้าทั้งหมดทันที
-  (เซสชันผูก `passwordVersion` กัน race แบบเดียวกับ staff)
-- audit ลูกค้า (`customer_*`) เก็บเบอร์แบบ mask (`08******78`) ไม่เก็บ hash/token/verifier/nonce
-  ดูได้เฉพาะ Owner/Admin ผ่าน `/api/audit/customers`
-- LINE Login v2.1 backend-owned: `state`/`nonce` สุ่ม 64 hex ใหม่ทุก attempt + PKCE S256,
-  tx อายุ 10 นาที; callback ใช้ `peekLineTx` (อ่านอย่างเดียว ไม่ mark used) เป็น pre-check
-  ก่อนแลก code แล้ว consume แบบ one-time atomic พร้อม audit ของผลลัพธ์ใน seam เดียวเท่านั้น
-  (สำเร็จ→`linkLineIdentityWithConsume`: link + consume + `customer_line_linked` ใน transaction/seam เดียว;
-  ล้มเหลวทุกขั้นหลัง peek→`consumeLineTxWithAudit`: consume + `customer_line_link_failed` ใน seam เดียว;
-  ใช้ซ้ำ/หมดอายุ/แข่งกัน → redirect error โดยไม่เขียน audit ซ้ำ)
-  เหตุผลที่ **ไม่** consume ก่อนแลก code: การแลก code เป็น I/O ภายนอก (LINE API) ที่เข้าร่วม
-  DB transaction ไม่ได้ — consume ก่อนจะได้แค่ (ก) เผา state โดยไม่มี audit ของผลลัพธ์
-  (เสีย invariant “state เปลี่ยนต้องมี audit”) หรือ (ข) consume แล้วชดเชยคืนเมื่อล้มเหลว
-  (มีหน้าต่าง crash ที่ state ไหม้โดยไม่มี audit/link และเปิด replay) ส่วน flow ปัจจุบันยังกัน
-  replay ได้เท่าเดิม: สำเร็จครั้งเดียวผ่าน `SELECT ... FOR UPDATE` + `used_at` + unique
-  `(provider, provider_subject)` (MySQL) / backup-restore (memory) และ code ฝั่ง LINE
-  ใช้ได้ครั้งเดียว; แต้มล้มเหลวเผา state เพื่อกัน brute-force ส่วน audit infra พัง rollback
-  การ consume แล้วโยน error (state ยังใช้ได้ → retry ได้) ไม่เก็บ code/token/secret/state/nonce/sub
-  ใน audit/redirect เด็ดขาด
-  redirect รับเฉพาะ allowlist (`/profile`, `/customer/profile`, `/line`, `/customer/login`, `/`) นอกนั้นตกเป็น `/profile`
-- callback (`GET /api/customers/line/callback`) ตอบเป็น redirect 302 เสมอ ไม่ค้างเป็น JSON:
-  ไป `CUSTOMER_UI_URL` + allowlist path (ไม่ตั้ง = same-origin fallback) พร้อม query
-  `?line=linked` (สำเร็จ) หรือ `?line=error&reason=<cancelled|invalid_response|expired_or_used|exchange_failed|verify_failed|conflict|unavailable|internal>`
-  เท่านั้น — ไม่ใส่ code/token/secret/state/nonce/sub ใน query; หน้าโปรไฟล์อ่าน query นี้มาแสดงผลไทย
-- ห้ามรับ LINE user ID จาก request body — ใช้เฉพาะ `sub` จาก claims ที่ adapter ยืนยันแล้ว
-  (`iss`/`aud`/`exp`/`nonce` ตรวจซ้ำทุกครั้ง) ไม่ persist token ใด ๆ หลังเชื่อม
-  ความสัมพันธ์หนึ่งต่อหนึ่งทั้งสองทิศ (ลูกค้ามีได้หนึ่ง LINE, LINE หนึ่งค่าผูกได้หนึ่งบัญชี)
-- unlink/ลบบัญชีเรียก `adapter.deauthorize` ก่อนลบความสัมพันธ์ภายในเสมอ (fake บันทึกการเรียกในเทสต์
-  และ assert subject ถูกต้อง) ล้มเหลวต้องคง local link ไว้ (ตอบ 502) ลบเฉพาะหลัง success —
-  ยกเว้น Disabled provider (ไม่เคยตั้งค่าเลย ไม่มี external auth ให้ revoke) ที่ทำความสะอาดภายในต่อได้
-  ลบบัญชีทำ PII เป็นนิรนาม (`ลูกค้าที่ลบบัญชี`, phone/email = null เพื่อให้เบอร์นำกลับมาใช้ใหม่ได้)
-  คง id ภายใน + ล้างเซสชัน + ถอน LINE ใน transaction เดียวพร้อม audit
-- สมัครสำเร็จ (customer + initial session + audit), login สำเร็จ (session + login audit),
-  เริ่มเชื่อม LINE (line state tx + audit) เป็น atomic ที่ Store seam ผ่าน narrow methods
-  (`registerCustomerWithSession`, `createCustomerSessionWithAudit`, `createLineLoginTxWithAudit`)
-  ทั้ง Memory (backup/restore) และ MySQL (transaction เดียว) — routes ห้ามแยกเรียกหลายขั้น
-  เทสต์ failure-injection พิสูจน์ rollback ทั้ง state/session/audit
-- ยังไม่ตั้ง `LINE_CHANNEL_ID`/`LINE_CHANNEL_SECRET`/`LINE_REDIRECT_URI` → `POST /line/start`
-  ตอบ 503 fail-fast (เทสต์ฉีด `FakeLineProvider` ผ่าน deps ห้ามเรียก LINE จริง)
-- ข้อจำกัดที่รู้แล้ว (ซื่อสัตย์): รุ่นนี้ตั้งใจไม่เก็บ user access token ระยะยาว `RealLineProvider.deauthorize`
-  จึงเรียก `POST .../user/v1/deauthorize` ของ LINE แบบเต็ม (ต้องใช้ userAccessToken สด) ไม่ได้ —
-  เมธอดนี้โยน `LineDeauthorizeError` ชัดเจนทุกครั้ง (ห้ามสำเร็จแบบเงียบ ห้าม log token/secret)
-  และ unlink/delete คง local link ไว้พร้อมตอบ 502; ผู้ใช้เพิกถอนเองได้ที่ LINE Settings > Account > Authorized apps
-  (flow เก็บ token ขั้นต่ำเข้ารหัส at-rest ด้วย `LINE_TOKEN_ENCRYPTION_KEY` เพื่อ deauthorize เต็มรูปแบบเป็นงาน follow-up);
-  หน้าเว็บเปิด authorize URL ในแท็บใหม่แล้วกด “ตรวจสอบสถานะ” (ยังไม่มี auto-redirect กลับเข้าเว็บ
-  นอกจาก callback redirect 302 กลับมาเมื่อ LINE ส่ง browser มาที่ callback โดยตรง)
-
-กฎสำคัญ (Ticket 06 — การจองโต๊ะและรอบการใช้โต๊ะ):
-
-- การจองเป็นของบัญชีลูกค้าเท่านั้น (Guest จองไม่ได้ — 401) ลูกค้าเห็น/ยกเลิกได้เฉพาะของตนเอง
-  (คนอื่น 403) จองล่วงหน้า 60 นาที–3 วัน ยกเลิกก่อนนัด ≥60 นาที (ขอบเขตพอดีผ่าน)
-- หน้าต่างถือครองโต๊ะ `RESERVATION_SLOT_MINUTES = 120 นาที` (`apps/api/src/reservations/validation.ts`):
-  โต๊ะเดียวกันทับซ้อนกันเมื่อ |t1-t2| < 120 นาที — pure function เดียวกันทั้ง Memory/MySQL
-- เลือกโต๊ะเองหรือให้ระบบแนะนำ (โต๊ะพร้อมใช้งานที่เล็กที่สุดซึ่งจุพอและว่างในช่วงนั้น);
-  โต๊ะงดใช้งาน/จุไม่พอ/ทับซ้อนถูกปฏิเสธ 409 พร้อมข้อความไทย
-- กันจองชนแบบ concurrent: Memory serialize ผ่านคิวใน store, MySQL ใช้ named lock
-  `paor_reservation_write` + transaction เดียว (SELECT ตาราง/แถวแบบ FOR UPDATE แล้วค่อย insert)
-  ชนกันสำเร็จได้รายการเดียวและโต๊ะไม่ติดค้าง; idempotency key (optional UUID) + รหัส `RSV-YYYYMMDD-XXXX`
-  (unique + retry) — key เดิม + payload เดิมคืนของเดิมโดยไม่เขียน audit ซ้ำ
-- หลังร้าน (Owner/Admin — kitchen/drink 403, ไม่ login 401): ค้นหา/ดู/เปลี่ยนสถานะ
-  (`pending → confirmed/cancelled`, `confirmed → cancelled/no_show` พร้อมเหตุผลบังคับ)
-  + audit `reservation_*` (actor/reason/before/after); `seated → completed` เปลี่ยนผ่านปิดรอบเท่านั้น
-- เช็กอิน (Owner/Admin) ด้วยรหัสจอง/เบอร์โทร/QR fake (`PAOR-RSV:<CODE>` — มีเฉพาะ fake/local
-  ห้ามใช้ provider จริง) ตรวจจำนวนจริง 1–50 เปิดรอบได้ครั้งเดียวต่อการจองและหนึ่งรอบต่อหนึ่งโต๊ะ;
-  โต๊ะไม่รองรับจำนวนจริงและไม่มีโต๊ะอื่น → 409 รอจัดโต๊ะโดยไม่เปลี่ยนสถานะ
-- คำสั่งซื้อ dine_in ผูก `roundId` (รอบต้องเปิดอยู่ โต๊ะต้องตรงรอบ) ผ่าน `POST /api/orders`
-  (เพิ่ม `tableId`/`roundId` optional — migration 007 เพิ่มคอลัมน์แบบ rerunnable);
-  รอบปิดรับคำสั่งซื้อใหม่ไม่ได้ (409); ปิดรอบได้เมื่อไม่มีออเดอร์ `pending_payment` ผูกอยู่
-  (ปิดแล้วการจองต้นทาง → `completed`)
-- public ไม่รั่ว PII: `/api/shop/status` (ผ่าน `OccupancyProvider` ที่นับจากรอบเปิดจริง —
-  runtime ต่อ `createStoreOccupancyProvider(store)` ใน `index.ts`) และ
-  `GET /api/shop/table-rounds` (sanitize เหลือ tableId/tableName/partySize/openedAt)
-- mutation การจอง/เช็กอิน/รอบทุกตัวเป็น atomic พร้อม audit ผ่าน Store (factories กลาง
-  `apps/api/src/reservations/audit-events.ts`); นาฬิกาฉีดผ่าน `AppOptions.now`
-  (router ส่งให้ store ทุก mutation เวลา); routes อยู่ใน `apps/api/src/routes/reservations.ts`
-- ไม่รวมตาม scope (งาน ticket ถัดไป): LINE reminder, QR provider จริง, payment/deposit,
-  external notification, Docker/MySQL runtime จริง, full waitlist, Prisma/experiments
-
-## ตรวจ/ทดสอบ
-
-```powershell
-npm run typecheck -w apps/api
-npm run typecheck -w apps/web
-npm run test -w apps/api   # Ticket 01: 29 API + 4 env + Ticket 02: 12 shop-status + 4 shop-store + 5 shop-schedule + Ticket 03: 19 customers + 15 customer-line + 10 line-provider + Ticket 06: 11 reservations (memory/fault seam ฉีดเฉพาะในเทสต์)
-npm run test -w apps/web   # เดิม 106 + ใหม่ 20 (reservations 7/checkin 7/admin-reservations 6)
-npm run build -w apps/api
-npm run build -w apps/web
-```
-
-`tests/mysql.int.test.ts` (Ticket 01, 6 ข้อ), `tests/shop-mysql.int.test.ts`
-(Ticket 02, 3 ข้อ: CRUD + snapshot/audit, transaction rollback เมื่อ audit เขียนไม่ได้,
-override datetime round-trip), `tests/customer-mysql.int.test.ts`
-(Ticket 03, 4 ข้อ: CRUD/profile/password, unique/tx consume/link conflict,
-LINE start→callback→unlink ผ่าน HTTP, migration 004 รันซ้ำ),
-`tests/orders-mysql.int.test.ts` (Ticket 05, 2 ข้อ),
-`tests/menu-mysql.int.test.ts` (Ticket 04, 2 ข้อ) และ
-`tests/reservations-mysql.int.test.ts`
-(Ticket 06, 2 ข้อ: จอง→เช็กอิน→ผูกออเดอร์→ปิดรอบบน MySQL จริง,
-transaction rollback เมื่อ audit เขียนไม่ได้, migration 007 รันซ้ำ) ใช้ **MySQL จริงผ่าน `TEST_DATABASE_URL`
-แยกจาก production เท่านั้น**:
-
-- ไม่มี `TEST_DATABASE_URL` → **skip ชัดเจน (23 skipped)** ไม่นับว่าผ่าน
-- มี URL แล้วแต่เชื่อมต่อ/migrate ไม่ได้ → **FAIL** (ห้าม catch แล้วผ่าน)
-- ทำความสะอาด users/sessions/audit + customers/customer_sessions/line_links/line_tx + menu + orders/order_items + reservations/table_rounds ที่สร้างทั้งหมดหลังจบ (`afterAll`)
-
-## Ticket 14 — release hardening (backup/recovery, security, observability, release E2E)
-
-- Backup/restore: `docs/runbook/backup-restore.md` (RPO 24 ชม. / RTO 4 ชม. /
-  เก็บ 7 วัน — operator-executed จนกว่าจะมี ticket backup automation),
-  `docs/runbook/migration-rehearsal.md` (checklist 001–014 + เกณฑ์ Go/No-go),
-  ตรวจ static โดยไม่ต้องมี DB: `node scripts/verify-restore.mjs` (exit 0)
-- Security/PII: `docs/SECURITY.md` (role/access matrix ทุก endpoint, CSRF/session/cookie,
-  redaction, input limits, audit/error review, `npm audit --omit=dev` 9 vulns —
-  ไม่ fix เพราะต้อง major upgrade หรือแตะไฟล์ต้องห้าม)
-- Observability: `docs/OBSERVABILITY.md` + `apps/api/src/observability.ts`
-  (request ID `x-request-id` ทุก response, error `code` คงที่โดยไม่เปลี่ยนข้อความไทยเดิม,
-  `GET /api/ready` public 503 เมื่อ DB ไม่พร้อม, `GET /api/metrics/summary` เฉพาะ Owner)
-- Release E2E local-first: `apps/api/tests/release.test.ts` (6 ข้อ: slice ข้ามบทบาท,
-  จองชน/ชำระซ้ำไม่สร้างซ้ำ, role matrix, PII, audit taxonomy) +
-  `apps/web/tests/release-readiness.test.tsx` (5 ข้อ: skip link/landmarks/labels/live,
-  keyboard, touch ≥44px, responsive, focus/reduced-motion — jsdom-feasible, ไม่ใช้ Taste
-  เพราะไม่มี reference URL)
-- Ticket: `.scratch/pa-or-restaurant/issues/14-release-hardening.md`
-
-## ข้อจำกัดที่ทราบ (สภาพแวดล้อมนี้)
-
-- เครื่องนี้ไม่มี Docker/MySQL จึงตรวจ integration กับ MySQL จริงไม่ได้
-  (ผลล่าสุด: `mysql.int 6 skipped` + `shop-mysql 3 skipped` + `customer-mysql 4 skipped` —
-  `SKIP ...: ไม่ได้ตั้งค่า TEST_DATABASE_URL`)
-  ต้องรันบนเครื่องที่มี Docker/MySQL ด้วย `TEST_DATABASE_URL` แยกก่อนปิด ticket
-  (รวม migration 004 รันซ้ำ + tx rollback บน MySQL จริง)
-- ไม่มีเบราว์เซอร์อัตโนมัติในสภาพแวดล้อมนี้ จึงตรวจ responsive/keyboard จริงไม่ได้
-  (web tests ตรวจ states/labels/landmarks/role-nav ใน jsdom เท่านั้น)
-- ไม่ได้ตรวจกับ LINE จริง (ไม่มี channel/dev tester ในเครื่องนี้) — ใช้ `FakeLineProvider`
-  ตรวจทุก branch (success/error/reuse/expiry/nonce/issuer/audience/signature/timeout/conflict/allowlist)
-  ส่วน sandbox จริงต้องตรวจด้วย Tester account ก่อน `resolved`
-- ชุด web tests ทั้งหมดรันพร้อมกัน (`npm run test -w apps/web`) ใช้หน่วยความจำเกินขีดเครื่องนี้
-  (worker OOM) จึงรันทีละไฟล์/ทีละชุดด้วย `NODE_OPTIONS=--max-old-space-size=3072` แล้วรวมผล —
-  ผ่านครบทุกไฟล์ (ดูรายงานใน ticket)
-- `npm audit --omit=dev` ผลล่าสุด (2026-09-15): 9 vulnerabilities (4 moderate, 5 high) —
-  `qs` (moderate, ผ่าน express), `react-router` 6.x (moderate),
-  `deepmerge-ts→prisma` และ `mariadb→@prisma/adapter-mariadb` (high, อยู่ใน chain
-  ของไฟล์ต้องห้าม) ยังไม่ upgrade เพราะต้อง major upgrade ที่เป็น breaking change
-  หรือแตะไฟล์ที่ห้ามแตะ (ดู `docs/SECURITY.md` ข้อ 7)
+ไฟล์ LICENSE ยังไม่ได้เพิ่ม เพราะเจ้าของโครงการยังไม่ได้ตัดสินใจเรื่อง license
