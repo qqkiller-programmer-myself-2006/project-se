@@ -67,3 +67,19 @@ describe("api client เมื่อ backend ต่อฐานข้อมู�
     vi.unstubAllGlobals();
   });
 });
+
+describe("api client path params", () => {
+  it("orderGet encode id จาก URL — '../' ไม่พาไป endpoint อื่น", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        urls.push(String(url));
+        return { ok: true, status: 200, json: async () => ({ order: {} }) };
+      }),
+    );
+    await api.orderGet("../menu/public", "0812345678");
+    expect(urls[0]).toBe("/api/orders/..%2Fmenu%2Fpublic?phone=0812345678");
+    vi.unstubAllGlobals();
+  });
+});

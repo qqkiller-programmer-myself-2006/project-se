@@ -40,8 +40,10 @@ gh repo view $repo
 gh repo edit $repo --default-branch main --delete-branch-on-merge --enable-squash-merge --enable-merge-commit=false --enable-rebase-merge=false
 ~~~
 
-ป้องกัน main ให้ทุก change ผ่าน pull request และ CI job quality ก่อน merge
-คำสั่งนี้ต้องรันใน shell ที่รองรับ heredoc:
+ป้องกัน main ให้ทุก change ผ่าน pull request และ status check `Quality checks`
+(ชื่อ job ใน `.github/workflows/ci.yml`) ก่อน merge ค่าที่ตั้งไว้จริงใช้ approval 0 คน
+และไม่บังคับกับ admin เพราะ repo มีเจ้าของคนเดียว (ถ้าบังคับ approval 1 คน
+เจ้าของจะ merge PR ของตัวเองไม่ได้) คำสั่งนี้ต้องรันใน shell ที่รองรับ heredoc:
 
 ~~~bash
 repo="OWNER/REPO"
@@ -49,11 +51,11 @@ gh api --method PUT "repos/$repo/branches/main/protection" --input - <<'JSON'
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["quality"]
+    "contexts": ["Quality checks"]
   },
-  "enforce_admins": true,
+  "enforce_admins": false,
   "required_pull_request_reviews": {
-    "required_approving_review_count": 1,
+    "required_approving_review_count": 0,
     "dismiss_stale_reviews": true
   },
   "restrictions": null,
@@ -114,7 +116,7 @@ gh label create good-first-issue --color 7057FF --description "เหมาะ�
 ## Final verification
 
 - [ ] default branch เป็น main
-- [ ] branch protection บังคับ PR และ status check quality
+- [ ] branch protection บังคับ PR และ status check `Quality checks`
 - [ ] เปิด auto-delete head branches แล้ว
 - [ ] merge policy ใช้ squash และปิด merge commit/rebase ตามนโยบายทีม
 - [ ] labels และ topics ปรากฏในหน้า repository

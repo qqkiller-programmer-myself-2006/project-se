@@ -89,3 +89,16 @@ dependency major upgrades, browser E2E จริง (Playwright/Taste — ไม
   payment provider credentials/network จริง, backup automation (Owner download/job),
   dependency major upgrades (react-router-dom@7, prisma chain, mariadb),
   browser E2E จริง (Playwright/Taste), external storage/image upload
+
+### 2026-09-25 — บั๊กสแกนหลัง resolved: 500 ไม่มี log ฝั่ง server
+
+- พบ (bug scan, Claude): central error handler ใน `apps/api/src/app.ts` ตอบ 500 ให้ client
+  ด้วยข้อความกลางตามที่ตั้งใจ แต่ไม่ log อะไรฝั่ง server เลย — error ที่ไม่คาดคิดจริง
+  (เช่น SQL พัง, exception จาก dependency) หายไปเงียบ ๆ ไม่มีทางสืบสวนจาก log ใน production
+- แก้: เพิ่ม `logServerError` (ใช้ `sanitizeForLog` เดิมปกปิด secret/PII) log ทุก response
+  สถานะ ≥500 ไปที่ `console.error` พร้อม `requestId`/method/path/error name-message-stack;
+  เพิ่ม test ใน `apps/api/tests/release.test.ts` ยืนยันว่า log เกิดขึ้นจริง มี requestId
+  และไม่รั่ว secret ที่แนบมากับ error object
+- เพิ่มเติม (ไม่เกี่ยวกับ observability โดยตรง): `scripts/verify-restore.mjs` ไม่เคยตรวจว่า
+  `RELEASE_MIGRATION_COUNT` ใน `observability.ts` ตรงกับจำนวน migration จริง (comment header
+  ยังเขียนว่า "14 ไฟล์" ทั้งที่มี 16) เพิ่มการเช็กและแก้ comment ให้ตรง
