@@ -82,7 +82,7 @@ describe("หน้าคำสั่งซื้อของฉัน (Ticket 0
     // 2026-09-14T20:00Z = 15 ก.ย. 03:00 เวลาไทย — ต้องนับเป็นวันที่ 15 ไม่ใช่ 14
     const lateNight = { ...memberOrder, id: "o3", orderNumber: "ORD-20260915-LN01", createdAt: "2026-09-14T20:00:00.000Z" };
     stubFetch((url) => {
-      if (url.includes("/api/customers/me")) return { ok: true, json: async () => ({ customer: { id: "c1", name: "สมชาย" } }) };
+      if (url.includes("/api/customers/session")) return { ok: true, json: async () => ({ customer: { id: "c1", name: "สมชาย" } }) };
       if (url.includes("/api/orders/mine")) return { ok: true, json: async () => ({ orders: [memberOrder, older, lateNight] }) };
       return { ok: true, json: async () => ({}) };
     });
