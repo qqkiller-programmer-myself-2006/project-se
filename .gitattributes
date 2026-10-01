@@ -1,0 +1,17 @@
+* text=auto
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.docx binary
+*.pdf binary
+*.glb binary
+*.zip binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.mp4 binary
+*.mov binary
