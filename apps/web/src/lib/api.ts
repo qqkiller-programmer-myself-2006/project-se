@@ -396,6 +396,12 @@ export interface OrderDetail {
   items: OrderItem[];
 }
 
+export interface UpdateOrderItemsRequest {
+  items: CreateOrderRequest["items"];
+  /** เบอร์ Guest เจ้าของคำสั่งซื้อ (สมาชิก/พนักงานไม่ต้องส่ง) */
+  phone?: string;
+}
+
 export interface CreateOrderRequest {
   serviceType: OrderServiceType;
   scheduledAt?: string | null;
@@ -1277,6 +1283,13 @@ export const api = {
     req<{ order: OrderDetail; deduplicated: boolean }>(
       "/api/orders",
       { method: "POST", body: JSON.stringify(body) },
+      true,
+    ),
+  // Issue #42: แก้ไขรายการในคำสั่งซื้อที่รอชำระเงิน (แทนที่ทั้งรายการ; Guest ส่งเบอร์ที่ใช้สั่งมาด้วย)
+  orderUpdateItems: (orderId: string, body: UpdateOrderItemsRequest) =>
+    req<{ order: OrderDetail; changed: boolean }>(
+      `/api/orders/${encodeURIComponent(orderId)}/items`,
+      { method: "PUT", body: JSON.stringify(body) },
       true,
     ),
   myOrders: (limit = 50) => req<{ orders: OrderDetail[] }>(`/api/orders/mine?limit=${limit}`),

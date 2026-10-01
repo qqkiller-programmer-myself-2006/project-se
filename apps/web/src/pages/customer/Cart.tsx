@@ -16,14 +16,17 @@ import {
   cartTotalWith,
   clearCart,
   loadCart,
+  loadCartEdit,
   removeFromCart,
   saveCart,
+  saveCartEdit,
   setLineOption,
   setSpecialRequest,
   setNote,
   setQuantity,
   toggleLineOption,
   type Cart,
+  type CartEditSession,
 } from "../../lib/cart";
 import { loadTableContext, saveTableContext } from "../../lib/tableContext";
 import { useCustomerSession } from "../../lib/customerSession";
@@ -76,6 +79,9 @@ export default function CartPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [placed, setPlaced] = useState<OrderDetail | null>(null);
+  // Issue #42: กำลังแก้ไขคำสั่งซื้อที่รอชำระเงิน (ตะกร้ามีรายการของออเดอร์นั้นอยู่) — บันทึกด้วย PUT แทนการสร้างใหม่
+  const [edit, setEdit] = useState<CartEditSession | null>(() => loadCartEdit());
+  const [placedEdited, setPlacedEdited] = useState(false);
   // โต๊ะที่สแกน QR มา (จำไว้ตลอดแท็บ) + สถานะว่าโต๊ะนั้นเช็กอินแล้วหรือยัง
   const [tableCode, setTableCode] = useState<string | null>(() => loadTableContext());
   const [tableStatus, setTableStatus] = useState<PublicTableStatus | null>(null);
@@ -190,11 +196,48 @@ export default function CartPage() {
     setCart((c) => addToCart(c, menuId));
   }
 
+  function cancelEdit() {
+    const cleared = clearCart();
+    setCart(cleared);
+    saveCart(cleared);
+    saveCartEdit(null);
+    setEdit(null);
+    setSubmitError(null);
+  }
+
   async function submit() {
     if (submitting) return;
     setSubmitError(null);
     if (cart.length === 0) {
-      setSubmitError("ตะกร้ายังว่างอยู่ กรุณาเลือกเมนูอย่างน้อย 1 รายการ");
+      setSubmitError(edit ? "ต้องมีอย่างน้อย 1 รายการ หากไม่ต้องการแล้วให้ยกเลิกการแก้ไข" : "ตะกร้ายังว่างอยู่ กรุณาเลือกเมนูอย่างน้อย 1 รายการ");
+      return;
+    }
+    if (edit) {
+      // แก้ไขคำสั่งซื้อเดิม: ส่งรายการทั้งชุดไปแทนที่ (วิธีรับบริการ/โต๊ะ/ผู้สั่งไม่เปลี่ยน)
+      try {
+        setSubmitting(true);
+        const res = await api.orderUpdateItems(edit.orderId, {
+          items: cart.map((l) => ({
+            menuId: l.menuId,
+            quantity: l.quantity,
+            note: l.note || null,
+            options: l.options.length > 0 ? l.options : null,
+            specialRequest: l.specialRequest || null,
+          })),
+          ...(edit.phone ? { phone: edit.phone } : {}),
+        });
+        setPlaced(res.order);
+        setPlacedEdited(true);
+        const cleared = clearCart();
+        setCart(cleared);
+        saveCart(cleared);
+        saveCartEdit(null);
+        setEdit(null);
+      } catch (err) {
+        setSubmitError(err instanceof Error ? err.message : "บันทึกการแก้ไขไม่สำเร็จ");
+      } finally {
+        setSubmitting(false);
+      }
       return;
     }
     let scheduled: string | null = null;
@@ -272,7 +315,9 @@ export default function CartPage() {
             <Panel label="ยืนยันคำสั่งซื้อสำเร็จ">
             <div className="space-y-3">
               <Alert tone="success" role="status">
-                รับคำสั่งซื้อแล้ว เลขคำสั่งซื้อ {placed.orderNumber} ยอดรวม {fmtPrice(placed.total)}
+                {placedEdited
+                  ? `บันทึกการแก้ไขแล้ว เลขคำสั่งซื้อ ${placed.orderNumber} ยอดรวมใหม่ ${fmtPrice(placed.total)}`
+                  : `รับคำสั่งซื้อแล้ว เลขคำสั่งซื้อ ${placed.orderNumber} ยอดรวม ${fmtPrice(placed.total)}`}
               </Alert>
               <p className="text-sm text-ink-600">
                 สถานะปัจจุบัน: รอชำระเงิน — จดเลขคำสั่งซื้อไว้ใช้ติดตามสถานะ
@@ -287,13 +332,37 @@ export default function CartPage() {
                 <Link to="/orders" className={primaryButtonClass}>
                   ไปติดตามคำสั่งซื้อ
                 </Link>
-                <button type="button" onClick={() => setPlaced(null)} className={secondaryButtonClass}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPlaced(null);
+                    setPlacedEdited(false);
+                  }}
+                  className={secondaryButtonClass}
+                >
                   สั่งเพิ่ม
                 </button>
               </div>
             </div>
             </Panel>
           </MotionReveal>
+        ) : null}
+
+        {edit ? (
+          <Alert tone="info" role="status">
+            <p className="font-semibold">กำลังแก้ไขคำสั่งซื้อ {edit.orderNumber}</p>
+            <p className="mt-1 text-sm">
+              ปรับรายการ จำนวน ตัวเลือก และหมายเหตุได้ แล้วกด “บันทึกการแก้ไข” — ยอดจะคำนวณใหม่ตามราคาเมนูปัจจุบัน
+              แก้ได้เฉพาะก่อนมีการขอชำระเงิน
+            </p>
+            <button
+              type="button"
+              onClick={cancelEdit}
+              className="mt-2 inline-flex min-h-[44px] items-center text-sm font-semibold text-ink-800 underline underline-offset-2 hover:text-brand-700"
+            >
+              ยกเลิกการแก้ไข (ล้างตะกร้า)
+            </button>
+          </Alert>
         ) : null}
 
         <Panel label="ตะกร้าของฉัน">
@@ -453,7 +522,7 @@ export default function CartPage() {
         {cart.length > 0 ? (
           <Panel label="ยืนยันคำสั่งซื้อ">
             <div className="space-y-4">
-              {tableCode ? (
+              {tableCode && !edit ? (
                 <div className="rounded-lg border border-gold-600/40 bg-gold-100 px-4 py-3">
                   <p className="flex flex-wrap items-center gap-2 text-sm font-semibold text-gold-700">
                     <Icon name="table" size={18} />
@@ -483,6 +552,7 @@ export default function CartPage() {
                 </div>
               ) : null}
 
+              {!edit ? (
               <fieldset>
                 <legend className="mb-1 block text-sm font-semibold text-ink-800">วิธีรับบริการ</legend>
                 <div className="grid gap-2 sm:grid-cols-3">
@@ -508,8 +578,9 @@ export default function CartPage() {
                   ))}
                 </div>
               </fieldset>
+              ) : null}
 
-              {serviceType === "preorder" ? (
+              {!edit && serviceType === "preorder" ? (
                 <div>
                   <label htmlFor="scheduled-at" className="mb-1 block text-sm font-semibold text-ink-800">
                     เวลานัดรับ (ล่วงหน้าอย่างน้อย 30 นาที ไม่เกิน 7 วัน)
@@ -524,7 +595,7 @@ export default function CartPage() {
                 </div>
               ) : null}
 
-              {sessionChecked && !customer ? (
+              {!edit && sessionChecked && !customer ? (
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div>
                     <label htmlFor="guest-name" className="mb-1 block text-sm font-semibold text-ink-800">
@@ -569,7 +640,13 @@ export default function CartPage() {
                 aria-busy={submitting}
                 className={primaryButtonClass}
               >
-                {submitting ? "กำลังยืนยันคำสั่งซื้อ…" : `ยืนยันคำสั่งซื้อ · ${fmtPrice(total)}`}
+                {submitting
+                  ? edit
+                    ? "กำลังบันทึกการแก้ไข…"
+                    : "กำลังยืนยันคำสั่งซื้อ…"
+                  : edit
+                    ? `บันทึกการแก้ไข · ${fmtPrice(total)}`
+                    : `ยืนยันคำสั่งซื้อ · ${fmtPrice(total)}`}
               </button>
               <p className="text-xs text-ink-500">
                 กดยืนยันแล้วระบบจะตรวจราคา ตัวเลือก และสต๊อกอีกครั้งก่อนสร้างคำสั่งซื้อ

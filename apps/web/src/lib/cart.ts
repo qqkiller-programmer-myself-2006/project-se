@@ -23,6 +23,72 @@ export const CART_NOTE_MAX = 200;
 export const CART_QTY_MAX = 20;
 export const CART_SPECIAL_REQUEST_MAX = 200;
 
+// ---------- Issue #42: โหมดแก้ไขคำสั่งซื้อที่รอชำระเงิน ----------
+// ใช้ตะกร้าเดิมเป็นหน้าแก้ไข (ได้ตัวเลือก/หมายเหตุ/เพิ่ม-ลบเมนูครบ) แล้วบันทึกทับรายการของคำสั่งซื้อเดิม
+// session นี้จำว่ากำลังแก้ออเดอร์ไหน (เก็บใน localStorage คู่กับตะกร้า — หายไปพร้อมตะกร้าเมื่อยกเลิก/บันทึก)
+
+export const CART_EDIT_STORAGE_KEY = "paor-cart-edit-v1";
+
+export interface CartEditSession {
+  orderId: string;
+  orderNumber: string;
+  /** เบอร์ Guest เจ้าของคำสั่งซื้อ (สมาชิกเป็น null) — ต้องส่งให้ server ตอนบันทึก */
+  phone: string | null;
+}
+
+export function loadCartEdit(storage?: Pick<Storage, "getItem">): CartEditSession | null {
+  try {
+    const source = storage ?? (typeof localStorage !== "undefined" ? localStorage : undefined);
+    const raw = source?.getItem(CART_EDIT_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<CartEditSession> | null;
+    if (!parsed || typeof parsed.orderId !== "string" || !parsed.orderId || typeof parsed.orderNumber !== "string") return null;
+    return {
+      orderId: parsed.orderId,
+      orderNumber: parsed.orderNumber,
+      phone: typeof parsed.phone === "string" && parsed.phone ? parsed.phone : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function saveCartEdit(session: CartEditSession | null, storage?: Pick<Storage, "setItem" | "removeItem">): void {
+  try {
+    const target = storage ?? (typeof localStorage !== "undefined" ? localStorage : undefined);
+    if (!target) return;
+    if (!session) {
+      target.removeItem(CART_EDIT_STORAGE_KEY);
+      return;
+    }
+    target.setItem(CART_EDIT_STORAGE_KEY, JSON.stringify(session));
+  } catch {
+    // storage ใช้ไม่ได้ — โหมดแก้ไขยังทำงานต่อใน memory ของหน้านั้นได้
+  }
+}
+
+/** แปลงรายการในคำสั่งซื้อเป็นบรรทัดตะกร้า (จำนวนถูกบีบให้อยู่ในช่วงที่ตะกร้ารับได้) */
+export function orderToCartLines(order: {
+  items: { menuId: string; quantity: number; note: string | null; selectedOptions: { optionId: string }[]; specialRequest: string | null }[];
+}): Cart {
+  const out: Cart = [];
+  const seen = new Set<string>();
+  for (const i of order.items) {
+    const line: CartLine = {
+      menuId: i.menuId,
+      quantity: clampQuantity(i.quantity),
+      note: (i.note ?? "").slice(0, CART_NOTE_MAX),
+      options: [...new Set(i.selectedOptions.map((o) => o.optionId))],
+      specialRequest: (i.specialRequest ?? "").slice(0, CART_SPECIAL_REQUEST_MAX),
+    };
+    const key = cartLineKey(line);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(line);
+  }
+  return out;
+}
+
 /** ลายเซ็นบรรทัด (เมนู + ตัวเลือกที่เรียงแล้ว) — หมายเหตุ/ความต้องการเฉพาะเป็นฟิลด์แก้ไขได้ ไม่อยู่ในคีย์ */
 export function cartLineKey(line: Pick<CartLine, "menuId" | "options">): string {
   return `${line.menuId}|${[...line.options].sort().join(",")}`;

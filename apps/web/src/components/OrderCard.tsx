@@ -23,9 +23,12 @@ export function OrderCard({
   order,
   showOwner = false,
   payTo,
+  onEdit,
 }: {
   order: OrderDetail;
   showOwner?: boolean;
+  /** Issue #42: แสดงปุ่มแก้ไขรายการเมื่อคำสั่งซื้อยังรอชำระ (server ตรวจซ้ำว่ายังไม่มีคำขอชำระ) */
+  onEdit?: () => void;
   /** ลิงก์ไปหน้าชำระเงิน (แสดงปุ่มเมื่อคำสั่งซื้อยังรอชำระ) */
   payTo?: string;
 }) {
@@ -61,15 +64,27 @@ export function OrderCard({
         ))}
       </ul>
       <p className="mt-2 text-right text-base font-bold text-ink-900">ยอดรวม {fmtPrice(order.total)}</p>
-      {payTo && order.status === "pending_payment" ? (
-        <p className="mt-2 text-right">
-          <Link
-            to={payTo}
-            className="inline-flex min-h-[44px] items-center rounded-xl bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-brand-700"
-          >
-            ชำระเงิน
-          </Link>
-        </p>
+      {(payTo || onEdit) && order.status === "pending_payment" ? (
+        <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+          {onEdit ? (
+            <button
+              type="button"
+              onClick={onEdit}
+              aria-label={`แก้ไขรายการคำสั่งซื้อ ${order.orderNumber}`}
+              className="inline-flex min-h-[44px] items-center rounded-xl border border-ink-300 bg-white px-5 py-2.5 text-sm font-semibold text-ink-800 transition-colors hover:border-ink-400 hover:bg-ink-50"
+            >
+              แก้ไขรายการ
+            </button>
+          ) : null}
+          {payTo ? (
+            <Link
+              to={payTo}
+              className="inline-flex min-h-[44px] items-center rounded-xl bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-brand-700"
+            >
+              ชำระเงิน
+            </Link>
+          ) : null}
+        </div>
       ) : null}
     </article>
   );

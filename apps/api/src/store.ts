@@ -132,7 +132,8 @@ import {
   roundBaht,
   type NormalizedOrderLine,
 } from "./orders/validation.js";
-import { orderCreatedEvent, orderStatusChangedEvent } from "./orders/audit-events.js";
+import { orderCreatedEvent, orderItemsEditedEvent, orderStatusChangedEvent } from "./orders/audit-events.js";
+import { assertOrderEditable, orderLinesSignature } from "./orders/edit.js";
 import {
   assertCancellable,
   assertReservationStatusTransition,
@@ -633,6 +634,20 @@ export interface Store {
    * pending_payment → completed/cancelled พร้อมเหตุผล + audit ก่อน/หลัง แบบ all-or-nothing
    */
   updateOrderStatus(id: string, patch: { status: OrderStatus; reason: string }, actor: ShopActor): Promise<OrderDetail>;
+  /**
+   * Issue #42: แก้ไขรายการในคำสั่งซื้อเดิม (แทนที่ทั้งรายการ — เลขคำสั่งซื้อและ id ไม่เปลี่ยน)
+   * - แก้ได้เฉพาะ pending_payment ที่ยังไม่มีคำขอชำระเงิน (ConflictError นอกเหนือจากนี้)
+   * - ตรวจเมนู/ตัวเลือกเหมือนตอนสร้าง, คำนวณยอดใหม่จากราคาปัจจุบัน, คืนยอดจองเดิมแล้วจองใหม่ใน seam เดียว
+   *   (สต๊อกไม่พอ → ConflictError และไม่เปลี่ยนอะไรเลย)
+   * - รายการใหม่เหมือนปัจจุบันทุกประการ → changed:false ไม่เขียน audit/ledger (replay ปลอดภัย)
+   * - สิทธิ์ (เจ้าของ/Guest เจ้าของเบอร์/Owner/Admin) route เป็นผู้ตรวจ
+   */
+  updateOrderItems(
+    id: string,
+    input: UpdateOrderItemsInput,
+    actor: ShopActor,
+    now?: Date,
+  ): Promise<{ order: OrderDetail; changed: boolean }>;
   // ---- Ticket 06: การจองโต๊ะและรอบการใช้โต๊ะ ----
   /**
    * สร้างการจอง (ลูกค้าที่ login แล้ว):
@@ -1213,6 +1228,10 @@ export interface CreateOrderInput {
   tableId?: string | null;
   /** ผูกกับรอบการใช้โต๊ะที่เปิดอยู่ (เฉพาะ dine_in — รอบปิดรับคำสั่งซื้อใหม่ไม่ได้) */
   roundId?: string | null;
+}
+
+export interface UpdateOrderItemsInput {
+  items: CreateOrderLineInput[];
 }
 
 export interface ListOrdersFilter {
@@ -3846,6 +3865,82 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
         .slice(0, limit)
         .map((o) => toDetail(o.id)!);
+    },
+    // Issue #42 memory: แก้ไขรายการในคำสั่งซื้อที่รอชำระเงิน (คืนยอดจองเดิม + จองใหม่ + audit แบบ all-or-nothing)
+    async updateOrderItems(id, input, actor) {
+      return runOrderExclusive(async () => {
+        const backup = backupOrders();
+        try {
+          const current = orders.get(id);
+          if (!current) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+          assertOrderEditable(current, paymentsByOrder.has(id));
+          const lines = normalizeOrderLines(
+            input.items.map((i) => ({
+              menuId: i.menuId,
+              quantity: i.quantity,
+              note: i.note ?? null,
+              options: i.options ?? null,
+              specialRequest: i.specialRequest ?? null,
+            })),
+          );
+          const before = toDetail(id)!;
+          const unchanged =
+            orderLinesSignature(lines) ===
+            orderLinesSignature(
+              before.items.map((i) => ({
+                menuId: i.menuId,
+                quantity: i.quantity,
+                note: i.note,
+                optionIds: i.selectedOptions.map((s) => s.optionId),
+                specialRequest: i.specialRequest,
+              })),
+            );
+          if (unchanged) return { order: before, changed: false };
+          const snapshot = await buildOrderSnapshot(lines);
+          const subtotal = roundBaht(snapshot.reduce((s, l) => s + l.price * l.quantity, 0));
+          const { usage, unitCostOf } = aggregateRequirements(
+            snapshot.map((s) => ({ menuId: s.menuId, quantity: s.quantity, options: s.options })),
+          );
+          const estimatedCost = roundBaht(
+            snapshot.reduce((s, l) => s + unitCostOf(l.menuId, l.options.map((o) => o.optionId)) * l.quantity, 0),
+          );
+          // คืนยอดจองเดิมก่อน แล้วจองตามรายการใหม่ — สต๊อกไม่พอ → ConflictError + rollback ทั้งหมด
+          if (current.stockReserved) {
+            await releaseStockForOrder(current.id, current.orderNumber, "แก้ไขรายการคำสั่งซื้อ", actor);
+          }
+          orderStockUsage.delete(current.id);
+          if (usage.size > 0) {
+            await reserveStockForOrder(current.id, current.orderNumber, usage, actor);
+          }
+          orderItems.set(
+            current.id,
+            snapshot.map((s) => ({
+              id: randomUUID(),
+              orderId: current.id,
+              menuId: s.menuId,
+              menuName: s.name,
+              unitPrice: s.price,
+              quantity: s.quantity,
+              lineTotal: roundBaht(s.price * s.quantity),
+              note: s.note,
+              selectedOptions: s.options,
+              specialRequest: s.specialRequest,
+              estimatedCost: roundBaht(unitCostOf(s.menuId, s.options.map((o) => o.optionId)) * s.quantity),
+            })),
+          );
+          current.subtotal = subtotal;
+          current.total = subtotal;
+          current.estimatedCost = estimatedCost;
+          current.stockReserved = usage.size > 0;
+          current.updatedAt = new Date().toISOString();
+          const after = toDetail(id)!;
+          await writeAudit(orderItemsEditedEvent({ total: before.total, itemCount: before.items.length }, after, actor));
+          return { order: after, changed: true };
+        } catch (err) {
+          restoreOrders(backup);
+          throw err;
+        }
+      });
     },
     async updateOrderStatus(id, patch, actor) {
       return runOrderExclusive(async () => {
@@ -10230,6 +10325,268 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
       params.push(n);
       const [oRows] = (await pool.query(sql, params)) as [Record<string, unknown>[], unknown];
       return readOrdersWithItems(oRows as Record<string, unknown>[]);
+    },
+
+    // Issue #42 SQL: แก้ไขรายการในคำสั่งซื้อที่รอชำระเงิน — transaction เดียว (ล็อกแถวออเดอร์ FOR UPDATE
+    // เหมือน createPayment จึงแก้กับชำระเงินพร้อมกันไม่ชน): คืนยอดจองเดิม → snapshot ใหม่ → จองใหม่ → audit
+    async updateOrderItems(id: string, input: UpdateOrderItemsInput, actor: ShopActor) {
+      return withShopTx(async (conn) => {
+        const [oRows] = (await conn.query("SELECT * FROM orders WHERE id = ? LIMIT 1 FOR UPDATE", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (oRows.length === 0) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+        const current = rowToOrder(oRows[0]!);
+        const [payRows] = (await conn.query("SELECT id FROM payments WHERE order_id = ? LIMIT 1", [id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        assertOrderEditable(current, payRows.length > 0);
+        const lines = normalizeOrderLines(
+          input.items.map((i) => ({
+            menuId: i.menuId,
+            quantity: i.quantity,
+            note: i.note ?? null,
+            options: i.options ?? null,
+            specialRequest: i.specialRequest ?? null,
+          })),
+        );
+        const before = await readOrderDetailTx(conn, id);
+        if (!before) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+        const unchanged =
+          orderLinesSignature(lines) ===
+          orderLinesSignature(
+            before.items.map((i) => ({
+              menuId: i.menuId,
+              quantity: i.quantity,
+              note: i.note,
+              optionIds: i.selectedOptions.map((s) => s.optionId),
+              specialRequest: i.specialRequest,
+            })),
+          );
+        if (unchanged) return { order: before, changed: false };
+
+        // snapshot ราคา/ชื่อ/ตัวเลือกจากเมนูปัจจุบัน (กฎเดียวกับ createOrder)
+        const ids = [...new Set(lines.map((l) => l.menuId))];
+        const [menuRows] = (await conn.query(`SELECT * FROM menu_items WHERE id IN (${ids.map(() => "?").join(",")})`, ids)) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const menuById = new Map(menuRows.map((r) => rowToMenu(r)).map((m) => [m.id, m]));
+        const [groupRows] = (await conn.query(`SELECT * FROM menu_option_groups WHERE menu_id IN (${ids.map(() => "?").join(",")})`, ids)) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        const groupsByMenu = new Map<string, MenuOptionGroup[]>();
+        for (const r of groupRows as Record<string, unknown>[]) {
+          const g = rowToOptionGroup(r);
+          const list = groupsByMenu.get(g.menuId) ?? [];
+          list.push(g);
+          groupsByMenu.set(g.menuId, list);
+        }
+        const groupIds = (groupRows as Record<string, unknown>[]).map((r) => String(r["id"]));
+        const optionsById = new Map<string, MenuOption>();
+        if (groupIds.length > 0) {
+          const [optRows] = (await conn.query(`SELECT * FROM menu_options WHERE group_id IN (${groupIds.map(() => "?").join(",")})`, groupIds)) as [
+            Record<string, unknown>[],
+            unknown,
+          ];
+          for (const r of optRows as Record<string, unknown>[]) {
+            const o = rowToMenuOption(r);
+            optionsById.set(o.id, o);
+          }
+        }
+        const snapshot = lines.map((line) => {
+          const menu = menuById.get(line.menuId);
+          if (!menu || !isMenuSellable(menu)) {
+            throw new ConflictError(
+              `เมนู${menu ? ` "${menu.name}"` : ""} ไม่พร้อมขายแล้ว กรุณาปรับรายการแล้วบันทึกใหม่อีกครั้ง`,
+            );
+          }
+          const optionIds = normalizeSelectedOptionIds(line.optionIds ?? []);
+          const specialRequest = normalizeSpecialRequest(line.specialRequest);
+          const snapshots: OrderItemOptionSnapshot[] = [];
+          let deltaSum = 0;
+          if (optionIds.length > 0) {
+            const groupById = new Map((groupsByMenu.get(menu.id) ?? []).map((g) => [g.id, g]));
+            const seenGroups = new Set<string>();
+            for (const optionId of optionIds) {
+              const opt = optionsById.get(optionId);
+              if (!opt || opt.menuId !== menu.id) {
+                throw new ConflictError(`ตัวเลือกของเมนู "${menu.name}" ไม่ถูกต้อง กรุณาเลือกใหม่`);
+              }
+              const group = groupById.get(opt.groupId);
+              if (!group) throw new ConflictError(`ตัวเลือกของเมนู "${menu.name}" ไม่ถูกต้อง กรุณาเลือกใหม่`);
+              if (!opt.isEnabled) {
+                throw new ConflictError(`ตัวเลือก "${opt.name}" ปิดขายแล้ว กรุณาเลือกใหม่`);
+              }
+              if (seenGroups.has(opt.groupId)) {
+                throw new ConflictError(`กลุ่ม "${group.name}" เลือกได้เพียง 1 ตัวเลือกต่อรายการ`);
+              }
+              seenGroups.add(opt.groupId);
+              snapshots.push({
+                groupId: group.id,
+                groupName: group.name,
+                optionId: opt.id,
+                optionName: opt.name,
+                priceDelta: opt.priceDelta,
+              });
+              deltaSum = roundBaht(deltaSum + opt.priceDelta);
+            }
+          }
+          return {
+            name: menu.name,
+            price: roundBaht(menu.price + deltaSum),
+            menuId: menu.id,
+            quantity: line.quantity,
+            note: line.note,
+            options: snapshots,
+            specialRequest,
+          };
+        });
+        const subtotal = roundBaht(snapshot.reduce((s, l) => s + l.price * l.quantity, 0));
+
+        // คืนยอดจองเดิมก่อน (ใช้ยอดที่จองไว้ตอนยืนยันจริงจาก order_stock_usage) แล้วค่อยล็อก/ตรวจ/จองใหม่
+        if (current.stockReserved && !current.stockConsumed) {
+          const [useRows] = (await conn.query("SELECT ingredient_id, qty FROM order_stock_usage WHERE order_id = ?", [id])) as [
+            Record<string, unknown>[],
+            unknown,
+          ];
+          for (const u of useRows as Record<string, unknown>[]) {
+            const ingId = String(u["ingredient_id"]);
+            const qty = Number(u["qty"]);
+            const [ingRows] = (await conn.query("SELECT * FROM ingredients WHERE id = ? LIMIT 1 FOR UPDATE", [ingId])) as [
+              Record<string, unknown>[],
+              unknown,
+            ];
+            if (ingRows.length === 0) continue;
+            const ing = rowToIngredient(ingRows[0]!);
+            const afterReserved = roundStock(Math.max(0, ing.reserved - qty));
+            await conn.query("UPDATE ingredients SET reserved = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [afterReserved, ingId]);
+            await conn.query(
+              "INSERT INTO stock_ledger (id, ingredient_id, op, delta_on_hand, delta_reserved, before_on_hand, after_on_hand, before_reserved, after_reserved, reason, actor_id, actor_username, order_id, reference) VALUES (?, ?, 'release', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              [
+                randomUUID(), ingId, -qty, ing.onHand, ing.onHand, ing.reserved, afterReserved,
+                `คืนยอดจองของคำสั่งซื้อ ${current.orderNumber}: แก้ไขรายการคำสั่งซื้อ`,
+                actor.actorId ?? null, actor.actorUsername ?? null, id, current.orderNumber,
+              ],
+            );
+          }
+        }
+        await conn.query("DELETE FROM order_stock_usage WHERE order_id = ?", [id]);
+
+        // ความต้องการวัตถุดิบจากสูตรล่าสุด + ล็อกแถววัตถุดิบ (อ่านหลังคืนยอดเดิมใน tx เดียวกัน จึงเห็นยอดล่าสุด)
+        const required = new Map<string, number>();
+        const unitCosts = new Map<string, number>();
+        const needIngredientIds = new Set<string>();
+        const recipeCache = new Map<string, Recipe | null>();
+        const latestCached = async (t: RecipeTargetType, tid: string): Promise<Recipe | null> => {
+          const key = `${t}:${tid}`;
+          if (!recipeCache.has(key)) recipeCache.set(key, await readLatestRecipeTx(conn, t, tid));
+          return recipeCache.get(key)!;
+        };
+        const lineCacheKey = (s: { menuId: string; options: { optionId: string }[] }): string =>
+          `${s.menuId}|${s.options.map((o) => o.optionId).sort().join(",")}`;
+        const recipesOfLine = async (s: { menuId: string; options: { optionId: string }[] }): Promise<Recipe[]> => {
+          const out: Recipe[] = [];
+          const menuRecipe = await latestCached("menu", s.menuId);
+          if (menuRecipe) out.push(menuRecipe);
+          for (const sel of s.options) {
+            const r = await latestCached("option", sel.optionId);
+            if (r) out.push(r);
+          }
+          return out;
+        };
+        for (const s of snapshot) {
+          for (const recipe of await recipesOfLine(s)) {
+            for (const rl of recipe.lines) {
+              needIngredientIds.add(rl.ingredientId);
+              required.set(rl.ingredientId, roundStock((required.get(rl.ingredientId) ?? 0) + rl.qty * s.quantity));
+            }
+          }
+        }
+        const lockedIngredients = new Map<string, Ingredient>();
+        if (needIngredientIds.size > 0) {
+          const ingIds = [...needIngredientIds];
+          const [ingRows] = (await conn.query(`SELECT * FROM ingredients WHERE id IN (${ingIds.map(() => "?").join(",")}) FOR UPDATE`, ingIds)) as [
+            Record<string, unknown>[],
+            unknown,
+          ];
+          for (const r of ingRows as Record<string, unknown>[]) {
+            const ing = rowToIngredient(r);
+            lockedIngredients.set(ing.id, ing);
+          }
+          for (const ingId of ingIds) {
+            const ing = lockedIngredients.get(ingId);
+            if (!ing) throw new ConflictError("สูตรอ้างอิงวัตถุดิบที่ไม่พบ กรุณาติดต่อ Admin");
+            if (!ing.isEnabled) {
+              throw new ConflictError(
+                `วัตถุดิบ "${ing.name}" งดใช้ชั่วคราว ทำให้เมนูบางรายการสั่งไม่ได้ กรุณาปรับรายการแล้วบันทึกใหม่อีกครั้ง`,
+              );
+            }
+          }
+          for (const s of snapshot) {
+            let unitCost = 0;
+            for (const recipe of await recipesOfLine(s)) {
+              for (const rl of recipe.lines) {
+                const ing = lockedIngredients.get(rl.ingredientId)!;
+                unitCost = roundBaht(unitCost + roundBaht(rl.qty * ing.latestCost));
+              }
+            }
+            unitCosts.set(lineCacheKey(s), unitCost);
+          }
+          // ตรวจพร้อมขายทุกวัตถุดิบก่อนจอง — ไม่พอ → ConflictError แล้ว tx ย้อนกลับทั้งหมด (รวมการคืนยอดเดิม)
+          for (const [ingId, qty] of required) {
+            const ing = lockedIngredients.get(ingId)!;
+            assertAvailableStock(ing.name, ing.unit, ing.onHand, ing.reserved, qty);
+          }
+        }
+        const estimatedCost = roundBaht(
+          snapshot.reduce((sum, s) => sum + (unitCosts.get(lineCacheKey(s)) ?? 0) * s.quantity, 0),
+        );
+        const hasReservation = required.size > 0;
+
+        // แทนที่รายการทั้งหมด (ยังไม่เคยชำระ จึงไม่มีงานคิว/ใบเสร็จอ้างอิง order_items เดิม)
+        await conn.query("DELETE FROM order_items WHERE order_id = ?", [id]);
+        for (const s of snapshot) {
+          await conn.query(
+            "INSERT INTO order_items (id, order_id, menu_id, menu_name, unit_price, quantity, line_total, note, special_request, options_snapshot, estimated_cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), ?)",
+            [
+              randomUUID(), id, s.menuId, s.name, s.price, s.quantity, roundBaht(s.price * s.quantity), s.note,
+              s.specialRequest, JSON.stringify(s.options),
+              roundBaht((unitCosts.get(lineCacheKey(s)) ?? 0) * s.quantity),
+            ],
+          );
+        }
+        if (hasReservation) {
+          for (const [ingId, qty] of required) {
+            const ing = lockedIngredients.get(ingId)!;
+            const beforeReserved = ing.reserved;
+            const afterReserved = roundStock(beforeReserved + qty);
+            await conn.query("UPDATE ingredients SET reserved = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [afterReserved, ingId]);
+            await conn.query(
+              "INSERT INTO stock_ledger (id, ingredient_id, op, delta_on_hand, delta_reserved, before_on_hand, after_on_hand, before_reserved, after_reserved, reason, actor_id, actor_username, order_id, reference) VALUES (?, ?, 'reserve', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              [
+                randomUUID(), ingId, qty, ing.onHand, ing.onHand, beforeReserved, afterReserved,
+                `จองสต๊อกให้คำสั่งซื้อ ${current.orderNumber} (แก้ไขรายการ)`,
+                actor.actorId ?? null, actor.actorUsername ?? null, id, current.orderNumber,
+              ],
+            );
+            await conn.query("INSERT INTO order_stock_usage (order_id, ingredient_id, qty) VALUES (?, ?, ?)", [id, ingId, qty]);
+          }
+        }
+        await conn.query("UPDATE orders SET subtotal = ?, total = ?, estimated_cost = ?, stock_reserved = ? WHERE id = ?", [
+          subtotal,
+          subtotal,
+          estimatedCost,
+          hasReservation ? 1 : 0,
+          id,
+        ]);
+        const after = await readOrderDetailTx(conn, id);
+        if (!after) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+        await insertAuditRow(conn, orderItemsEditedEvent({ total: before.total, itemCount: before.items.length }, after, actor));
+        return { order: after, changed: true };
+      });
     },
 
     async updateOrderStatus(id: string, patch: { status: OrderStatus; reason: string }, actor: ShopActor) {

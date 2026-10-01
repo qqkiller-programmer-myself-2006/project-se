@@ -58,3 +58,20 @@ export function orderStatusChangedEvent(
       `(ยอด ${before.total} → ${after.total} บาท) เหตุผล: ${reason}`,
   };
 }
+
+/** Issue #42: แก้ไขรายการในคำสั่งซื้อที่รอชำระเงิน (บันทึกจำนวนรายการและยอดก่อน/หลัง) */
+export function orderItemsEditedEvent(
+  before: { total: number; itemCount: number },
+  after: OrderDetail,
+  actor: ShopActor,
+): AuditInput {
+  return {
+    ...base(actor),
+    action: "order_items_edited",
+    targetId: after.id,
+    targetUsername: null,
+    detail:
+      `แก้ไขรายการ ${after.orderNumber}: ${before.itemCount} → ${after.items.length} รายการ ` +
+      `(ยอด ${before.total} → ${after.total} บาท)`,
+  };
+}
