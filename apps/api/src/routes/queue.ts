@@ -15,6 +15,7 @@ import {
   normalizeStation,
 } from "../queue/validation.js";
 import type { OrderDetail, QueueStation } from "../types.js";
+import { PUBLIC_QUEUE_ACTIVE_STATUSES, buildPublicQueue } from "../queue/publicQueue.js";
 import { enqueueBestEffort } from "./notifications.js";
 import { orderDeliveredEvent, orderReadyEvent } from "../notify/events.js";
 import type { ShopActor } from "../store.js";
@@ -191,6 +192,33 @@ export function createQueueRouter(deps: QueueRouterDeps): express.Router {
     }
     return true;
   }
+
+  /**
+   * Issue #43: คิวรวมสาธารณะ (ไม่ต้องล็อกอิน) — คืนเฉพาะข้อมูลไม่ระบุตัวตนผ่าน whitelist
+   * ใน buildPublicQueue; ไม่รับ input ใด ๆ และมี rate limit แยกเพราะเว็บรีเฟรชเป็นระยะ
+   */
+  const publicQueueLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: Number(process.env["PUBLIC_QUEUE_RATE_MAX"] ?? 240),
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: { xForwardedForHeader: false },
+    message: { error: "เรียกดูคิวถี่เกินไป กรุณารอสักครู่แล้วลองใหม่" },
+  });
+
+  router.get("/api/queue/public", publicQueueLimiter, async (_req, res, next) => {
+    try {
+      const now = new Date();
+      const perStatus = await Promise.all(
+        PUBLIC_QUEUE_ACTIVE_STATUSES.map((status) => store.listQueueJobs({ status, limit: 200 })),
+      );
+      const snapshot = buildPublicQueue(perStatus.flat(), now);
+      res.set("Cache-Control", "no-store");
+      res.json({ ...snapshot, updatedAt: now.toISOString() });
+    } catch (err) {
+      next(err);
+    }
+  });
 
   // ---------- รายการคิวของฝ่าย (พนักงานหลังร้าน — station isolation ฝั่ง server) ----------
   router.get("/api/queue", queueLimiter, async (req, res, next) => {
