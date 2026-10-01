@@ -135,6 +135,24 @@ describe("หน้าเมนูสาธารณะ (Ticket 04)", () => {
     expect(screen.queryByText("ชาเย็น")).not.toBeInTheDocument();
   });
 
+  it("ช่องค้นหามีชื่อเมนูเป็นตัวเลือกให้เลือกขณะพิมพ์ และไม่มีรูป hero เดิมแล้ว", async () => {
+    stubFetch((url) => {
+      if (url.includes("/api/menu/public")) return { ok: true, json: async () => ({ groups }) };
+      return { ok: true, json: async () => ({}) };
+    });
+    const { container } = render(
+      <MemoryRouter>
+        <MenuPublicPage />
+      </MemoryRouter>,
+    );
+    await screen.findByText("ชาเย็น");
+    const search = screen.getByLabelText("ค้นหาชื่อหรือรายละเอียด");
+    expect(search).toHaveAttribute("list", "menu-search-suggestions");
+    const options = [...container.querySelectorAll("#menu-search-suggestions option")].map((o) => o.getAttribute("value"));
+    expect(options).toEqual(expect.arrayContaining(["ข้าวผัดป้าอ้อ", "ชาเย็น"]));
+    expect(container.querySelector('img[src="/venue/site/pa-or-menu-hero.jpg"]')).toBeNull();
+  });
+
   it("loading state ตอนเริ่มโหลด", async () => {
     stubFetch(() => new Promise(() => {}));
     render(

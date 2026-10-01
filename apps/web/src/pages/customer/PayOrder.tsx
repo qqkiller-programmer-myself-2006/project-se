@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, type OrderDetail, type OrderPaymentState, type Payment } from "../../lib/api";
+import { useCustomerSession } from "../../lib/customerSession";
 import { OrderCard } from "../../components/OrderCard";
 import { PaymentPanel } from "../../components/PaymentPanel";
 import { Alert, Spinner, inputClass, primaryButtonClass } from "../../components/ui";
@@ -20,6 +21,16 @@ export default function PayOrderPage() {
   const [state, setState] = useState<OrderPaymentState>("pending_payment");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { customer } = useCustomerSession();
+  const prefilled = useRef(false);
+
+  // สมาชิกที่ล็อกอินแล้ว: เติมเบอร์ของตัวเองให้ครั้งเดียว — ยังแก้เองได้ และไม่ทับค่าที่มากับลิงก์ (?phone=)
+  useEffect(() => {
+    const own = customer?.phone;
+    if (prefilled.current || !own) return;
+    prefilled.current = true;
+    setPhone((current) => current || own);
+  }, [customer]);
 
   async function load(withPhone: string) {
     setLoading(true);

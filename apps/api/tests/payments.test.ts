@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import request, { type Agent } from "supertest";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
@@ -57,6 +57,10 @@ describe("Ticket 08 payments, receipts and refunds (public HTTP seam + memory/fa
     expect(res.status).toBe(201);
     return { id: res.body.order.id as string, orderNumber: res.body.order.orderNumber as string, total: res.body.order.total as number };
   }
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
 
   beforeEach(async () => {
     store = createMemoryStore();
@@ -207,6 +211,30 @@ describe("Ticket 08 payments, receipts and refunds (public HTTP seam + memory/fa
       .set("x-fake-signature", "fake")
       .send({ providerEventId: "evt-2", outcome: "success" });
     expect(dup.status).toBe(409);
+  });
+
+  it("นอก fake mode (Vercel NODE_ENV=production): สร้างพร้อมเพย์ได้ 503 พร้อมข้อความ ไม่ใช่ 500; เงินสดยังใช้ได้", async () => {
+    const order = await guestOrder();
+    const guest = request.agent(app);
+    const token = await csrfToken(guest);
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("PAOR_PAYMENT_FAKE", "");
+    const promptpay = await guest.post("/api/payments").set("x-csrf-token", token).send({
+      orderId: order.id,
+      method: "promptpay",
+      idempotencyKey: randomUUID(),
+      phone: "0812345678",
+    });
+    expect(promptpay.status).toBe(503);
+    expect(promptpay.body.error).toContain("ยังไม่เปิดใช้งาน");
+    const cash = await guest.post("/api/payments").set("x-csrf-token", token).send({
+      orderId: order.id,
+      method: "cash",
+      idempotencyKey: randomUUID(),
+      receivedAmount: 100,
+      phone: "0812345678",
+    });
+    expect(cash.status).toBe(201);
   });
 
   it("ambiguous/timeout → manual_review แล้ว Admin ตัดสิน paid ได้ (พร้อมใบเสร็จ)", async () => {

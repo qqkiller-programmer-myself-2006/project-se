@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../../lib/api";
+import { useCustomerSession } from "../../lib/customerSession";
 import { Alert, inputClass, primaryButtonClass } from "../../components/ui";
 
-export default function CustomerLoginPage({ onLoggedIn }: { onLoggedIn?: () => Promise<void> }) {
+export default function CustomerLoginPage() {
   const nav = useNavigate();
+  const session = useCustomerSession();
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -26,7 +28,8 @@ export default function CustomerLoginPage({ onLoggedIn }: { onLoggedIn?: () => P
     try {
       await api.customerLogin(phone.trim(), password);
       setPassword("");
-      await onLoggedIn?.();
+      // ให้หัวเว็บ (AccountBar) เปลี่ยนเป็นชื่อสมาชิกทันที ไม่ค้างปุ่ม "เข้าสู่ระบบ"
+      await session.refresh();
       nav("/profile");
     } catch (err) {
       setError(err instanceof Error ? err.message : "เข้าสู่ระบบไม่สำเร็จ");

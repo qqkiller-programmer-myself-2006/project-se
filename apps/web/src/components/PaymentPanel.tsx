@@ -11,6 +11,7 @@ import {
 } from "../lib/api";
 import { Alert, Panel, Spinner, inputClass, primaryButtonClass, secondaryButtonClass } from "./ui";
 import { PaymentStateBadge, ReceiptCard } from "./ReceiptCard";
+import { TableQrCode } from "./TableQrCode";
 
 function newIdempotencyKey(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
@@ -207,7 +208,11 @@ export function PaymentPanel({
             {payment.method === "promptpay" && qrToShow ? (
               <div className="rounded-xl border border-dashed border-brand-400 bg-brand-50 p-4 text-center">
                 <p className="text-sm font-semibold text-brand-900">QR พร้อมเพย์ (โหมดจำลอง)</p>
-                <p className="mt-1 break-all font-mono text-sm text-ink-900 tabular-nums" aria-label="รหัส QR พร้อมเพย์">
+                {/* เดิมโชว์แค่ข้อความ payload ไม่มีรูป QR ให้สแกน */}
+                <div className="mx-auto mt-3 w-fit rounded-lg bg-white p-2 shadow-sm">
+                  <TableQrCode value={qrToShow} label={`QR พร้อมเพย์ ยอด ${fmtPrice(payment.amount)}`} size={200} />
+                </div>
+                <p className="mt-2 break-all font-mono text-xs text-ink-700 tabular-nums" aria-label="รหัส QR พร้อมเพย์">
                   {qrToShow}
                 </p>
                 <p className="mt-1 text-xs text-ink-600">ยอด {fmtPrice(payment.amount)} · แสดงให้พนักงานดูหรือใช้ slip จำลองด้านล่าง</p>

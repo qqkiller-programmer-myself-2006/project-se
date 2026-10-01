@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./RealMenuPhotoGallery.css";
 
 const menuPhotos = [
@@ -28,12 +28,42 @@ const menuPhotos = [
   },
 ] as const;
 
-export function RealMenuPhotoGallery() {
+function prefersReducedMotion(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/**
+ * @param autoPlayMs เลื่อนภาพถัดไปอัตโนมัติทุก n มิลลิวินาที (ไม่ส่ง = ไม่เลื่อนเอง)
+ *   หยุดเมื่อเมาส์ชี้/โฟกัสอยู่ในแกลเลอรี, แท็บถูกซ่อน หรือผู้ใช้ตั้งลดการเคลื่อนไหว
+ */
+export function RealMenuPhotoGallery({ autoPlayMs }: { autoPlayMs?: number } = {}) {
   const [activeIndex, setActiveIndex] = useState(0);
+  const [paused, setPaused] = useState(false);
   const active = menuPhotos[activeIndex];
 
+  useEffect(() => {
+    if (!autoPlayMs || paused || prefersReducedMotion()) return;
+    // ตั้งใหม่ทุกครั้งที่เปลี่ยนภาพ — กดเลือกภาพเองแล้วนับเวลาใหม่ ไม่เด้งไปภาพถัดไปทันที
+    const timer = window.setTimeout(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      setActiveIndex((i) => (i + 1) % menuPhotos.length);
+    }, autoPlayMs);
+    return () => window.clearTimeout(timer);
+  }, [autoPlayMs, paused, activeIndex]);
+
   return (
-    <section className="real-menu-gallery" aria-labelledby="real-menu-gallery-title">
+    <section
+      className="real-menu-gallery"
+      aria-labelledby="real-menu-gallery-title"
+      aria-roledescription={autoPlayMs ? "สไลด์โชว์" : undefined}
+      onMouseEnter={() => setPaused(true)}
+      onMouseLeave={() => setPaused(false)}
+      onFocus={() => setPaused(true)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setPaused(false);
+      }}
+    >
       <div className="real-menu-gallery__heading">
         <div>
           <p className="real-menu-gallery__eyebrow">ภาพจากหน้าร้าน</p>

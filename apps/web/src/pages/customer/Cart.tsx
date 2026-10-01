@@ -10,6 +10,7 @@ import {
   type PublicTableStatus,
 } from "../../lib/api";
 import {
+  CART_QTY_MAX,
   addToCart,
   cartCount,
   cartTotalWith,
@@ -601,13 +602,29 @@ export default function CartPage() {
                 <p className="mt-1 text-sm text-ink-600">โปรดกลับมาดูใหม่ภายหลัง</p>
               </div>
             ) : (
-              groups.map((g) => (
-                <section key={g.category} aria-label={`หมวด ${g.category}`} className="space-y-2">
-                  <h3 className="font-bold text-ink-900">{g.category}</h3>
+              groups.map((g, groupIndex) => (
+                // ย่อ/ขยายทีละหมวด — เปิดหมวดแรกไว้ ที่เหลือพับเพื่อไม่ให้หน้าเลื่อนยาว
+                <details
+                  key={g.category}
+                  open={groupIndex === 0}
+                  className="group rounded-xl border border-ink-200 bg-ink-50/40"
+                >
+                  <summary className="flex min-h-[44px] cursor-pointer list-none items-center justify-between gap-2 rounded-xl px-3 py-2 font-bold text-ink-900 hover:bg-ink-50 [&::-webkit-details-marker]:hidden">
+                    <span>
+                      {g.category}{" "}
+                      <span className="text-sm font-normal text-ink-500">({g.items.length} เมนู)</span>
+                    </span>
+                    <span aria-hidden="true" className="text-ink-500 transition-transform group-open:rotate-180">
+                      ▾
+                    </span>
+                  </summary>
+                <section aria-label={`หมวด ${g.category}`} className="space-y-2 px-3 pb-3">
                   <StaggerList className="grid gap-2 sm:grid-cols-2">
                     {g.items.map((m, itemIndex) => {
                       const inStock = m.inStock ?? true;
                       const countInCart = cart.filter((l) => l.menuId === m.id).reduce((n, l) => n + l.quantity, 0);
+                      // ปุ่ม +/− คุมบรรทัดแบบไม่มีตัวเลือก (บรรทัดที่ปุ่ม "เพิ่ม" สร้าง); แบบมีตัวเลือกแก้ในตะกร้าด้านบน
+                      const plainQty = cart.find((l) => l.menuId === m.id && l.options.length === 0)?.quantity ?? 0;
                       return (
                         <StaggerItem
                           key={m.id}
@@ -626,21 +643,48 @@ export default function CartPage() {
                               <p className="text-xs font-semibold text-red-700">วัตถุดิบหมดชั่วคราว</p>
                             )}
                           </div>
-                          {countInCart > 0 ? <Badge tone="brand">ในตะกร้า {countInCart}</Badge> : null}
-                          <button
-                            type="button"
-                            onClick={() => add(m.id)}
-                            disabled={!inStock}
-                            aria-label={`เพิ่ม${m.name}ลงตะกร้า`}
-                            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            เพิ่ม
-                          </button>
+                          {/* ตัวนับ +/− แสดงจำนวนแบบไม่มีตัวเลือกแล้ว — ป้ายนี้โชว์เฉพาะเมื่อมีแบบมีตัวเลือกปนอยู่ด้วย */}
+                          {countInCart > plainQty ? <Badge tone="brand">ในตะกร้า {countInCart}</Badge> : null}
+                          {plainQty > 0 ? (
+                            <div className="flex shrink-0 items-center gap-1" role="group" aria-label={`จำนวน${m.name}ในตะกร้า`}>
+                              <button
+                                type="button"
+                                onClick={() => setCart((c) => setQuantity(c, m.id, plainQty - 1, []))}
+                                aria-label={`ลดจำนวน${m.name}`}
+                                className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-ink-200 bg-white text-lg font-bold text-ink-800 hover:bg-ink-50"
+                              >
+                                −
+                              </button>
+                              <span aria-live="polite" className="min-w-[2rem] text-center font-bold">
+                                {plainQty}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => add(m.id)}
+                                disabled={!inStock || plainQty >= CART_QTY_MAX}
+                                aria-label={`เพิ่มจำนวน${m.name}`}
+                                className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-ink-200 bg-white text-lg font-bold text-ink-800 hover:bg-ink-50 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                +
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => add(m.id)}
+                              disabled={!inStock}
+                              aria-label={`เพิ่ม${m.name}ลงตะกร้า`}
+                              className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              เพิ่ม
+                            </button>
+                          )}
                         </StaggerItem>
                       );
                     })}
                   </StaggerList>
                 </section>
+                </details>
               ))
             )}
             <p className="text-center text-sm text-ink-500">

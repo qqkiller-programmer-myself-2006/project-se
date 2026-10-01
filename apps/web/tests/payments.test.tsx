@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import PayOrderPage from "../src/pages/customer/PayOrder";
+import { CustomerSessionProvider } from "../src/lib/customerSession";
 import AdminPaymentsPage from "../src/pages/admin/AdminPayments";
 import { ReceiptCard } from "../src/components/ReceiptCard";
 
@@ -90,6 +91,29 @@ describe("ชำระเงินฝั่งลูกค้า (Ticket 08)", (
     expect(screen.getByLabelText("เบอร์โทรที่ใช้สั่ง (สำหรับ Guest)")).toBeInTheDocument();
   });
 
+  it("สมาชิกที่ล็อกอินแล้ว: ช่องเบอร์เติมเบอร์ของตัวเองให้ และยังแก้ได้", async () => {
+    const user = userEvent.setup();
+    stubFetch((url) => {
+      if (url.includes("/api/customers/session"))
+        return { ok: true, json: async () => ({ customer: { id: "c1", name: "สมชาย", phone: "0909809420" } }) };
+      return { ok: false, status: 404, json: async () => ({ error: "ไม่พบคำสั่งซื้อ" }) };
+    });
+    render(
+      <CustomerSessionProvider>
+        <MemoryRouter initialEntries={["/pay/o1"]}>
+          <Routes>
+            <Route path="/pay/:id" element={<PayOrderPage />} />
+          </Routes>
+        </MemoryRouter>
+      </CustomerSessionProvider>,
+    );
+    const input = await screen.findByLabelText("เบอร์โทรที่ใช้สั่ง (สำหรับ Guest)");
+    await waitFor(() => expect(input).toHaveValue("0909809420"));
+    await user.clear(input);
+    await user.type(input, "0812345678");
+    expect(input).toHaveValue("0812345678");
+  });
+
   it("สร้างคำขอพร้อมเพย์ได้ QR จำลอง + ส่ง slip VALID แล้วสำเร็จมีใบเสร็จ", async () => {
     const user = userEvent.setup();
     let paymentState: string = "pending_payment";
@@ -122,6 +146,8 @@ describe("ชำระเงินฝั่งลูกค้า (Ticket 08)", (
     expect(await screen.findByText("ORD-20260914-AB12")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /สร้างคำขอชำระ/ }));
     expect(await screen.findByText("PROMPTPAY-FAKE:pay1:100")).toBeInTheDocument();
+    // ต้องมีรูป QR ให้สแกน ไม่ใช่แค่ข้อความ payload
+    expect(screen.getByRole("img", { name: /QR พร้อมเพย์/ })).toBeInTheDocument();
     await user.type(screen.getByLabelText(/เลขอ้างอิง slip/), "VALID-1");
     await user.click(screen.getByRole("button", { name: "ส่ง slip" }));
     expect(await screen.findByText("RCP-20260914-AB12")).toBeInTheDocument();
