@@ -40,8 +40,11 @@ function stubFetch(handler: Handler) {
 }
 
 const ok = (body: unknown) => ({ ok: true, json: async () => body });
+/** instant ของเวลากรุงเทพ (UTC+7) — เทสต์ต้องไม่ขึ้นกับ timezone ของเครื่องที่รัน */
+const bkk = (y: number, monthIndex: number, d: number, h: number, mi: number) =>
+  new Date(Date.UTC(y, monthIndex, d, h - 7, mi));
 const loggedIn: Handler = (url) => {
-  if (url.includes("/api/customers/me")) return ok({ customer: { id: "c1", name: "ลูกค้า เอ" } });
+  if (url.includes("/api/customers/session")) return ok({ customer: { id: "c1", name: "ลูกค้า เอ" } });
   if (url.includes("/api/reservations/mine")) return ok({ reservations: [] });
   if (url.includes("/api/reservations/availability")) return ok(availability);
   return ok({});
@@ -59,7 +62,7 @@ describe("หน้าจองโต๊ะของลูกค้า (3 ขั
   beforeEach(() => {
     vi.unstubAllGlobals();
     vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["Date"] });
-    vi.setSystemTime(new Date(2026, 8, 17, 10, 5));
+    vi.setSystemTime(bkk(2026, 8, 17, 10, 5));
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -87,11 +90,11 @@ describe("หน้าจองโต๊ะของลูกค้า (3 ขั
     await screen.findByRole("button", { name: /^โต๊ะ A1 / });
     const url = fetchFn.mock.calls.map((c) => String(c[0])).find((u) => u.includes("/availability"))!;
     expect(url).toContain("partySize=2");
-    expect(decodeURIComponent(url)).toContain(new Date(2026, 8, 17, 12, 30).toISOString());
+    expect(decodeURIComponent(url)).toContain(bkk(2026, 8, 17, 12, 30).toISOString());
   });
 
   it("หลังปิดรับจองของวันนี้ ยังเห็นปุ่มวันนี้แต่เลือกไม่ได้ และเริ่มที่พรุ่งนี้", async () => {
-    vi.setSystemTime(new Date(2026, 8, 17, 21, 59));
+    vi.setSystemTime(bkk(2026, 8, 17, 21, 59));
     stubFetch(loggedIn);
     renderPage();
     const days = screen.getByRole("group", { name: "วันที่" });
@@ -114,7 +117,7 @@ describe("หน้าจองโต๊ะของลูกค้า (3 ขั
     await waitFor(() => {
       const last = fetchFn.mock.calls.map((c) => String(c[0])).filter((u) => u.includes("/availability")).at(-1)!;
       expect(last).toContain("partySize=3");
-      expect(decodeURIComponent(last)).toContain(new Date(2026, 8, 18, 18, 0).toISOString());
+      expect(decodeURIComponent(last)).toContain(bkk(2026, 8, 18, 18, 0).toISOString());
     });
     expect(screen.getByText(/สถานะโต๊ะสำหรับ 3 คน/)).toBeInTheDocument();
   });
@@ -150,7 +153,7 @@ describe("หน้าจองโต๊ะของลูกค้า (3 ขั
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(body).toMatchObject({ tableId: "t3", partySize: 2, note: "มีเด็กเล็ก" });
     expect(String(body!["idempotencyKey"])).toMatch(/^[0-9a-f-]{36}$/);
-    expect(body!["reservedAt"]).toBe(new Date(2026, 8, 17, 12, 30).toISOString());
+    expect(body!["reservedAt"]).toBe(bkk(2026, 8, 17, 12, 30).toISOString());
   });
 
   it("ป๊อปอัปแก้จำนวนคนและเวลาได้ก่อนจอง แล้วส่งค่าที่ยืนยันล่าสุด", async () => {
@@ -181,14 +184,14 @@ describe("หน้าจองโต๊ะของลูกค้า (3 ขั
     await waitFor(() => {
       const last = fetchFn.mock.calls.map((c) => String(c[0])).filter((u) => u.includes("/availability")).at(-1)!;
       expect(last).toContain("partySize=4");
-      expect(decodeURIComponent(last)).toContain(new Date(2026, 8, 18, 18, 0).toISOString());
+      expect(decodeURIComponent(last)).toContain(bkk(2026, 8, 18, 18, 0).toISOString());
     });
     const confirm = within(dialog).getByRole("button", { name: "ยืนยันจองโต๊ะ F1" });
     await waitFor(() => expect(confirm).toBeEnabled());
     await user.click(confirm);
 
     expect(await screen.findByText(/จองสำเร็จ/)).toBeInTheDocument();
-    expect(body).toMatchObject({ tableId: "t3", partySize: 4, reservedAt: new Date(2026, 8, 18, 18, 0).toISOString() });
+    expect(body).toMatchObject({ tableId: "t3", partySize: 4, reservedAt: bkk(2026, 8, 18, 18, 0).toISOString() });
   });
 
   it("ปิดป๊อปอัปได้โดยยังไม่จอง และเปิดกลับจากขั้นที่ 3", async () => {
@@ -268,7 +271,7 @@ describe("หน้าจองโต๊ะของลูกค้า (3 ขั
   it("Guest ดูผังโต๊ะได้ แต่ต้องเข้าสู่ระบบก่อนยืนยัน", async () => {
     const user = userEvent.setup();
     stubFetch((url) => {
-      if (url.includes("/api/customers/me")) return { ok: false, status: 401, json: async () => ({ error: "x" }) };
+      if (url.includes("/api/customers/session")) return { ok: true, json: async () => ({ customer: null }) };
       if (url.includes("/api/reservations/availability")) return ok(availability);
       return ok({});
     });
@@ -283,7 +286,7 @@ describe("หน้าจองโต๊ะของลูกค้า (3 ขั
 
   it("เชื่อมต่อไม่ได้ → แสดงผังตัวอย่างและจองจริงไม่ได้", async () => {
     stubFetch((url) => {
-      if (url.includes("/api/customers/me")) return ok({ customer: { id: "c1", name: "ลูกค้า เอ" } });
+      if (url.includes("/api/customers/session")) return ok({ customer: { id: "c1", name: "ลูกค้า เอ" } });
       if (url.includes("/api/reservations/mine")) return ok({ reservations: [] });
       if (url.includes("/api/reservations/availability")) throw new TypeError("Failed to fetch");
       return ok({});
