@@ -62,7 +62,7 @@ environment จริง (MySQL/browser) — Status จึงคง `claimed` �
   `apps/web/src/pages/Status.tsx`/`Shop.tsx`/`Tables.tsx` (ใหม่),
   `apps/web/src/App.tsx` (public `/status`, nav ร้าน/โต๊ะ เฉพาะ owner/admin,
   พนักงาน/ประวัติคง owner-only), `apps/web/tests/status|shop|tables|shell.test.tsx` (ใหม่ 20 ข้อ)
-- เอกสาร: `README.md` (routes/กฎ Ticket 02, จำนวนเทสต์, ข้อจำกัด), ไฟล์ ticket นี้
++ เอกสาร: `docs/development-guide.md` (routes/กฎ Ticket 02, จำนวนเทสต์, ข้อจำกัด), ไฟล์ ticket นี้
 - ที่ยังไม่เสร็จ: MySQL integration จริง, ตรวจ responsive/keyboard บนเบราว์เซอร์จริง,
   ตรวจ migration 003 รันซ้ำบน MySQL จริง
 
@@ -106,7 +106,7 @@ Status คง `claimed` ตามคำสั่ง
   พร้อม label ไทย)/`ShopAuditList.tsx` (ใหม่), `pages/Shop.tsx` (เล็กลง ใช้ components),
   `pages/Status.tsx` (แสดงรอบที่เปิดอยู่ + ต่อเนื่องจากวันต้นทาง),
   tests `status` (+2), `shop` (+2)
-- เอกสาร: `README.md` (กฎ atomic/expiresAt-serviceWindow/router/WeekdayKey), ไฟล์ ticket นี้
++ เอกสาร: `docs/development-guide.md` (กฎ atomic/expiresAt-serviceWindow/router/WeekdayKey), ไฟล์ ticket นี้
 - ที่ยังไม่เสร็จ (เหมือนเดิม + ชัดขึ้น): MySQL integration จริง
   (รวม tx rollback + datetime round-trip ใหม่), responsive/keyboard บนเบราว์เซอร์จริง
 
@@ -139,7 +139,7 @@ Status คง `claimed` ตามคำสั่ง
   Memory/MySQL ใช้ร่วมกัน), `store.ts` (`SaveShopConfigResult` แคบเป็น
   `ShopConfigSnapshot` ไม่แตะ tables; ทั้งสอง adapter ใช้ factories;
   `toMysqlDatetime` ใช้ UTC getters ให้ตรง pool `timezone: Z` ไม่พึ่ง TZ server)
-- เอกสาร: `README.md` (สัญญา timezone wall-clock กรุงเทพ + UTC getters + factories),
++ เอกสาร: `docs/development-guide.md` (สัญญา timezone wall-clock กรุงเทพ + UTC getters + factories),
   ไฟล์ ticket นี้
 - ที่ยังไม่เสร็จ: MySQL integration จริง (รวม `toMysqlDatetime` UTC บน server TZ อื่น),
   responsive/keyboard บนเบราว์เซอร์จริง
@@ -164,4 +164,4 @@ Status คง `claimed` ตามคำสั่ง
 - `npm run typecheck` (api+web) ผ่าน, `npm run build` ผ่าน (vite 45 modules)
 - ไฟล์ที่เปลี่ยนรอบนี้: `apps/api/src/routes/shop.ts` (เฉพาะ `parseIsoDatetime` +
   `MISSING_TIMEZONE_ERROR`), `apps/api/tests/shop-status.test.ts` (+1),
-  `README.md` (บรรทัดสัญญา explicit timezone), ไฟล์ ticket นี้
+  `docs/development-guide.md` (บรรทัดสัญญา explicit timezone), ไฟล์ ticket นี้

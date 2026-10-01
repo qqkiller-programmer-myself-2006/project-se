@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security issue
+    url: https://github.com/qqkiller-programmer-myself-2006/project-se/security/advisories/new
+    about: อ่าน SECURITY.md และใช้ช่องทางส่วนตัวสำหรับข้อมูลช่องโหว่

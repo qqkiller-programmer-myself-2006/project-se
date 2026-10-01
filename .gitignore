@@ -18,3 +18,23 @@ coverage/
 apps/web/public/food-menu/
 
 .vercel
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Package-manager logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Common build outputs
+build/
+out/
+.next/
