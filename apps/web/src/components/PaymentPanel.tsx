@@ -8,10 +8,12 @@ import {
   type Payment,
   type PaymentMethod,
   type Receipt,
+  type ReceiptClaimQr,
 } from "../lib/api";
 import { Alert, Panel, Spinner, inputClass, primaryButtonClass, secondaryButtonClass } from "./ui";
 import { PaymentStateBadge, ReceiptCard } from "./ReceiptCard";
 import { TableQrCode } from "./TableQrCode";
+import { ReceiptClaimQrCard } from "./ReceiptClaimQr";
 
 function newIdempotencyKey(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
@@ -55,13 +57,18 @@ export function PaymentPanel({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<Receipt | null>(null);
+  // Issue #55: QR รับแต้มของใบเสร็จ (มีเมื่อออเดอร์ยังไม่มีเจ้าของแต้ม)
+  const [claimQr, setClaimQr] = useState<ReceiptClaimQr | null>(null);
 
   // จ่ายสำเร็จแล้ว (เช่น รีโหลดหลัง parent ดึงสถานะใหม่) → โหลดใบเสร็จทันที
   useEffect(() => {
     if (initialPayment?.status === "paid" && !receipt) {
       api
         .receiptByPayment(initialPayment.id, phone)
-        .then((r) => setReceipt(r.receipt))
+        .then((r) => {
+          setReceipt(r.receipt);
+          setClaimQr(r.claimQr ?? null);
+        })
         .catch(() => undefined);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -91,7 +98,9 @@ export function PaymentPanel({
       setPayment(res.payment);
       setState(res.paymentState);
       if (res.payment?.status === "paid") {
-        setReceipt((await api.receiptByPayment(res.payment.id, phone).catch(() => null))?.receipt ?? null);
+        const loaded = await api.receiptByPayment(res.payment.id, phone).catch(() => null);
+        setReceipt(loaded?.receipt ?? null);
+        setClaimQr(loaded?.claimQr ?? null);
       }
     } catch {
       // เงียบไว้ — ผู้ใช้กดลองใหม่ได้
@@ -186,7 +195,10 @@ export function PaymentPanel({
 
         {state === "paid" ? (
           receipt ? (
-            <ReceiptCard receipt={receipt} />
+            <div className="space-y-4">
+              <ReceiptCard receipt={receipt} />
+              {claimQr ? <ReceiptClaimQrCard claim={claimQr} /> : null}
+            </div>
           ) : (
             <p className="py-4 text-center">
               <Spinner label="กำลังโหลดใบเสร็จ…" />

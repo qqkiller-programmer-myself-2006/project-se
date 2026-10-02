@@ -562,6 +562,12 @@ export interface Receipt {
   createdAt: string;
 }
 
+/** Issue #55: QR รับแต้มของใบเสร็จ (มีเฉพาะออเดอร์ที่ยังไม่มีเจ้าของแต้ม ชำระแล้ว และยังไม่หมดอายุ) */
+export interface ReceiptClaimQr {
+  code: string;
+  expiresAt: string;
+}
+
 export interface Refund {
   id: string;
   paymentId: string;
@@ -1488,7 +1494,7 @@ export const api = {
     return req<{ payments: Payment[] }>(`/api/payments?${params.toString()}`);
   },
   receiptByPayment: (paymentId: string, phone?: string) =>
-    req<{ receipt: Receipt }>(
+    req<{ receipt: Receipt; claimQr?: ReceiptClaimQr | null }>(
       `/api/receipts/by-payment/${paymentId}${phone ? `?phone=${encodeURIComponent(phone)}` : ""}`,
     ),
   receiptsList: (q = "", date?: string, limit = 50) => {
@@ -1574,6 +1580,13 @@ export const api = {
   walkinScan: (code: string) =>
     req<{ token: WalkinQrToken; earned: boolean }>(
       "/api/loyalty/walkin/scan",
+      { method: "POST", body: JSON.stringify({ code }) },
+      true,
+    ),
+  // Issue #55: สแกน QR ใบเสร็จ → ผูกคำสั่งซื้อ (Guest) เข้าบัญชีและรับแต้มตามกติกาเดิม
+  receiptClaim: (code: string) =>
+    req<{ order: OrderDetail; earned: number }>(
+      "/api/loyalty/receipt/claim",
       { method: "POST", body: JSON.stringify({ code }) },
       true,
     ),

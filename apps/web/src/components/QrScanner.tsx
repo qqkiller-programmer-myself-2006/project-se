@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { extractWalkinCode } from "../lib/walkinQr";
+import { extractRewardQrCode } from "../lib/walkinQr";
 import { Alert, secondaryButtonClass } from "./ui";
 
 /** อ่านเฟรมจากกล้องหนึ่งครั้ง คืนข้อความใน QR หรือ null ถ้าไม่พบ */
@@ -109,7 +109,7 @@ export function QrScanner({
         const text = await decode(video);
         if (cancelled) return;
         if (text) {
-          const code = extractWalkinCode(text);
+          const code = extractRewardQrCode(text);
           if (code) {
             stop();
             onCodeRef.current(code);

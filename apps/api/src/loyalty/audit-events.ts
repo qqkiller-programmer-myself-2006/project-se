@@ -105,6 +105,22 @@ export function guestLinkedEvent(orderId: string, customerId: string, actor: Sho
   };
 }
 
+/** Issue #55: ผูกใบเสร็จเข้าบัญชีด้วย QR ใบเสร็จ (ใช้ครั้งเดียว ภายใน 24 ชม. หลังชำระเงิน) */
+export function receiptClaimedEvent(
+  orderId: string,
+  paymentId: string,
+  customerId: string,
+  actor: ShopActor,
+): AuditInput {
+  return {
+    ...base(actor),
+    action: "loyalty_receipt_claimed",
+    targetId: orderId,
+    targetUsername: null,
+    detail: `ลูกค้า ${customerId} สแกน QR ใบเสร็จของการชำระเงิน ${paymentId} ผูกคำสั่งซื้อ ${orderId} เข้าบัญชี`,
+  };
+}
+
 export function accountMergedEvent(
   sourceCustomerId: string,
   targetCustomerId: string,
