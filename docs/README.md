@@ -24,8 +24,9 @@
 - [runbook/](runbook/) — ขั้นตอนที่ operator ใช้จริง:
   [backup-restore](runbook/backup-restore.md),
   [migration-rehearsal](runbook/migration-rehearsal.md),
-  [LINE production channels](runbook/line-production-channels.md) และ
-  [production runtime readiness](runbook/production-runtime-readiness.md)
+  [LINE production channels](runbook/line-production-channels.md),
+  [production runtime readiness](runbook/production-runtime-readiness.md) และ
+  [integration test กับฐานข้อมูลจริง](runbook/integration-db-tests.md)
 - [ops/github-repo-setup.md](ops/github-repo-setup.md) — checklist และคำสั่ง gh
   สำหรับเจ้าของ repo; ยังไม่ได้รัน remote cleanup จากเครื่องนี้
 

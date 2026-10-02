@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import bcrypt from "bcryptjs";
 import request, { type Agent } from "supertest";
 import type { Express } from "express";
-import mysql from "mysql2/promise";
+import { openSqlAdmin, type SqlAdmin } from "./helpers/sql-admin.js";
 import { randomUUID } from "node:crypto";
 import { createApp } from "../src/app.js";
 import { createMysqlStore, type Store } from "../src/store.js";
@@ -19,7 +19,7 @@ if (!hasTestDb) {
 const SECRET = "integration-receipt-qr-secret-0123";
 
 /**
- * Issue #55 บน SQL store จริงเท่านั้น (production รันบน Postgres/Supabase ผ่านชั้น compat เดียวกับ MySQL store):
+ * Issue #55 บน SQL store จริงเท่านั้น (รันได้ทั้ง MySQL และ Postgres/Supabase — production ใช้ Postgres ผ่านชั้น pg-compat):
  * ผูกคำสั่งซื้อด้วย QR ใบเสร็จ — ใช้ครั้งเดียว, หมดอายุ 24 ชม., ไม่ซ้ำกับ guest-link, แต้มเข้าตามกติกาเดิม
  * - ไม่มี TEST_DATABASE_URL → skip ชัดเจน ไม่นับว่าผ่าน
  * - **ต้องรันกับฐานข้อมูลจริงก่อน deploy**: CI ปกติไม่มี DB จึงไม่ได้พิสูจน์ SQL ส่วนนี้ (ไม่มี migration ใหม่)
@@ -27,7 +27,7 @@ const SECRET = "integration-receipt-qr-secret-0123";
 describe.skipIf(!hasTestDb)("issue55 receipt QR claim with real SQL (TEST_DATABASE_URL)", () => {
   let store: Store;
   let app: Express;
-  let admin: mysql.Connection;
+  let admin: SqlAdmin;
   let offsetMs = 0;
   const prefix = `r${Date.now().toString(36)}_`;
   const ownerName = `${prefix}owner`;
@@ -85,7 +85,7 @@ describe.skipIf(!hasTestDb)("issue55 receipt QR claim with real SQL (TEST_DATABA
 
   beforeAll(async () => {
     store = await createMysqlStore(TEST_DATABASE_URL);
-    admin = await mysql.createConnection(TEST_DATABASE_URL);
+    admin = await openSqlAdmin(TEST_DATABASE_URL);
     app = createApp({
       store,
       loginRateMax: 1000,
@@ -118,10 +118,10 @@ describe.skipIf(!hasTestDb)("issue55 receipt QR claim with real SQL (TEST_DATABA
     await admin.query(`DELETE FROM queue_jobs WHERE order_id IN (${orderSel})`, [like]);
     await admin.query("DELETE FROM refunds WHERE order_number IN (SELECT order_number FROM orders WHERE guest_name LIKE ?)", [like]);
     await admin.query("DELETE FROM receipts WHERE order_id IN (SELECT id FROM orders WHERE guest_name LIKE ?)", [like]);
-    await admin.query("DELETE pe FROM payment_events pe JOIN payments p ON pe.payment_id = p.id WHERE p.order_id IN (SELECT id FROM orders WHERE guest_name LIKE ?)", [like]);
+    await admin.query("DELETE FROM payment_events WHERE payment_id IN (SELECT id FROM payments WHERE order_id IN (SELECT id FROM orders WHERE guest_name LIKE ?))", [like]);
     await admin.query(`DELETE FROM payments WHERE order_id IN (${orderSel})`, [like]);
     await admin.query(`DELETE FROM order_stock_usage WHERE order_id IN (${orderSel})`, [like]);
-    await admin.query("DELETE oi FROM order_items oi JOIN orders o ON oi.order_id = o.id WHERE o.guest_name LIKE ?", [like]);
+    await admin.query("DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE guest_name LIKE ?)", [like]);
     await admin.query("DELETE FROM orders WHERE guest_name LIKE ?", [like]);
     if (customerIds.length > 0) {
       const ph = customerIds.map(() => "?").join(",");
@@ -130,7 +130,7 @@ describe.skipIf(!hasTestDb)("issue55 receipt QR claim with real SQL (TEST_DATABA
     }
     await admin.query("DELETE FROM menu_items WHERE category LIKE ?", [like]);
     await admin.query("DELETE FROM audit_logs WHERE actor_username = ?", [ownerName]);
-    await admin.query("DELETE s FROM sessions s JOIN users u ON s.user_id = u.id WHERE u.username = ?", [ownerName]);
+    await admin.query("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE username = ?)", [ownerName]);
     await admin.query("DELETE FROM users WHERE username = ?", [ownerName]);
     await admin?.end();
     await store?.close?.();
@@ -146,10 +146,10 @@ describe.skipIf(!hasTestDb)("issue55 receipt QR claim with real SQL (TEST_DATABA
     const claimed = await post(a.agent, "/api/loyalty/receipt/claim", { code });
     expect(claimed.status).toBe(200);
     expect(claimed.body.earned).toBe(0);
-    const [orderRows] = (await admin.query("SELECT customer_id FROM orders WHERE id = ?", [order.id])) as [{ customer_id: string }[], unknown];
+    const orderRows = await admin.query<{ customer_id: string }>("SELECT customer_id FROM orders WHERE id = ?", [order.id]);
     expect(orderRows[0]!.customer_id).toBe(a.id);
-    const [claimRows] = (await admin.query("SELECT COUNT(*) AS n FROM guest_link_claims WHERE order_id = ?", [order.id])) as [{ n: string | number }[], unknown];
-    expect(Number(claimRows[0]!.n)).toBe(1);
+    const claimRows = await admin.query<{ n: string | number }>("SELECT COUNT(*) AS n FROM guest_link_claims WHERE order_id = ?", [order.id]);
+    expect(admin.num(claimRows[0]!.n)).toBe(1);
 
     // ใช้ครั้งเดียว: คนอื่น/คนเดิม/ผูกด้วยเบอร์ ถูกปฏิเสธ
     const b = await registerCustomer();
@@ -164,8 +164,8 @@ describe.skipIf(!hasTestDb)("issue55 receipt QR claim with real SQL (TEST_DATABA
       .set("x-csrf-token", token)
       .send({ status: "completed", reason: "รับของครบ" });
     expect(done.status).toBe(200);
-    const [pointRows] = (await admin.query("SELECT COALESCE(SUM(points), 0) AS p FROM loyalty_transactions WHERE customer_id = ?", [a.id])) as [{ p: string | number }[], unknown];
-    expect(Number(pointRows[0]!.p)).toBe(2);
+    const pointRows = await admin.query<{ p: string | number }>("SELECT COALESCE(SUM(points), 0) AS p FROM loyalty_transactions WHERE customer_id = ?", [a.id]);
+    expect(admin.num(pointRows[0]!.p)).toBe(2);
   }, 60000);
 
   it("หมดอายุ 24 ชม. → 409 และไม่ผูกอะไร", async () => {
@@ -181,7 +181,7 @@ describe.skipIf(!hasTestDb)("issue55 receipt QR claim with real SQL (TEST_DATABA
     } finally {
       offsetMs = 0;
     }
-    const [orderRows] = (await admin.query("SELECT customer_id FROM orders WHERE id = ?", [order.id])) as [{ customer_id: string | null }[], unknown];
+    const orderRows = await admin.query<{ customer_id: string | null }>("SELECT customer_id FROM orders WHERE id = ?", [order.id]);
     expect(orderRows[0]!.customer_id).toBeNull();
   }, 60000);
 });
