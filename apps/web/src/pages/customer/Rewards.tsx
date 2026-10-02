@@ -19,6 +19,7 @@ import {
 import { MotionReveal, Skeleton, StaggerItem, StaggerList } from "../../components/motion";
 import { ConnectionBanner, DemoBadge } from "../../components/demo";
 import { Icon } from "../../components/icons";
+import { QrScanner } from "../../components/QrScanner";
 import {
   DEMO_BALANCE,
   DEMO_LEDGER,
@@ -78,6 +79,8 @@ export default function RewardsPage() {
   const [walkinCode, setWalkinCode] = useState("");
   const [walkinBusy, setWalkinBusy] = useState(false);
   const [walkinMsg, setWalkinMsg] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+  // Issue #44: สแกน QR ด้วยกล้องแทนการกรอกรหัสเอง
+  const [scanning, setScanning] = useState(false);
 
   const [guestOrderId, setGuestOrderId] = useState("");
   const [guestBusy, setGuestBusy] = useState(false);
@@ -180,16 +183,22 @@ export default function RewardsPage() {
     }
   }
 
-  async function scanWalkin(e: React.FormEvent) {
+  function scanWalkin(e: React.FormEvent) {
     e.preventDefault();
-    if (!walkinCode.trim()) {
+    void claimWalkin(walkinCode);
+  }
+
+  /** รับแต้มจากรหัส QR (กรอกเองหรือสแกนจากกล้อง) — server ตรวจครั้งเดียว/หมดอายุ/บัญชี และเขียน audit */
+  async function claimWalkin(rawCode: string) {
+    const code = rawCode.trim();
+    if (!code) {
       setWalkinMsg({ tone: "error", text: "กรุณากรอกรหัส QR ที่ได้รับจากร้าน" });
       return;
     }
     setWalkinBusy(true);
     setWalkinMsg(null);
     try {
-      const { earned } = await api.walkinScan(walkinCode.trim());
+      const { earned } = await api.walkinScan(code);
       setWalkinMsg({
         tone: "success",
         text: earned ? "รับคะแนน Walk-in 1 แต้มแล้ว" : "รับคะแนนเรียบร้อยแล้ว (คะแนนนี้ถูกใช้ไปก่อนหน้า)",
@@ -411,6 +420,31 @@ export default function RewardsPage() {
       <Panel label="สแกน QR Walk-in">
         <h2 className="pa-display text-base text-ink-900">สแกน QR Walk-in</h2>
         <p className="mt-1 text-sm text-ink-600">ขอรหัส QR จากพนักงานที่ร้าน (ใช้ได้ครั้งเดียวภายใน 10 นาที) รับ 1 แต้มต่อรหัส</p>
+        <div className="mt-3 space-y-3">
+          {scanning ? (
+            <QrScanner
+              onCode={(code) => {
+                setScanning(false);
+                setWalkinCode(code);
+                void claimWalkin(code);
+              }}
+              onClose={() => setScanning(false)}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setWalkinMsg(null);
+                setScanning(true);
+              }}
+              disabled={walkinBusy}
+              className={primaryButtonClass}
+            >
+              สแกน QR ด้วยกล้อง
+            </button>
+          )}
+          <p className="text-xs text-ink-500">หรือกรอกรหัสที่พนักงานให้ด้านล่าง</p>
+        </div>
         <form onSubmit={scanWalkin} className="mt-3 flex flex-wrap items-end gap-2">
           <div className="min-w-0 flex-1 basis-48">
             <label htmlFor="walkin-code" className="mb-1 block text-sm font-semibold text-ink-800">รหัส QR</label>
