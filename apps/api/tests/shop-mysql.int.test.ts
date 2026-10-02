@@ -159,7 +159,8 @@ describe.skipIf(!hasTestDb)("ticket02 shop status and tables with real MySQL (TE
       actor,
     );
     expect(saved.reason).toBe("รอบ MySQL");
-    expect(new Date(saved.expiresAt!).getTime()).toBe(new Date(expires).getTime());
+    // คอลัมน์ DATETIME เก็บถึงวินาที (ไม่มีมิลลิวินาที) — เทียบที่ความละเอียดวินาที ไม่งั้นผ่านเฉพาะตอนมิลลิวินาทีบังเอิญเป็น 000
+    expect(new Date(saved.expiresAt!).getTime()).toBe(Math.floor(new Date(expires).getTime() / 1000) * 1000);
     const snap = await store.getShopSnapshot();
     expect(snap.override?.reason).toBe("รอบ MySQL");
     expect(await store.clearShopOverride(actor)).toBe(true);
