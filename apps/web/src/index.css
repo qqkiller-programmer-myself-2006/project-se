@@ -109,6 +109,14 @@ body {
 .customer-main {
   max-width: 72rem;
 }
+.customer-nav-scroll-hint {
+  transition-property: opacity;
+}
+@media (prefers-reduced-motion: reduce) {
+  .customer-nav-scroll-hint {
+    transition: none !important;
+  }
+}
 
 /* Kitchen is a control room: compressed rhythm, obvious status, no decorative depth. */
 .role-kitchen {

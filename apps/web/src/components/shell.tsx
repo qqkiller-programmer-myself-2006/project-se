@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { FoodMotif, Icon, type IconName } from "./icons";
 import { PageEnter } from "./motion";
@@ -14,6 +14,63 @@ const NAV_ACTIVE = "border-transparent text-gold-200 sm:border-gold-500 sm:bg-go
 
 function navClass(isActive: boolean): string {
   return `${NAV_BASE} ${isActive ? NAV_ACTIVE : NAV_IDLE}`;
+}
+
+function ScrollHintedNav({ children }: { children: ReactNode }) {
+  const navRef = useRef<HTMLElement | null>(null);
+  const [canScrollBack, setCanScrollBack] = useState(false);
+  const [canScrollForward, setCanScrollForward] = useState(false);
+
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+
+    let frame: number | null = null;
+    const update = () => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        const maxScroll = Math.max(0, nav.scrollWidth - nav.clientWidth);
+        setCanScrollBack(nav.scrollLeft > 1);
+        setCanScrollForward(nav.scrollLeft < maxScroll - 1);
+      });
+    };
+
+    nav.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("resize", update);
+    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(update) : null;
+    resizeObserver?.observe(nav);
+    update();
+
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      nav.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+      resizeObserver?.disconnect();
+    };
+  }, []);
+
+  return (
+    <div className="relative">
+      <nav
+        ref={navRef}
+        aria-label="เมนูลูกค้า"
+        className="mt-3 flex gap-1 overflow-x-auto pb-1 sm:flex-wrap sm:gap-2 sm:overflow-visible sm:pb-0"
+      >
+        {children}
+      </nav>
+      <span
+        data-testid="customer-nav-scroll-hint-start"
+        aria-hidden="true"
+        className={`customer-nav-scroll-hint pointer-events-none absolute inset-y-3 left-0 z-10 w-8 bg-gradient-to-r from-ink-900 to-transparent transition-opacity sm:hidden ${canScrollBack ? "opacity-100" : "opacity-0"}`}
+      />
+      <span
+        data-testid="customer-nav-scroll-hint-end"
+        aria-hidden="true"
+        className={`customer-nav-scroll-hint pointer-events-none absolute inset-y-3 right-0 z-10 w-8 bg-gradient-to-l from-ink-900 to-transparent transition-opacity sm:hidden ${canScrollForward ? "opacity-100" : "opacity-0"}`}
+      />
+    </div>
+  );
 }
 
 const ACCOUNT_LINK =
@@ -129,14 +186,14 @@ export function PublicShell({ children }: { children: ReactNode }) {
             </Link>
             <AccountBar />
           </div>
-          <nav aria-label="เมนูลูกค้า" className="mt-3 flex gap-1 overflow-x-auto pb-1 sm:flex-wrap sm:gap-2 sm:overflow-visible sm:pb-0">
+          <ScrollHintedNav>
             {PUBLIC_NAV.map((item) => (
               <NavLink key={item.to} to={item.to} end={item.end} className={({ isActive }) => navClass(isActive)}>
                 <Icon name={item.icon} size={18} />
                 {item.label}
               </NavLink>
             ))}
-          </nav>
+          </ScrollHintedNav>
           {isDemoModeEnabled() ? (
             <div className="mt-3 flex justify-start">
               <DemoBadge />
