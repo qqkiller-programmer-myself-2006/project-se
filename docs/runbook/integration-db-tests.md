@@ -29,12 +29,16 @@ test ที่ใช้ฐานข้อมูลจริงมีนามส
 
 ## ใน CI (อัตโนมัติ)
 
-workflow `.github/workflows/integration.yml` รันทุก PR/push เข้า `main` ที่แตะ `apps/api/**`, `db/**` หรือ lockfile:
+workflow `.github/workflows/integration.yml` รันทุก PR และทุก push เข้า `main` (ไม่มี `paths:` filter โดยตั้งใจ — ดูหมายเหตุด้านล่าง):
 
 - **Integration (MySQL 8.4)**: ทุกไฟล์ `*.int.test.ts` ทีละไฟล์ (ไม่ขนาน)
 - **Integration (Postgres 16)**: เฉพาะ `*-sql.int.test.ts`
 
-ดูผลที่หน้า PR → Checks เป็น check แยกจาก `Quality checks` (ยังไม่ได้ตั้งเป็น required ใน branch protection)
+ดูผลที่หน้า PR → Checks ทั้งสอง job เป็น **required check** ของ `main` คู่กับ `Quality checks` — ต้องผ่านก่อน merge
+
+> หมายเหตุ: ชื่อ job (`Integration (MySQL 8.4)`, `Integration (Postgres 16)`) ผูกกับ branch protection ถ้าเปลี่ยนชื่อ
+> ต้องแก้ required checks ให้ตรงด้วย และห้ามใส่ `paths:` filter ที่ trigger เพราะ PR ที่ไม่แตะไฟล์ตามเงื่อนไข
+> จะไม่มี check นี้รายงานและถูกบล็อก merge ค้าง
 
 ## รันในเครื่อง (ต้องมี Docker Desktop)
 

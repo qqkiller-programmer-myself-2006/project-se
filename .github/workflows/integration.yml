@@ -4,27 +4,17 @@ name: Integration (real DB)
 # - mysql: ทุกไฟล์ *.int.test.ts (MySQL 8.4 — ตรงกับ docker-compose.yml)
 # - postgres: เฉพาะไฟล์ที่ชื่อ *-sql.int.test.ts ซึ่งเขียนแบบไม่ผูกกับ dialect (production = Supabase Postgres ผ่าน pg-compat)
 # ธรรมเนียม: test ที่ใช้ได้ทั้งสอง DB ตั้งชื่อ *-sql.int.test.ts และตรวจผลผ่าน tests/helpers/sql-admin.ts (SQL มาตรฐาน)
-# ไม่ได้เป็น required check ใน branch protection — ดูผลได้ในหน้า PR; ถ้าจะบังคับ ให้เพิ่มชื่อ job ใน protection
+# เป็น required check ใน branch protection ของ main (ชื่อ job ต้องตรงกับที่ตั้งไว้: "Integration (MySQL 8.4)" และ
+# "Integration (Postgres 16)") — ห้ามใส่ `paths:` filter ที่ trigger: PR ที่ไม่แตะไฟล์ตามเงื่อนไขจะไม่มี check นี้รายงาน
+# แล้วถูกบล็อก merge ค้างตลอดไป (required check ที่ไม่ถูกรัน = "รอผลอยู่")
 
 on:
   pull_request:
     branches:
       - main
-    paths:
-      - "apps/api/**"
-      - "db/**"
-      - "package.json"
-      - "package-lock.json"
-      - ".github/workflows/integration.yml"
   push:
     branches:
       - main
-    paths:
-      - "apps/api/**"
-      - "db/**"
-      - "package.json"
-      - "package-lock.json"
-      - ".github/workflows/integration.yml"
   workflow_dispatch:
 
 concurrency:
