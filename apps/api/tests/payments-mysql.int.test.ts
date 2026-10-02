@@ -59,11 +59,17 @@ describe.skipIf(!hasTestDb)("ticket08 payments with real MySQL (TEST_DATABASE_UR
 
   afterAll(async () => {
     if (!hasTestDb) return;
-    await admin.query("DELETE FROM refunds WHERE order_number LIKE ?", [`${prefix}%`]);
-    await admin.query("DELETE FROM receipts WHERE order_number LIKE ?", [`${prefix}%`]);
-    await admin.query("DELETE pe FROM payment_events pe JOIN payments p ON pe.payment_id = p.id WHERE p.order_number LIKE ?", [`${prefix}%`]);
-    await admin.query("DELETE FROM payments WHERE order_number LIKE ?", [`${prefix}%`]);
-    await admin.query("DELETE oi FROM order_items oi JOIN orders o ON oi.order_id = o.id WHERE o.guest_name LIKE ?", [`${prefix}%`]);
+    // ล้างตามออเดอร์ของรันนี้ (guest_name ขึ้นต้น prefix) — เลขออเดอร์/ใบเสร็จไม่มี prefix จึงใช้ order_number LIKE ไม่ได้
+    // (เดิมแถว payments ค้าง → ลบ orders ไม่ได้ (FK) → afterAll พังกลางทางและทิ้ง owner ค้างจนไฟล์ถัดไปล้มตาม)
+    const mine = "SELECT id FROM orders WHERE guest_name LIKE ?";
+    // queue_jobs อ้างอิง payments (fk_queue_payment) จึงต้องลบก่อน payments
+    await admin.query(`DELETE FROM queue_jobs WHERE order_id IN (${mine})`, [`${prefix}%`]);
+    await admin.query(`DELETE FROM order_stock_usage WHERE order_id IN (${mine})`, [`${prefix}%`]);
+    await admin.query(`DELETE FROM refunds WHERE order_id IN (${mine})`, [`${prefix}%`]);
+    await admin.query(`DELETE FROM receipts WHERE order_id IN (${mine})`, [`${prefix}%`]);
+    await admin.query(`DELETE FROM payment_events WHERE payment_id IN (SELECT id FROM payments WHERE order_id IN (${mine}))`, [`${prefix}%`]);
+    await admin.query(`DELETE FROM payments WHERE order_id IN (${mine})`, [`${prefix}%`]);
+    await admin.query(`DELETE FROM order_items WHERE order_id IN (${mine})`, [`${prefix}%`]);
     await admin.query("DELETE FROM orders WHERE guest_name LIKE ?", [`${prefix}%`]);
     await admin.query("DELETE FROM menu_items WHERE category LIKE ?", [`${prefix}%`]);
     await admin.query("DELETE FROM audit_logs WHERE actor_username = ?", [ownerName]);

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import bcrypt from "bcryptjs";
 import request, { type Agent } from "supertest";
 import type { Express } from "express";
-import mysql from "mysql2/promise";
+import { openSqlAdmin, type SqlAdmin } from "./helpers/sql-admin.js";
 import { randomUUID } from "node:crypto";
 import { createApp } from "../src/app.js";
 import { createMysqlStore, type Store } from "../src/store.js";
@@ -17,7 +17,7 @@ if (!hasTestDb) {
 }
 
 /**
- * Issue #42 บน SQL store จริงเท่านั้น (production รันบน Postgres/Supabase ผ่านชั้น compat เดียวกับ MySQL store):
+ * Issue #42 บน SQL store จริงเท่านั้น (รันได้ทั้ง MySQL และ Postgres/Supabase — production ใช้ Postgres ผ่านชั้น pg-compat):
  * แก้ไขรายการในออเดอร์เดิมต้องคืนยอดจองเดิม + จองใหม่ใน transaction เดียว
  * - ไม่มี TEST_DATABASE_URL → skip ชัดเจน ไม่นับว่าผ่าน
  * - **ต้องรันกับฐานข้อมูลจริงก่อน deploy**: CI ปกติไม่มี DB จึงไม่ได้พิสูจน์ SQL ส่วนนี้
@@ -25,7 +25,7 @@ if (!hasTestDb) {
 describe.skipIf(!hasTestDb)("issue42 order edit with real SQL (TEST_DATABASE_URL)", () => {
   let store: Store;
   let app: Express;
-  let admin: mysql.Connection;
+  let admin: SqlAdmin;
   const prefix = `e${Date.now().toString(36)}_`;
   const ownerName = `${prefix}owner`;
   let foodId = "";
@@ -45,19 +45,13 @@ describe.skipIf(!hasTestDb)("issue42 order edit with real SQL (TEST_DATABASE_URL
   }
 
   async function reserved(): Promise<number> {
-    const [rows] = (await admin.query("SELECT reserved FROM ingredients WHERE id = ?", [ingredientId])) as [
-      { reserved: string | number }[],
-      unknown,
-    ];
-    return Number(rows[0]!.reserved);
+    const rows = await admin.query<{ reserved: string | number }>("SELECT reserved FROM ingredients WHERE id = ?", [ingredientId]);
+    return admin.num(rows[0]!.reserved);
   }
 
   async function usageRows(orderId: string): Promise<number> {
-    const [rows] = (await admin.query("SELECT COUNT(*) AS n FROM order_stock_usage WHERE order_id = ?", [orderId])) as [
-      { n: string | number }[],
-      unknown,
-    ];
-    return Number(rows[0]!.n);
+    const rows = await admin.query<{ n: string | number }>("SELECT COUNT(*) AS n FROM order_stock_usage WHERE order_id = ?", [orderId]);
+    return admin.num(rows[0]!.n);
   }
 
   async function putItems(agent: Agent, orderId: string, body: Record<string, unknown>) {
@@ -67,7 +61,7 @@ describe.skipIf(!hasTestDb)("issue42 order edit with real SQL (TEST_DATABASE_URL
 
   beforeAll(async () => {
     store = await createMysqlStore(TEST_DATABASE_URL);
-    admin = await mysql.createConnection(TEST_DATABASE_URL);
+    admin = await openSqlAdmin(TEST_DATABASE_URL);
     app = createApp({ store, loginRateMax: 1000 });
     const first = await store.createFirstOwner({
       username: ownerName,
@@ -105,7 +99,7 @@ describe.skipIf(!hasTestDb)("issue42 order edit with real SQL (TEST_DATABASE_URL
     await admin.query("DELETE FROM payment_events WHERE payment_id IN (SELECT id FROM payments WHERE order_id IN (SELECT id FROM orders WHERE guest_name LIKE ?))", [`${prefix}%`]);
     await admin.query("DELETE FROM payments WHERE order_id IN (SELECT id FROM orders WHERE guest_name LIKE ?)", [`${prefix}%`]);
     await admin.query("DELETE FROM order_stock_usage WHERE order_id IN (SELECT id FROM orders WHERE guest_name LIKE ?)", [`${prefix}%`]);
-    await admin.query("DELETE oi FROM order_items oi JOIN orders o ON oi.order_id = o.id WHERE o.guest_name LIKE ?", [`${prefix}%`]);
+    await admin.query("DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE guest_name LIKE ?)", [`${prefix}%`]);
     await admin.query("DELETE FROM orders WHERE guest_name LIKE ?", [`${prefix}%`]);
     await admin.query("DELETE FROM stock_ledger WHERE ingredient_id = ?", [ingredientId]);
     await admin.query("DELETE FROM recipe_lines WHERE recipe_id IN (SELECT id FROM recipes WHERE created_by = ?)", [ownerName]);
@@ -113,7 +107,7 @@ describe.skipIf(!hasTestDb)("issue42 order edit with real SQL (TEST_DATABASE_URL
     await admin.query("DELETE FROM ingredients WHERE name LIKE ?", [`${prefix}%`]);
     await admin.query("DELETE FROM menu_items WHERE category LIKE ?", [`${prefix}%`]);
     await admin.query("DELETE FROM audit_logs WHERE actor_username = ?", [ownerName]);
-    await admin.query("DELETE s FROM sessions s JOIN users u ON s.user_id = u.id WHERE u.username = ?", [ownerName]);
+    await admin.query("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE username = ?)", [ownerName]);
     await admin.query("DELETE FROM users WHERE username = ?", [ownerName]);
     await admin?.end();
     await store?.close?.();
@@ -167,10 +161,10 @@ describe.skipIf(!hasTestDb)("issue42 order edit with real SQL (TEST_DATABASE_URL
     expect(tooMany.status).toBe(409);
     expect(await reserved()).toBe(50);
     expect(await usageRows(order.id)).toBe(1);
-    const [itemRows] = (await admin.query("SELECT COUNT(*) AS n FROM order_items WHERE order_id = ?", [order.id])) as [{ n: string | number }[], unknown];
-    expect(Number(itemRows[0]!.n)).toBe(2);
-    const [totalRows] = (await admin.query("SELECT total FROM orders WHERE id = ?", [order.id])) as [{ total: string | number }[], unknown];
-    expect(Number(totalRows[0]!.total)).toBe(275);
+    const itemRows = await admin.query<{ n: string | number }>("SELECT COUNT(*) AS n FROM order_items WHERE order_id = ?", [order.id]);
+    expect(admin.num(itemRows[0]!.n)).toBe(2);
+    const totalRows = await admin.query<{ total: string | number }>("SELECT total FROM orders WHERE id = ?", [order.id]);
+    expect(admin.num(totalRows[0]!.total)).toBe(275);
 
     // เปลี่ยนเป็นเมนูไม่มีสูตร → คืนยอดจองทั้งหมดและไม่มี usage ค้าง
     const noRecipe = await putItems(guest, order.id, { phone, items: [{ menuId: drinkId, quantity: 2 }] });

@@ -1,0 +1,111 @@
+name: Integration (real DB)
+
+# รัน integration test (*.int.test.ts) กับฐานข้อมูลจริงใน service container แทนที่จะถูกข้ามเงียบ ๆ ใน CI หลัก
+# - mysql: ทุกไฟล์ *.int.test.ts (MySQL 8.4 — ตรงกับ docker-compose.yml)
+# - postgres: เฉพาะไฟล์ที่ชื่อ *-sql.int.test.ts ซึ่งเขียนแบบไม่ผูกกับ dialect (production = Supabase Postgres ผ่าน pg-compat)
+# ธรรมเนียม: test ที่ใช้ได้ทั้งสอง DB ตั้งชื่อ *-sql.int.test.ts และตรวจผลผ่าน tests/helpers/sql-admin.ts (SQL มาตรฐาน)
+# ไม่ได้เป็น required check ใน branch protection — ดูผลได้ในหน้า PR; ถ้าจะบังคับ ให้เพิ่มชื่อ job ใน protection
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "apps/api/**"
+      - "db/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/integration.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/api/**"
+      - "db/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/integration.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mysql:
+    name: Integration (MySQL 8.4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root
+          MYSQL_DATABASE: paor_test
+          MYSQL_USER: paor
+          MYSQL_PASSWORD: ci-pass
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci-root"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      TEST_DATABASE_URL: mysql://paor:ci-pass@127.0.0.1:3306/paor_test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ทีละไฟล์ (ไม่ขนาน): ทุกไฟล์ใช้ฐานข้อมูลเดียวกันและสร้าง/ลบ owner ของตัวเอง
+      - name: Run integration tests (all *.int.test.ts)
+        run: npm run test -w apps/api -- --no-file-parallelism int.test
+
+  postgres:
+    name: Integration (Postgres 16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci-pass
+          POSTGRES_DB: paor_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      TEST_DATABASE_URL: postgres://postgres:ci-pass@127.0.0.1:5432/paor_test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run dialect-neutral integration tests (*-sql.int.test.ts)
+        run: |
+          files=$(cd apps/api && ls tests/*-sql.int.test.ts)
+          echo "Running on Postgres: $files"
+          npm run test -w apps/api -- --no-file-parallelism $files
