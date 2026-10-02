@@ -48,7 +48,7 @@ workflow `.github/workflows/integration.yml` รันทุก PR และท�
 docker run -d --name paor-test-mysql -e MYSQL_ROOT_PASSWORD=test-root -e MYSQL_DATABASE=paor_test -e MYSQL_USER=paor -e MYSQL_PASSWORD=test-pass -p 3307:3306 mysql:8.4
 docker exec paor-test-mysql mysqladmin ping -uroot -ptest-root   # ลองซ้ำจนขึ้น "mysqld is alive"
 $env:TEST_DATABASE_URL = "mysql://paor:test-pass@127.0.0.1:3307/paor_test"
-npm run test -w apps/api -- --no-file-parallelism int.test
+npm run test -w apps/api -- --no-file-parallelism .int.test
 docker rm -f paor-test-mysql                                      # ล้างเมื่อเสร็จ
 ```
 
