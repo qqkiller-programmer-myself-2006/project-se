@@ -139,9 +139,45 @@ function makeGlassTexture(): THREE.CanvasTexture | null {
   return new THREE.CanvasTexture(canvas);
 }
 
-export function MenuShowcase3D({ items, activeIndex, onActiveIndexChange }: MenuShowcase3DProps) {
+type MenuShowcase3DSceneProps = MenuShowcase3DProps & { onFailure: () => void };
+
+function MenuShowcaseFallback({ items, activeIndex }: Pick<MenuShowcase3DProps, "items" | "activeIndex">) {
+  const item = items[activeIndex] ?? items[0];
+  const [imageFailed, setImageFailed] = useState(false);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [item?.id, item?.imageUrl]);
+
+  if (!item) return null;
+
+  return (
+    <div className="menu-showcase__stage menu-showcase__fallback" aria-label={`เมนูแนะนำ ${item.name}`}>
+      {item.imageUrl && !imageFailed ? (
+        <img
+          src={item.imageUrl}
+          alt={`รูปภาพเมนู ${item.name}`}
+          width={640}
+          height={480}
+          loading="eager"
+          decoding="async"
+          sizes="(min-width: 640px) 640px, 100vw"
+          className="menu-showcase__fallback-image"
+          style={{ aspectRatio: "4 / 3" }}
+          onError={() => setImageFailed(true)}
+        />
+      ) : (
+        <div className="menu-showcase__fallback-placeholder" role="img" aria-label={`ไม่มีรูปภาพสำหรับเมนู ${item.name}`}>
+          <span aria-hidden="true">ปอ</span>
+          <span>ไม่มีรูปภาพเมนูนี้</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MenuShowcase3DScene({ items, activeIndex, onActiveIndexChange, onFailure }: MenuShowcase3DSceneProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const [failed, setFailed] = useState(false);
   /** index ที่ scene ควรหันมาด้านหน้า — อ่านใน rAF โดยไม่ต้องสร้าง scene ใหม่ */
   const targetRef = useRef(activeIndex);
   /** index ที่ scene รายงานออกไปเอง — ใช้แยกว่าใครเป็นคนเปลี่ยน */
@@ -177,7 +213,7 @@ export function MenuShowcase3D({ items, activeIndex, onActiveIndexChange }: Menu
     try {
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "low-power" });
     } catch {
-      setFailed(true);
+      onFailure();
       return;
     }
 
@@ -444,9 +480,25 @@ export function MenuShowcase3D({ items, activeIndex, onActiveIndexChange }: Menu
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signature]);
 
-  if (failed || items.length === 0) return null;
-
   return <div ref={hostRef} aria-hidden="true" className="menu-showcase__stage" />;
+}
+
+export function MenuShowcase3D({ items, activeIndex, onActiveIndexChange }: MenuShowcase3DProps) {
+  const [failed, setFailed] = useState(false);
+
+  if (items.length === 0) return null;
+  if (failed || prefersReducedMotion()) {
+    return <MenuShowcaseFallback items={items} activeIndex={activeIndex} />;
+  }
+
+  return (
+    <MenuShowcase3DScene
+      items={items}
+      activeIndex={activeIndex}
+      onActiveIndexChange={onActiveIndexChange}
+      onFailure={() => setFailed(true)}
+    />
+  );
 }
 
 export default MenuShowcase3D;

@@ -10,6 +10,15 @@ export default defineConfig({
       "/api": "http://127.0.0.1:4000",
     },
   },
+  build: {
+    /**
+     * Three.js (~530 kB, three.module เป็นไฟล์เดียว แตกเป็นชิ้นเล็กลงไม่ได้ถ้าไม่ import เจาะ three/src/*)
+     * ถูกโหลดแบบ lazy (dynamic import) เฉพาะหน้าที่ใช้ฉาก 3D — ไม่อยู่ใน entry chunk (~280 kB) ของทุกหน้า
+     * จึงขยับเพดานเตือนเป็น 600 kB ให้พอดีกับก้อนนี้ แต่ยังเตือนถ้ามีก้อนอื่นโตเกิน
+     * (เคยลองแตก chunk ด้วย alias ไป three/src: ขนาดรวมไม่ลดและพึ่ง path ภายในของไลบรารี จึงไม่ทำ)
+     */
+    chunkSizeWarningLimit: 600,
+  },
   test: {
     environment: "jsdom",
     setupFiles: ["./tests/setup.ts"],
