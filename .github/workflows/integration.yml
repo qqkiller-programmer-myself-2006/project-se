@@ -59,7 +59,8 @@ jobs:
 
       # ทีละไฟล์ (ไม่ขนาน): ทุกไฟล์ใช้ฐานข้อมูลเดียวกันและสร้าง/ลบ owner ของตัวเอง
       - name: Run integration tests (all *.int.test.ts)
-        run: npm run test -w apps/api -- --no-file-parallelism int.test
+        # ใช้ ".int.test" (มีจุดนำหน้า): "int.test" เฉย ๆ จับ *endpoint.test.ts (ลงท้าย "...point.test") ที่ไม่ใช่ integration ติดมาด้วย
+        run: npm run test -w apps/api -- --no-file-parallelism .int.test
 
   postgres:
     name: Integration (Postgres 16)
