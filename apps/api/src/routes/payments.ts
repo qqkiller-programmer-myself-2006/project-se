@@ -18,6 +18,7 @@ import type { OrderDetail } from "../types.js";
 import { enqueueBestEffort } from "./notifications.js";
 import { paymentManualReviewEvent, paymentPaidEvent } from "../notify/events.js";
 import type { ShopActor } from "../store.js";
+import { isReceiptQrActive, issueReceiptQrCode, receiptQrExpiresAt } from "../loyalty/receiptQr.js";
 
 export interface PaymentMiddleware {
   requireAuth: (req: Request, res: Response, next: NextFunction) => void;
@@ -29,6 +30,10 @@ export interface PaymentRouterDeps {
   store: Store;
   middleware: PaymentMiddleware;
   clientIp: (req: Request) => string;
+  /** นาฬิกาของแอป (ทดสอบฉีดเวลาได้) — ใช้ตัดสินว่า QR ใบเสร็จหมดอายุหรือยัง */
+  clock?: () => Date;
+  /** Issue #55: secret เซ็น QR ใบเสร็จ (null = ปิดฟีเจอร์ ไม่ออก QR) */
+  receiptQrSecret?: string | null;
 }
 
 function zodMessage(err: z.ZodError): string {
@@ -92,6 +97,8 @@ const receiptQuerySchema = z.object({
  */
 export function createPaymentRouter(deps: PaymentRouterDeps): express.Router {
   const { store, middleware, clientIp } = deps;
+  const clock = deps.clock ?? (() => new Date());
+  const receiptQrSecret = deps.receiptQrSecret ?? null;
   const { requireAuth, requireCsrf, requireShopManager } = middleware;
   const router = express.Router();
 
@@ -584,7 +591,17 @@ export function createPaymentRouter(deps: PaymentRouterDeps): express.Router {
         res.status(404).json({ error: "รายการนี้ยังไม่มีใบเสร็จ (ยังชำระไม่สำเร็จ)" });
         return;
       }
-      res.json({ receipt });
+      // Issue #55: QR รับแต้มของใบเสร็จ — ออกเฉพาะออเดอร์ที่ยังไม่มีเจ้าของแต้ม (Guest) ที่ชำระสำเร็จและยังไม่หมดอายุ
+      // (สมาชิกได้แต้มอัตโนมัติแล้ว) ผู้ที่เห็นใบเสร็จได้ตามสิทธิ์ข้างบนเท่านั้นที่เห็น code นี้
+      const claimQr =
+        receiptQrSecret &&
+        order.customerId === null &&
+        order.status !== "cancelled" &&
+        payment.status === "paid" &&
+        isReceiptQrActive(receipt.paidAt, clock())
+          ? { code: issueReceiptQrCode(payment.id, receiptQrSecret), expiresAt: receiptQrExpiresAt(receipt.paidAt) }
+          : null;
+      res.json({ receipt, claimQr });
     } catch (err) {
       next(err);
     }

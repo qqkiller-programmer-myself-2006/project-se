@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   LOYALTY_SOURCE_LABELS,
   REDEMPTION_STATUS_LABELS,
@@ -20,6 +21,7 @@ import { MotionReveal, Skeleton, StaggerItem, StaggerList } from "../../componen
 import { ConnectionBanner, DemoBadge } from "../../components/demo";
 import { Icon } from "../../components/icons";
 import { QrScanner } from "../../components/QrScanner";
+import { extractRewardQrCode, isReceiptQrCode } from "../../lib/walkinQr";
 import {
   DEMO_BALANCE,
   DEMO_LEDGER,
@@ -76,7 +78,9 @@ export default function RewardsPage() {
   const [releaseBusy, setReleaseBusy] = useState(false);
   const [releaseMsg, setReleaseMsg] = useState<{ tone: "success" | "error"; text: string } | null>(null);
 
-  const [walkinCode, setWalkinCode] = useState("");
+  // Issue #55: ลิงก์ "รับแต้มบนเครื่องนี้" จากใบเสร็จมาพร้อม ?code=RCPT-… — เติมช่องให้ แต่ให้ลูกค้ากดรับเอง
+  const [searchParams] = useSearchParams();
+  const [walkinCode, setWalkinCode] = useState(() => extractRewardQrCode(searchParams.get("code") ?? "") ?? "");
   const [walkinBusy, setWalkinBusy] = useState(false);
   const [walkinMsg, setWalkinMsg] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   // Issue #44: สแกน QR ด้วยกล้องแทนการกรอกรหัสเอง
@@ -188,7 +192,10 @@ export default function RewardsPage() {
     void claimWalkin(walkinCode);
   }
 
-  /** รับแต้มจากรหัส QR (กรอกเองหรือสแกนจากกล้อง) — server ตรวจครั้งเดียว/หมดอายุ/บัญชี และเขียน audit */
+  /**
+   * รับแต้มจากรหัส QR (กรอกเองหรือสแกนจากกล้อง) — server ตรวจครั้งเดียว/หมดอายุ/บัญชี และเขียน audit
+   * รหัส RCPT-… = QR ใบเสร็จ (ผูกคำสั่งซื้อเข้าบัญชีแล้วได้แต้มตามเครื่องดื่ม), รหัส WALKIN-… = QR พนักงาน (1 แต้ม)
+   */
   async function claimWalkin(rawCode: string) {
     const code = rawCode.trim();
     if (!code) {
@@ -198,11 +205,22 @@ export default function RewardsPage() {
     setWalkinBusy(true);
     setWalkinMsg(null);
     try {
-      const { earned } = await api.walkinScan(code);
-      setWalkinMsg({
-        tone: "success",
-        text: earned ? "รับคะแนน Walk-in 1 แต้มแล้ว" : "รับคะแนนเรียบร้อยแล้ว (คะแนนนี้ถูกใช้ไปก่อนหน้า)",
-      });
+      if (isReceiptQrCode(code)) {
+        const { earned } = await api.receiptClaim(code.toUpperCase());
+        setWalkinMsg({
+          tone: "success",
+          text:
+            earned > 0
+              ? `ผูกใบเสร็จเข้าบัญชีแล้ว รับ ${earned} แต้ม`
+              : "ผูกใบเสร็จเข้าบัญชีแล้ว แต้มจะเข้าเมื่อเครื่องดื่มถูกส่งมอบหรือปิดคำสั่งซื้อ",
+        });
+      } else {
+        const { earned } = await api.walkinScan(code);
+        setWalkinMsg({
+          tone: "success",
+          text: earned ? "รับคะแนน Walk-in 1 แต้มแล้ว" : "รับคะแนนเรียบร้อยแล้ว (คะแนนนี้ถูกใช้ไปก่อนหน้า)",
+        });
+      }
       setWalkinCode("");
       await load();
     } catch (err) {
@@ -420,6 +438,9 @@ export default function RewardsPage() {
       <Panel label="สแกน QR Walk-in">
         <h2 className="pa-display text-base text-ink-900">สแกน QR Walk-in</h2>
         <p className="mt-1 text-sm text-ink-600">ขอรหัส QR จากพนักงานที่ร้าน (ใช้ได้ครั้งเดียวภายใน 10 นาที) รับ 1 แต้มต่อรหัส</p>
+        <p className="mt-1 text-sm text-ink-600">
+          หรือสแกน QR บนใบเสร็จของคุณ (ใช้ได้ครั้งเดียวภายใน 24 ชั่วโมงหลังชำระเงิน) เพื่อผูกคำสั่งซื้อเข้าบัญชี — เครื่องดื่ม 1 แก้ว = 1 แต้ม
+        </p>
         <div className="mt-3 space-y-3">
           {scanning ? (
             <QrScanner

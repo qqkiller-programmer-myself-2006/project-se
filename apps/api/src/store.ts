@@ -134,6 +134,7 @@ import {
 } from "./orders/validation.js";
 import { orderCreatedEvent, orderItemsEditedEvent, orderStatusChangedEvent } from "./orders/audit-events.js";
 import { assertOrderEditable, orderLinesSignature } from "./orders/edit.js";
+import { RECEIPT_QR_WINDOW_HOURS, isReceiptQrActive } from "./loyalty/receiptQr.js";
 import {
   assertCancellable,
   assertReservationStatusTransition,
@@ -268,6 +269,7 @@ import {
 import {
   accountMergedEvent,
   guestLinkedEvent,
+  receiptClaimedEvent,
   loyaltyEarnedEvent,
   pointsReversedEvent,
   redemptionConsumedEvent,
@@ -983,6 +985,14 @@ export interface Store {
    * - รับได้เฉพาะคะแนนที่ยังไม่มีผู้รับ (กัน double-earn); ผูกซ้ำ/เบอร์คนอื่น → 409
    */
   linkGuestOrder(input: { orderId: string; customerId: string }, actor: ShopActor, now?: Date): Promise<{ order: OrderDetail; earned: number }>;
+  /**
+   * Issue #55: ผูกคำสั่งซื้อของใบเสร็จเข้าบัญชีด้วย QR ใบเสร็จ (route ตรวจลายเซ็น token แล้วส่ง paymentId มา)
+   * - เฉพาะออเดอร์ที่ยังไม่มีเจ้าของแต้ม (Guest) และชำระสำเร็จแล้ว (ไม่ใช่คืนเงิน/ยกเลิก)
+   * - ภายใน 24 ชม. หลังชำระเงิน (paidAt ของใบเสร็จ); ใช้ครั้งเดียว (ผูกแล้วผูกซ้ำ/ผูกด้วยเบอร์ไม่ได้ และกลับกัน)
+   * - แต้มคิดด้วยกติกาเดิม (เครื่องดื่ม 1 แต้มต่อ 1 แก้ว ตามที่ส่งมอบ/ปิดงาน) exactly-once ต่อรายการร่วมกับ auto-earn
+   * - ไม่ต้องตรงเบอร์โทร: การถือใบเสร็จคือหลักฐาน
+   */
+  claimReceiptQr(input: { paymentId: string; customerId: string }, actor: ShopActor, now?: Date): Promise<{ order: OrderDetail; earned: number }>;
   /**
    * รวมบัญชี (Owner/Admin อนุมัติ — route ตรวจสิทธิ์):
    * ย้าย ledger/redemption/claims ไปบัญชีปลายทางแบบ atomic + audit;
@@ -5697,6 +5707,53 @@ export function createMemoryStore(opts?: MemoryStoreOptions): Store {
           guestClaimsByOrder.set(order.id, claim.id);
           await writeAudit(guestLinkedEvent(order.id, customer.id, actor));
           // รับเฉพาะคะแนนที่ยังไม่มีผู้รับ (helper กัน double-earn เอง)
+          const earned = await tryAutoEarnForOrderInternal(order.id, actor, now);
+          return { order: toDetail(order.id)!, earned };
+        } catch (err) {
+          restorePayments(backup);
+          throw err;
+        }
+      });
+    },
+    // Issue #55 memory: ผูกคำสั่งซื้อด้วย QR ใบเสร็จ (exactly-once ร่วมกับ guest-link และ auto-earn)
+    async claimReceiptQr(input, actor, now = new Date()) {
+      return runOrderExclusive(async () => {
+        const backup = backupPayments();
+        try {
+          const payment = payments.get(input.paymentId);
+          const receipt = receipts.get(input.paymentId);
+          if (!payment || !receipt) throw new NotFoundError("ไม่พบใบเสร็จนี้");
+          if (payment.status !== "paid") {
+            throw new ConflictError("ใบเสร็จนี้ใช้รับแต้มไม่ได้ (ยังไม่ชำระหรือคืนเงินแล้ว)");
+          }
+          if (!isReceiptQrActive(receipt.paidAt, now)) {
+            throw new ConflictError(`QR ใบเสร็จหมดอายุแล้ว (ใช้ได้ภายใน ${RECEIPT_QR_WINDOW_HOURS} ชั่วโมงหลังชำระเงิน)`);
+          }
+          const order = orders.get(payment.orderId);
+          if (!order) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+          if (order.status === "cancelled") throw new ConflictError("คำสั่งซื้อนี้ถูกยกเลิกแล้ว");
+          if (guestClaimsByOrder.has(order.id)) {
+            throw new ConflictError("QR ใบเสร็จนี้ถูกใช้ไปแล้ว หรือคำสั่งซื้อนี้ถูกผูกบัญชีไปแล้ว");
+          }
+          if (order.customerId !== null || !order.guestPhone) {
+            throw new ConflictError("ใบเสร็จนี้มีเจ้าของแต้มแล้ว (สมาชิกได้แต้มอัตโนมัติ)");
+          }
+          const customer = customers.get(input.customerId);
+          if (!customer || customer.isDeleted || !customer.isActive) {
+            throw new ConflictError("บัญชีลูกค้าใช้งานไม่ได้ กรุณาเข้าสู่ระบบใหม่");
+          }
+          order.customerId = customer.id;
+          order.updatedAt = now.toISOString();
+          const claim: GuestLinkClaim = {
+            id: randomUUID(),
+            orderId: order.id,
+            customerId: customer.id,
+            guestPhone: order.guestPhone,
+            claimedAt: now.toISOString(),
+          };
+          guestClaims.set(claim.id, claim);
+          guestClaimsByOrder.set(order.id, claim.id);
+          await writeAudit(receiptClaimedEvent(order.id, payment.id, customer.id, actor));
           const earned = await tryAutoEarnForOrderInternal(order.id, actor, now);
           return { order: toDetail(order.id)!, earned };
         } catch (err) {
@@ -12876,6 +12933,70 @@ export async function createMysqlStore(databaseUrl: string): Promise<Store> {
           claimId, order.id, customer.id, customer.phone,
         ]);
         await insertAuditRow(conn, guestLinkedEvent(order.id, customer.id, actor));
+        const earned = await tryAutoEarnTx(conn, order.id, actor, now);
+        const detail = await readOrderDetailTx(conn, order.id);
+        if (!detail) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+        return { order: detail, earned };
+      });
+    },
+    // Issue #55 SQL: ผูกคำสั่งซื้อด้วย QR ใบเสร็จ — tx เดียว ล็อกแถวออเดอร์ FOR UPDATE (กันสแกนซ้อน/แข่งกับ guest-link)
+    async claimReceiptQr(input: { paymentId: string; customerId: string }, actor: ShopActor, now: Date = new Date()) {
+      return withPaymentTx(async (conn) => {
+        const [pFirst] = (await conn.query("SELECT order_id FROM payments WHERE id = ? LIMIT 1", [input.paymentId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (pFirst.length === 0) throw new NotFoundError("ไม่พบใบเสร็จนี้");
+        const [oRows] = (await conn.query("SELECT * FROM orders WHERE id = ? LIMIT 1 FOR UPDATE", [String(pFirst[0]!["order_id"])])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (oRows.length === 0) throw new NotFoundError("ไม่พบคำสั่งซื้อ");
+        const order = rowToOrder(oRows[0]!);
+        // อ่านสถานะชำระเงินหลังล็อกออเดอร์แล้ว (เห็นผลของคืนเงิน/ชำระที่เพิ่ง commit)
+        const [pRows] = (await conn.query("SELECT * FROM payments WHERE id = ? LIMIT 1", [input.paymentId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (pRows.length === 0) throw new NotFoundError("ไม่พบใบเสร็จนี้");
+        const payment = rowToPayment(pRows[0]!);
+        const [rcRows] = (await conn.query("SELECT * FROM receipts WHERE payment_id = ? LIMIT 1", [input.paymentId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (rcRows.length === 0) throw new NotFoundError("ไม่พบใบเสร็จนี้");
+        const receipt = rowToReceipt(rcRows[0]!);
+        if (payment.status !== "paid") {
+          throw new ConflictError("ใบเสร็จนี้ใช้รับแต้มไม่ได้ (ยังไม่ชำระหรือคืนเงินแล้ว)");
+        }
+        if (!isReceiptQrActive(receipt.paidAt, now)) {
+          throw new ConflictError(`QR ใบเสร็จหมดอายุแล้ว (ใช้ได้ภายใน ${RECEIPT_QR_WINDOW_HOURS} ชั่วโมงหลังชำระเงิน)`);
+        }
+        if (order.status === "cancelled") throw new ConflictError("คำสั่งซื้อนี้ถูกยกเลิกแล้ว");
+        const [clRows] = (await conn.query("SELECT id FROM guest_link_claims WHERE order_id = ? LIMIT 1", [order.id])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (clRows.length > 0) {
+          throw new ConflictError("QR ใบเสร็จนี้ถูกใช้ไปแล้ว หรือคำสั่งซื้อนี้ถูกผูกบัญชีไปแล้ว");
+        }
+        if (order.customerId !== null || !order.guestPhone) {
+          throw new ConflictError("ใบเสร็จนี้มีเจ้าของแต้มแล้ว (สมาชิกได้แต้มอัตโนมัติ)");
+        }
+        const [cRows] = (await conn.query("SELECT * FROM customers WHERE id = ? LIMIT 1", [input.customerId])) as [
+          Record<string, unknown>[],
+          unknown,
+        ];
+        if (cRows.length === 0) throw new NotFoundError("ไม่พบบัญชีลูกค้า");
+        const customer = rowToCustomer(cRows[0]!);
+        if (customer.isDeleted || !customer.isActive) {
+          throw new ConflictError("บัญชีลูกค้าใช้งานไม่ได้ กรุณาเข้าสู่ระบบใหม่");
+        }
+        await conn.query("UPDATE orders SET customer_id = ? WHERE id = ?", [customer.id, order.id]);
+        await conn.query("INSERT INTO guest_link_claims (id, order_id, customer_id, guest_phone) VALUES (?, ?, ?, ?)", [
+          randomUUID(), order.id, customer.id, order.guestPhone,
+        ]);
+        await insertAuditRow(conn, receiptClaimedEvent(order.id, payment.id, customer.id, actor));
         const earned = await tryAutoEarnTx(conn, order.id, actor, now);
         const detail = await readOrderDetailTx(conn, order.id);
         if (!detail) throw new NotFoundError("ไม่พบคำสั่งซื้อ");

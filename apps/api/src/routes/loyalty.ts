@@ -6,6 +6,7 @@ import express, {
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import type { ShopActor, Store } from "../store.js";
+import { verifyReceiptQrCode } from "../loyalty/receiptQr.js";
 import { enqueueBestEffort } from "./notifications.js";
 import { loyaltyEarnedEvent, loyaltyRedeemedEvent } from "../notify/events.js";
 import {
@@ -29,6 +30,8 @@ export interface LoyaltyRouterDeps {
   middleware: LoyaltyMiddleware;
   clientIp: (req: Request) => string;
   clock?: () => Date;
+  /** Issue #55: secret ตรวจ QR ใบเสร็จ (null = ปิดฟีเจอร์ → 503) */
+  receiptQrSecret?: string | null;
 }
 
 function zodMessage(err: z.ZodError): string {
@@ -65,6 +68,7 @@ const redeemBodySchema = z.object({ idempotencyKey: z.unknown(), reason: z.unkno
 const releaseBodySchema = z.object({ reason: z.unknown() });
 const walkinScanSchema = z.object({ code: z.unknown() });
 const guestLinkSchema = z.object({ orderId: z.unknown() });
+const receiptClaimSchema = z.object({ code: z.unknown() });
 const mergeBodySchema = z.object({ sourceCustomerId: z.unknown(), targetCustomerId: z.unknown() });
 const reverseBodySchema = z.object({ orderId: z.unknown(), refundId: z.unknown() });
 
@@ -100,6 +104,7 @@ export function createLoyaltyRouter(deps: LoyaltyRouterDeps): express.Router {
   const { store, middleware, clientIp } = deps;
   const { requireAuth, requireCsrf, requireShopManager } = middleware;
   const clock = deps.clock ?? (() => new Date());
+  const receiptQrSecret = deps.receiptQrSecret ?? null;
   const router = express.Router();
 
   const loyaltyLimiter = rateLimit({
@@ -529,6 +534,42 @@ export function createLoyaltyRouter(deps: LoyaltyRouterDeps): express.Router {
         ip: clientIp(req),
       });
       res.json({ token, earned });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ---------- Issue #55: ลูกค้าสแกน QR ใบเสร็จ ผูกคำสั่งซื้อ (Guest) เข้าบัญชีและรับแต้มตามกติกาเดิม ----------
+  // token เซ็นด้วย HMAC (ไม่มีตาราง) — ใช้ครั้งเดียว/หมดอายุ 24 ชม./คืนเงินแล้วใช้ไม่ได้ ตรวจที่ store
+  router.post("/api/loyalty/receipt/claim", loyaltyLimiter, requireCsrf, async (req, res, next) => {
+    try {
+      if (!receiptQrSecret) {
+        res.status(503).json({ error: "QR ใบเสร็จยังไม่เปิดใช้งาน กรุณาติดต่อพนักงาน" });
+        return;
+      }
+      const customerId = await requireCustomerStrict(req, res);
+      if (!customerId) return;
+      const parsed = receiptClaimSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: zodMessage(parsed.error) });
+        return;
+      }
+      const verified = verifyReceiptQrCode(parsed.data.code, receiptQrSecret);
+      if (!verified) {
+        res.status(400).json({ error: "รหัส QR ใบเสร็จไม่ถูกต้อง" });
+        return;
+      }
+      const { order, earned } = await store.claimReceiptQr(
+        { paymentId: verified.paymentId, customerId },
+        { actorId: customerId, ip: clientIp(req) },
+        clock(),
+      );
+      // Ticket 12: ได้แต้ม → เข้าคิว LINE (best-effort)
+      await notifyLoyaltyEarned(customerId, `receipt-qr:${order.id}`, order.id, earned, {
+        actorId: customerId,
+        ip: clientIp(req),
+      });
+      res.json({ order, earned });
     } catch (err) {
       next(err);
     }

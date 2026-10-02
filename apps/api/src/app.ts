@@ -28,6 +28,7 @@ import { createOrderRouter } from "./routes/orders.js";
 import { createPaymentRouter } from "./routes/payments.js";
 import { createQueueRouter } from "./routes/queue.js";
 import { createLoyaltyRouter } from "./routes/loyalty.js";
+import { resolveReceiptQrSecret } from "./loyalty/receiptQr.js";
 import { createNotificationRouter } from "./routes/notifications.js";
 import type { LineMessagingProvider } from "./notify/messaging.js";
 import { createCapacityRouter } from "./routes/capacity.js";
@@ -50,6 +51,11 @@ export interface AppOptions {
   trustedProxy?: string | string[] | boolean;
   /** นาฬิกาแบบฉีดได้สำหรับ Ticket 02 (default: เวลาจริง) — เทสต์กำหนดเวลาตายตัวผ่าน seam นี้ */
   now?: () => Date;
+  /**
+   * Issue #55: secret เซ็น QR ใบเสร็จ (default: อ่าน RECEIPT_QR_SECRET; production ไม่ตั้ง = ปิดฟีเจอร์ → null;
+   * นอก production ไม่ตั้ง = สุ่มต่อ process) — tests ฉีดค่าเองได้
+   */
+  receiptQrSecret?: string | null;
   /** snapshot จำนวนโต๊ะที่ใช้ + ผู้ใช้บริการ (default: zero — ยังไม่มี module รอบการใช้โต๊ะ) */
   occupancy?: OccupancyProvider;
   /** LINE provider สำหรับ Ticket 03 (default: disabled → fail-fast 503; tests ฉีด fake) */
@@ -244,6 +250,7 @@ export function createApp(opts: AppOptions): express.Express {
   }
 
   const clock = opts.now ?? (() => new Date());
+  const receiptQrSecret = opts.receiptQrSecret !== undefined ? opts.receiptQrSecret : resolveReceiptQrSecret();
 
   // ---------- CSRF ----------
   app.get("/api/auth/csrf", (_req, res) => {
@@ -728,6 +735,8 @@ export function createApp(opts: AppOptions): express.Express {
       store,
       middleware: { requireAuth, requireCsrf, requireShopManager },
       clientIp,
+      clock,
+      receiptQrSecret,
     }),
   );
 
@@ -747,6 +756,7 @@ export function createApp(opts: AppOptions): express.Express {
       middleware: { requireAuth, requireCsrf, requireShopManager },
       clientIp,
       clock,
+      receiptQrSecret,
     }),
   );
 
