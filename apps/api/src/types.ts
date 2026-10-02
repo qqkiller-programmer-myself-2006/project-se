@@ -86,6 +86,7 @@ export type AuditAction =
   | "stock_updated"
   | "order_stock_reserved"
   | "order_stock_released"
+  | "order_items_edited"
   | "order_stock_consumed"
   // ---------- Ticket 08: การชำระเงิน ใบเสร็จ และคืนเงิน ----------
   | "payment_created"

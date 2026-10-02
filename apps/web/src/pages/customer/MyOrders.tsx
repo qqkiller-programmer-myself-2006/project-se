@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api, type OrderDetail, type PublicCustomer } from "../../lib/api";
 import { OrderCard } from "../../components/OrderCard";
 import { Alert, Panel, inputClass, primaryButtonClass, secondaryButtonClass } from "../../components/ui";
@@ -7,6 +7,7 @@ import { DepthHero, MotionReveal, Skeleton } from "../../components/motion";
 import { ConnectionBanner, DemoBadge } from "../../components/demo";
 import { Icon } from "../../components/icons";
 import { DEMO_ORDERS, isDemoModeEnabled, shouldFallbackToDemo } from "../../lib/demo";
+import { orderToCartLines, saveCart, saveCartEdit } from "../../lib/cart";
 
 /** วันที่ตามเวลาไทยแบบ YYYY-MM-DD ให้เทียบกับค่า input type="date" ได้ตรง ๆ */
 function bangkokDate(iso: string): string {
@@ -19,6 +20,7 @@ function bangkokDate(iso: string): string {
  * - Guest ค้นหาด้วยเลขคำสั่งซื้อ + เบอร์โทรที่ใช้สั่ง
  */
 export default function MyOrdersPage() {
+  const navigate = useNavigate();
   const [customer, setCustomer] = useState<PublicCustomer | null>(null);
   const [sessionChecked, setSessionChecked] = useState(false);
   const [orders, setOrders] = useState<OrderDetail[]>([]);
@@ -33,6 +35,16 @@ export default function MyOrdersPage() {
   /** YYYY-MM-DD ตามเวลาไทย — ว่าง = ทุกวัน */
   const [dateFilter, setDateFilter] = useState("");
   const shownOrders = dateFilter ? orders.filter((o) => bangkokDate(o.createdAt) === dateFilter) : orders;
+
+  /**
+   * Issue #42: แก้ไขรายการ — โหลดรายการของคำสั่งซื้อเข้าตะกร้า (ใช้หน้าตะกร้าเป็นหน้าแก้ไข)
+   * แล้วจำว่ากำลังแก้ออเดอร์ไหน; server ตรวจอีกครั้งตอนบันทึกว่ายังแก้ได้ (ยังไม่มีคำขอชำระ)
+   */
+  function startEdit(order: OrderDetail, guestPhone: string | null) {
+    saveCart(orderToCartLines(order));
+    saveCartEdit({ orderId: order.id, orderNumber: order.orderNumber, phone: guestPhone });
+    navigate("/cart");
+  }
 
   async function loadMine() {
     try {
@@ -205,7 +217,13 @@ export default function MyOrdersPage() {
                 >
                   {lookupLoading ? "กำลังค้นหา…" : "ค้นหาคำสั่งซื้อ"}
                 </button>
-                {lookupOrder ? <OrderCard order={lookupOrder} payTo={`/pay/${lookupOrder.id}?phone=${encodeURIComponent(lookupPhone.trim())}`} /> : null}
+                {lookupOrder ? (
+                  <OrderCard
+                    order={lookupOrder}
+                    payTo={`/pay/${lookupOrder.id}?phone=${encodeURIComponent(lookupPhone.trim())}`}
+                    onEdit={() => startEdit(lookupOrder, lookupPhone.trim())}
+                  />
+                ) : null}
               </div>
             </Panel>
 
@@ -252,7 +270,7 @@ export default function MyOrdersPage() {
                       </p>
                       {shownOrders.map((o, index) => (
                         <MotionReveal key={o.id} index={index}>
-                          <OrderCard order={o} payTo={`/pay/${o.id}`} />
+                          <OrderCard order={o} payTo={`/pay/${o.id}`} onEdit={demo ? undefined : () => startEdit(o, null)} />
                         </MotionReveal>
                       ))}
                     </div>

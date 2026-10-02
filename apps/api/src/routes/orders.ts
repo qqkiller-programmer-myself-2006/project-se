@@ -5,7 +5,7 @@ import express, {
 } from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
-import type { Store } from "../store.js";
+import type { ShopActor, Store } from "../store.js";
 import { normalizeThaiPhone } from "../customer/phone.js";
 import {
   normalizeGuestName,
@@ -60,6 +60,12 @@ const orderBodySchema = z.object({
   /** Ticket 06: ผูกคำสั่งซื้อที่โต๊ะกับรอบที่เปิดอยู่ (เฉพาะ dine_in) */
   tableId: z.unknown().optional(),
   roundId: z.unknown().optional(),
+});
+
+const itemsPutSchema = z.object({
+  items: z.array(orderItemSchema),
+  /** เบอร์ของ Guest เจ้าของคำสั่งซื้อ (สมาชิก/พนักงานไม่ต้องส่ง) */
+  phone: z.unknown().optional(),
 });
 
 const statusPatchSchema = z.object({
@@ -320,6 +326,74 @@ export function createOrderRouter(deps: OrderRouterDeps): express.Router {
       res.json({
         orders: await store.listOrders({ q: parsed.data.q ?? "", status, limit }),
       });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ---------- Issue #42: แก้ไขรายการในคำสั่งซื้อ (เจ้าของ / Guest เจ้าของเบอร์ / Owner/Admin) ----------
+  // แทนที่ทั้งรายการ (PUT) — แก้ได้เฉพาะ pending_payment ที่ยังไม่มีคำขอชำระ (store ตรวจ + 409)
+  // ส่งรายการเดิมซ้ำได้อย่างปลอดภัย (changed:false ไม่เขียน audit/ledger ซ้ำ)
+  router.put("/api/orders/:id/items", orderLimiter, requireCsrf, async (req, res, next) => {
+    try {
+      const parsed = itemsPutSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: zodMessage(parsed.error) });
+        return;
+      }
+      const order: OrderDetail | null = await store.getOrder(req.params.id);
+      if (!order) {
+        res.status(404).json({ error: "ไม่พบคำสั่งซื้อ" });
+        return;
+      }
+      // สิทธิ์เดียวกับการดูคำสั่งซื้อ (GET /api/orders/:id): เจ้าของ / Guest เจ้าของเบอร์ / Owner/Admin
+      let actor: ShopActor;
+      const staff = await resolveStaff(req);
+      const customer = await resolveCustomer(req);
+      if (staff && isManager(staff.roles)) {
+        actor = { actorId: staff.id, ip: clientIp(req) };
+      } else if (customer) {
+        if (order.customerId !== customer.id) {
+          res.status(403).json({ error: "สิทธิ์ไม่เพียงพอ เฉพาะเจ้าของคำสั่งซื้อเท่านั้น" });
+          return;
+        }
+        actor = { actorId: customer.id, ip: clientIp(req) };
+      } else if (staff) {
+        res.status(403).json({ error: "สิทธิ์ไม่เพียงพอ เฉพาะ Owner หรือ Admin เท่านั้น" });
+        return;
+      } else {
+        if (order.customerId !== null || order.guestPhone === null) {
+          res.status(401).json({ error: "กรุณาเข้าสู่ระบบก่อน" });
+          return;
+        }
+        let phone: string;
+        try {
+          phone = normalizeThaiPhone(parsed.data.phone ?? "");
+        } catch {
+          res.status(401).json({ error: "กรุณาเข้าสู่ระบบหรือระบุเบอร์โทรที่ใช้สั่งซื้อ" });
+          return;
+        }
+        if (order.guestPhone !== phone) {
+          res.status(403).json({ error: "สิทธิ์ไม่เพียงพอ เฉพาะเจ้าของคำสั่งซื้อเท่านั้น" });
+          return;
+        }
+        actor = { ip: clientIp(req) };
+      }
+      let items: { menuId: string; quantity: number; note: string | null; options: string[]; specialRequest: string | null }[];
+      try {
+        items = normalizeOrderLines(parsed.data.items).map((l) => ({
+          menuId: l.menuId,
+          quantity: l.quantity,
+          note: l.note,
+          options: l.optionIds,
+          specialRequest: l.specialRequest,
+        }));
+      } catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : "ข้อมูลรายการไม่ถูกต้อง" });
+        return;
+      }
+      const result = await store.updateOrderItems(order.id, { items }, actor, clock());
+      res.json(result);
     } catch (err) {
       next(err);
     }
